@@ -1,0 +1,16 @@
+/* 视图选择器：一条分段控件。
+   六个模式互斥，就该长成互斥的样子 —— 之前是六颗一样的药丸加一颗动作按钮，
+   宽度不够时还会折行，状态和动作也分不出来。动作（宇宙身份证）已移到仪表带右端。 */
+.seg { display: flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden;
+  background: rgba(10, 22, 44, .66);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px) }
+.sg { font-family: var(--f-m); font-size: 11.5px; font-weight: 400; letter-spacing: .02em;
+  padding: 9px 16px; border-radius: 0; white-space: nowrap;
+  color: var(--dim); background: none;
+  border: 0; border-left: 1px solid var(--rule);
+  transition: color var(--t-instant) var(--e-enter), background var(--t-state) var(--e-enter) }
+.sg:first-child { border-left: 0 }
+.sg:hover:not(.on) { color: var(--ink) }
+.sg.on { background: var(--star); color: var(--ground); font-weight: 500 }
+/* 琥珀只服务于异常：虫洞与暗物质 */
+.sg.on.warm { background: var(--amber) }

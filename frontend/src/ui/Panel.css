@@ -1,0 +1,80 @@
+/* 右侧详情页：贴边的一整页，不是浮在画面上的抽屉。
+   之前是 backdrop-blur(18px) + -30px 0 60px 阴影的浮层 —— 那是 web app 的抽屉，
+   贴到一幕电影上就露怯。改成不透明的一页纸，顺带省掉一整屏高的实时模糊。 */
+.pnl { position: fixed; right: 0; top: 0; bottom: 0; width: var(--pnl-w); z-index: 7;
+  background: linear-gradient(180deg, #080C1A 0%, #060913 100%);
+  border-left: 1px solid var(--rule-soft);
+  transform: translateX(100%); transition: transform var(--t-space) var(--e-enter);
+  overflow-y: auto; padding: 26px 24px 100px }
+.pnl.open { transform: none }
+.pnl-close { position: absolute; right: 18px; top: 16px; font-family: var(--f-m); font-size: 18px;
+  color: var(--mute); background: none; border: 0; padding: 4px; line-height: 1; cursor: pointer }
+.pnl-close:hover:not(:disabled) { color: var(--ink) }
+
+.pnl h2 { font-family: var(--f-d); font-weight: 600; font-size: 24px; margin: 10px 0 0; line-height: 1.28 }
+.pnl-strip { font-family: var(--f-m); font-size: 11px; color: var(--dim); margin-top: 9px;
+  font-variant-numeric: tabular-nums }
+.pnl-strip u { text-decoration: none; color: var(--mute); margin: 0 2px }
+.pnl-lead { font-size: 13.5px; line-height: 1.85; color: var(--dim); margin: 15px 0 0 }
+.pnl-lead b { color: var(--ink); font-weight: 500 }
+.pnl-lead em { font-style: normal; color: var(--amber) }
+.pnl h3 { font-family: var(--f-m); font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--mute); font-weight: 400;
+  margin: 24px 0 10px; padding-bottom: 7px; border-bottom: 1px solid var(--rule-soft) }
+
+/* 活跃区间。
+   旧版画的是 12 根柱子，柱高来自 40 + (i*37)%60 —— 一个下标公式，不是数据。
+   把编出来的形状摆成图表是在骗自己。这里只画真实拿得到的东西：
+   整个宇宙的时间轴、这颗星的首末区间、以及手上这几条内容各自的时间点。 */
+.span { margin-top: 2px }
+.span .rail { position: relative; height: 3px; background: #131A2E; border-radius: 2px }
+.span .rail i { position: absolute; top: 0; bottom: 0; background: var(--amber); border-radius: 2px }
+.span .tk { position: absolute; top: -3px; width: 1px; height: 9px; background: var(--star-hi); opacity: .7 }
+.span .ax { display: flex; justify-content: space-between; gap: 10px;
+  font-family: var(--f-m); font-size: 9.5px; color: var(--mute); margin-top: 7px;
+  font-variant-numeric: tabular-nums }
+
+.metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
+  background: var(--rule-soft); border: 1px solid var(--rule-soft); margin-top: 20px }
+.metrics div { background: rgba(7, 11, 24, .9); padding: 13px 15px }
+.metrics b { font-family: var(--f-m); font-size: 21px; font-weight: 500; font-variant-numeric: tabular-nums }
+
+/* 行星图例与列表。
+   实心点 = 自己发光（我写过的），半明半暗 = 只反射恒星的光（我只收藏的）——
+   与 3D 里两种行星的着色一致。旧版是「我写的 / 我收藏的」两个文字标签，
+   和画面里看到的东西没有任何对应关系。 */
+.lgd { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 11.5px; color: var(--mute);
+  margin: -2px 0 12px }
+.lgd span { display: flex; align-items: center; gap: 7px }
+
+.evp { display: flex; align-items: baseline; gap: 10px; padding: 11px 0; color: inherit;
+  border-top: 1px solid var(--rule-soft) }
+.evp:last-of-type { border-bottom: 1px solid var(--rule-soft) }
+.evp .pdot { transform: translateY(1px) }
+.evp-t { flex: 1; font-size: 13px; line-height: 1.6; color: var(--ink); font-weight: 300;
+  transition: color var(--t-instant) var(--e-enter) }
+.evp:hover .evp-t { color: var(--star) }
+.evp-y { font-family: var(--f-m); font-size: 10px; color: var(--mute); flex: none }
+/* 与 3D 里被选中的那颗行星对应 */
+.evp.on { background: rgba(155, 176, 255, .07); box-shadow: inset 2px 0 0 var(--star);
+  margin: 0 -12px; padding: 11px 12px }
+.evp.on .evp-t { color: var(--star-hi) }
+.rest { font-family: var(--f-m); font-size: 10.5px; color: var(--mute); margin-top: 11px }
+
+/* 模式面板（虫洞 / 暗物质 / 星云 / 边缘微光）仍用这一套 */
+.ev { display: block; padding: 12px 0; border-top: 1px solid var(--rule-soft); color: inherit }
+.ev:last-of-type { border-bottom: 1px solid var(--rule-soft) }
+.ev-t { font-size: 13.5px; line-height: 1.6; color: var(--ink);
+  transition: color var(--t-instant) var(--e-enter) }
+.ev:hover .ev-t { color: var(--star) }
+.ev-m { display: flex; gap: 9px; align-items: center; margin-top: 7px }
+.pill { font-family: var(--f-m); font-size: 10px; padding: 1px 6px; border-radius: 2px;
+  border: 1px solid var(--rule-soft); color: var(--mute) }
+.pill.own { color: var(--star); border-color: rgba(155, 176, 255, .28) }
+.pill.fav { color: var(--amber); border-color: rgba(255, 196, 107, .28) }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px }
+.chips i { font-style: normal; font-family: var(--f-m); font-size: 11px; padding: 4px 9px;
+  background: rgba(16, 23, 40, .8); border: 1px solid var(--rule-soft); border-radius: 2px;
+  color: var(--dim); cursor: pointer; transition: color var(--t-instant) var(--e-enter) }
+.chips i:hover { color: var(--ink) }

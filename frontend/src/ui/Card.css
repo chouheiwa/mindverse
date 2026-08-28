@@ -1,0 +1,15 @@
+.cd-mask { position: fixed; inset: 0; z-index: 30; background: rgba(3,5,13,.82);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  display: flex; align-items: center; justify-content: center; padding: 28px;
+  animation: cd-in var(--t-space) var(--e-enter) }
+@keyframes cd-in { from { opacity: 0 } to { opacity: 1 } }
+.cd-box { display: flex; flex-direction: column; align-items: center; gap: 20px; max-height: 100% }
+.cd-shot { border: 1px solid var(--rule); border-radius: 3px; max-height: min(72vh, 960px);
+  width: auto; box-shadow: 0 30px 80px rgba(2,4,12,.7);
+  animation: cd-pop var(--t-space) var(--e-pop) }
+@keyframes cd-pop { from { opacity: 0; transform: scale(.94) translateY(12px) } to { opacity: 1; transform: none } }
+.cd-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center }
+.cd-note { font-family: var(--f-m); font-size: 11px; color: var(--mute); text-align: center;
+  line-height: 1.8; max-width: 32em }
+.cd-note.warn { color: var(--amber) }
+.cd-busy { font-family: var(--f-d); font-size: 19px; color: var(--dim) }

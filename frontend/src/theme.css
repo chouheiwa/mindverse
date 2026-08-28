@@ -1,0 +1,126 @@
+/* 设计 token 与动效系统。
+   动效时长收成四档，缓动三条各有分工 —— 之前 .16s/.32s/.6s/.9s/1s 是各写各的。 */
+
+:root {
+  --ground: #04060F;
+  --surface: #0E1424;
+  --ink: #DDE4F2;
+  --dim: #9AA4BE;
+  --mute: #697291;
+  --rule: #161D33;
+  --rule-soft: rgba(155, 176, 255, .10);
+  --panel: rgba(8, 12, 26, .90);
+  --star: #9BB0FF;
+  --star-hi: #C3D0FF;
+  --amber: #FFC46B;
+  --danger: #FF8272;
+
+  --f-d: "Noto Serif SC", Songti SC, Georgia, serif;
+  --f-b: "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
+  --f-m: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 时长四档：每一档只回答一个问题 —— 这次变化重不重要 */
+  --t-instant: 120ms;  /* 悬停、选中，快到察觉不出是动画 */
+  --t-state: 240ms;    /* 模式切换的压暗与点亮 */
+  --t-space: 420ms;    /* 有位移的：面板滑入、镜头推近 */
+  --t-story: 900ms;    /* 叙事段落 */
+
+  /* 缓动三条 */
+  --e-enter: cubic-bezier(.22, .7, .3, 1);    /* 进场：起步快、落位稳 */
+  --e-move: cubic-bezier(.65, 0, .35, 1);     /* 转场：两端都慢 */
+  --e-pop: cubic-bezier(.34, 1.4, .5, 1);     /* 回弹：只给分享卡成功一处 */
+
+  --stagger: 60ms;     /* 列表阶梯进场，第 6 项后不再累加 */
+
+  /* 布局常量：底部仪表带与右侧详情页互相让位，两边都要读到 */
+  --bar-h: 76px;
+  --pnl-w: min(400px, 88vw);
+}
+
+* { box-sizing: border-box }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--f-b);
+  font-weight: 300;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--star); text-decoration: none }
+a:hover { color: var(--star-hi) }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 2px }
+
+.lbl {
+  font-family: var(--f-m);
+  font-size: 10.5px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.mono { font-family: var(--f-m); font-variant-numeric: tabular-nums }
+
+button {
+  font-family: var(--f-b);
+  font-size: 15px;
+  font-weight: 400;
+  padding: 13px 26px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink);
+  transition: border-color var(--t-instant) var(--e-enter),
+              color var(--t-instant) var(--e-enter);
+}
+button:hover:not(:disabled) { border-color: #33406B }
+button:disabled { opacity: .42; cursor: not-allowed }
+button.primary {
+  background: var(--star);
+  border-color: var(--star);
+  color: var(--ground);
+  font-weight: 500;
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.08) }
+
+/* 行星点。实心 = 自己发光（我写过的），半明半暗 = 只反射恒星的光（我只收藏的）。
+   与 3D 里两种行星的着色规则一致，右侧列表和行星卡共用，所以放在 token 层。 */
+.pdot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block }
+.pdot.own { background: radial-gradient(circle at 36% 32%, #EAF0FF, #8C9CDA 62%, #3A4682);
+  box-shadow: 0 0 7px 1px rgba(150, 175, 255, .5) }
+.pdot.fav { background: linear-gradient(115deg, #AAB6D8 0%, #5C6685 44%, #171D30 60%) }
+
+/* 边缘暗角与颗粒：让画面像是「看进去」而不是「贴上去」 */
+.vignette {
+  position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  background: radial-gradient(ellipse at 50% 46%, transparent 44%, rgba(2, 3, 9, .58) 100%);
+}
+.grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: .045;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 阶梯进场 */
+@keyframes enter { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+.stagger > * {
+  opacity: 0;
+  animation: enter var(--t-space) var(--e-enter) forwards;
+}
+.stagger > *:nth-child(1) { animation-delay: 0ms }
+.stagger > *:nth-child(2) { animation-delay: 60ms }
+.stagger > *:nth-child(3) { animation-delay: 120ms }
+.stagger > *:nth-child(4) { animation-delay: 180ms }
+.stagger > *:nth-child(5) { animation-delay: 240ms }
+.stagger > *:nth-child(6) { animation-delay: 300ms }
+.stagger > *:nth-child(n+7) { animation-delay: 360ms }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .stagger > * { opacity: 1 }
+}

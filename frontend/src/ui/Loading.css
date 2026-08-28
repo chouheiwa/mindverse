@@ -1,0 +1,34 @@
+.ld { position: fixed; inset: 0; z-index: 20; background: var(--ground);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  transition: opacity var(--t-story) var(--e-move) }
+.ld.gone { opacity: 0; pointer-events: none }
+.ld-core { position: absolute; left: 50%; top: 47%; width: 0; height: 0 }
+.ld-disc { position: absolute; left: -260px; top: -78px; width: 520px; height: 156px;
+  animation: ld-spin 26s linear infinite }
+.ld-disc i { position: absolute; inset: 0; border-radius: 50%; display: block; filter: blur(16px); opacity: .85;
+  background: conic-gradient(from 0deg, rgba(255,214,160,0) 0deg, rgba(255,214,160,.30) 70deg,
+    rgba(195,208,255,.22) 150deg, rgba(255,214,160,0) 240deg, rgba(255,214,160,.24) 320deg, rgba(255,214,160,0) 360deg) }
+.ld-halo { position: absolute; left: -176px; top: -176px; width: 352px; height: 352px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(180,196,255,.16) 0%, transparent 66%); filter: blur(30px) }
+.ld-sing { position: absolute; left: -38px; top: -38px; width: 76px; height: 76px; border-radius: 50%;
+  filter: blur(3px); animation: ld-pulse 3s ease-in-out infinite;
+  background: radial-gradient(circle, #FFF 0%, rgba(226,232,255,.75) 26%, rgba(140,164,255,.34) 52%, transparent 74%) }
+@keyframes ld-spin { to { transform: rotate(360deg) } }
+@keyframes ld-pulse { 0%,100% { opacity: .86; transform: scale(1) } 50% { opacity: 1; transform: scale(1.1) } }
+
+.ld-box { position: relative; z-index: 3; max-width: 520px; width: 100%; text-align: center; margin-top: 26vh }
+.ld-stage { font-family: var(--f-d); font-weight: 700; font-size: clamp(21px, 2.8vw, 27px);
+  margin: 0; line-height: 1.5; text-wrap: balance; text-shadow: 0 2px 18px rgba(4,6,15,.95) }
+.ld-sub { font-size: 13px; color: var(--mute); margin-top: 12px }
+.ld-steps { display: flex; gap: 34px; justify-content: center; margin-top: 42px }
+.ld-step { display: flex; align-items: center; gap: 8px }
+.ld-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--rule);
+  transition: background var(--t-state) var(--e-enter) }
+.ld-step.on .ld-dot { background: var(--star) }
+.ld-step.now .ld-dot { animation: ld-tick 1.6s ease-in-out infinite }
+@keyframes ld-tick { 0%,100% { opacity: .4 } 50% { opacity: 1 } }
+.ld-note { font-size: 12.5px; color: var(--mute); margin-top: 40px; line-height: 1.8 }
+.ld-hair { position: fixed; left: 0; right: 0; bottom: 0; height: 1px; background: var(--rule); z-index: 21 }
+.ld-hair i { display: block; height: 100%; background: linear-gradient(90deg, rgba(155,176,255,.25), var(--star));
+  transition: width var(--t-story) var(--e-move) }
+.ld-err { color: var(--amber) }

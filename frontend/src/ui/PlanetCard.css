@@ -1,0 +1,51 @@
+/* 行星卡。left/top 由渲染器每帧写入，这里只管长相。 */
+.pc {
+  position: fixed; z-index: 8; left: 0; top: 0;
+  width: 274px; padding: 13px 15px 12px;
+  /* transform 由渲染器每帧覆写；这里给个初值，并先藏起来等第一帧定位 */
+  transform: translate(-50%, -100%);
+  visibility: hidden;
+  background: rgba(7, 11, 24, .93);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(155, 176, 255, .16);
+  border-radius: 4px;
+  box-shadow: 0 14px 40px rgba(2, 4, 12, .7);
+  /* 只动 opacity。动画里若再写 transform，会盖掉渲染器写的定位 ——
+     CSS 动画的优先级高于内联样式，卡片会整个跳回原点。 */
+  animation: pc-in var(--t-state) var(--e-enter) both;
+}
+@keyframes pc-in { from { opacity: 0 } }
+
+/* 指向行星的小尖。行星贴近视口顶部时卡片翻到下方，小尖跟着翻上去。 */
+.pc::after {
+  content: ''; position: absolute; left: 50%; bottom: -5px; width: 9px; height: 9px;
+  transform: translateX(-50%) rotate(45deg);
+  background: rgba(7, 11, 24, .93);
+  border-right: 1px solid rgba(155, 176, 255, .16);
+  border-bottom: 1px solid rgba(155, 176, 255, .16);
+}
+.pc.below::after {
+  bottom: auto; top: -5px;
+  border-right: 0; border-bottom: 0;
+  border-left: 1px solid rgba(155, 176, 255, .16);
+  border-top: 1px solid rgba(155, 176, 255, .16);
+}
+
+.pc-x { position: absolute; right: 7px; top: 4px; font-family: var(--f-m); font-size: 15px;
+  color: var(--mute); background: none; border: 0; padding: 3px 5px; line-height: 1; cursor: pointer }
+.pc-x:hover { color: var(--ink) }
+.pc-h { display: flex; gap: 9px; align-items: center }
+.pc-y { font-size: 10px; color: var(--mute) }
+.pc-t { font-size: 13.5px; font-weight: 400; line-height: 1.55; color: var(--ink); margin: 9px 0 0;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden }
+.pc-f { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--rule-soft) }
+.pc-s { font-family: var(--f-m); font-size: 10px; color: var(--mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.pc-f a { font-family: var(--f-m); font-size: 10.5px; white-space: nowrap }
+
+@media (max-width: 760px) { .pc { width: min(274px, 78vw) } }
+
+/* 头部改用行星点：文字标签跟画面里看到的东西没有对应关系，点有。 */
+.pc-k { font-family: var(--f-m); font-size: 10px; color: var(--dim) }

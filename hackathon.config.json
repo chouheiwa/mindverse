@@ -1,0 +1,8 @@
+{
+  "projectName": "知乎精神宇宙",
+  "port": 4173,
+  "oauth": {
+    "appId": "",
+    "redirectUri": ""
+  }
+}

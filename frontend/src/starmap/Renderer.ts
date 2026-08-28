@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
+import { BlendFunction, BloomEffect, DepthOfFieldEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Mode, Star, Universe } from '../types'
 import { orbit } from './projection'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
@@ -11,6 +11,7 @@ import { makeRings, type RingLayer } from './gl/rings'
 import { makeOverlay3D, type Overlay3D } from './gl/overlay3d'
 import { Labels } from './gl/labels'
 import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
+import { detectQuality, type Quality } from './quality'
 
 /**
  * 星图渲染器。
@@ -105,6 +106,9 @@ export class Renderer {
 
   private mode: Mode = 'all'
   private wormIdx = 0
+  private quality: Quality
+  /** 景深 effect；Low 档为 null（不创建），Medium/High 每帧更新其 focusDistance。 */
+  private dof: DepthOfFieldEffect | null = null
 
   /**
    * 注视点。
@@ -147,12 +151,14 @@ export class Renderer {
     u: Universe,
     reduceMotion: boolean,
     cb: RendererCallbacks = {},
+    quality: Quality = detectQuality(reduceMotion),
   ) {
     this.canvas = canvas
     this.u = u
     this.reduceMotion = reduceMotion
     this.cb = cb
     this.genesisDone = reduceMotion
+    this.quality = quality
 
     this.R = sceneRadius(u)
     this.dist = this.R * 4.6
@@ -200,19 +206,34 @@ export class Renderer {
       stencilBuffer: false,
     })
     this.composer.addPass(new RenderPass(this.scene, this.camera))
-    this.composer.addPass(new EffectPass(
-      this.camera,
-      new BloomEffect({
-        blendFunction: BlendFunction.ADD,
-        mipmapBlur: true,          // 多级 mip 混合，比单核高斯的方形光晕干净
-        luminanceThreshold: 0.68,
-        luminanceSmoothing: 0.30,
-        intensity: 1.02,
-        radius: 0.74,
-        levels: 8,
-      }),
-      new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL }),
-    ))
+
+    const bloom = new BloomEffect({
+      blendFunction: BlendFunction.ADD,
+      mipmapBlur: true,          // 多级 mip 混合，比单核高斯的方形光晕干净
+      luminanceThreshold: 0.68,
+      luminanceSmoothing: 0.30,
+      intensity: 1.02,
+      radius: 0.74,
+      levels: 8,
+    })
+
+    // 景深：§7.6“电影感最大来源”。Low 档不创建（零开销）；
+    // Medium/High 给不同 bokehScale。focusDistance 每帧更新，构造里先占位。
+    if (this.quality !== 'low') {
+      this.dof = new DepthOfFieldEffect(this.camera, {
+        focusDistance: this.dist,        // 占位，frame() 每帧覆盖
+        focusRange: this.R * 0.22,       // 世界单位，按场景半径缩放，后端布局改了这里不用动
+        bokehScale: this.quality === 'high' ? 5 : 3,
+        resolutionScale: 0.5,            // DOF 贵，半分辨率够用
+      })
+    }
+
+    // 管线顺序 = §7.6：Bloom → DOF → ToneMap（GravitationalLens/ChromaticAberration
+    // 由后续 session 在 Bloom 之后、DOF 之前/之后插入）。
+    const effects = this.dof
+      ? [bloom, this.dof, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })]
+      : [bloom, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })]
+    this.composer.addPass(new EffectPass(this.camera, ...effects))
 
     this.applyMode()
     this.bindPointer()
@@ -352,6 +373,13 @@ export class Renderer {
       this.focus.z + Math.cos(this.yaw) * Math.cos(this.pitch) * this.dist,
     )
     this.camera.lookAt(this.focus)
+
+    // 景深焦点跟随注视点：相机到 this.focus 的距离 = 焦平面距离。
+    // 飞进恒星系时 focus 换成那颗星、dist 收近，景深自然收窄，不需要切“恒星系模式”。
+    if (this.dof) {
+      const u = this.dof.uniforms.get('focusDistance') as { value: number } | undefined
+      if (u) u.value = this.camera.position.distanceTo(this.focus)
+    }
 
     // 景深范围按相机到星系中心的距离算，而不是到注视点的距离 ——
     // 飞进一个恒星系之后，星系另一侧依旧该是压暗的

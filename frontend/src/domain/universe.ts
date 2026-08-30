@@ -12,8 +12,10 @@ type ObjectValue = Record<string, unknown>
 
 /** Above realistic personal-corpus sizes; rejects hostile payloads before traversal. */
 export const UNIVERSE_COLLECTION_LIMIT = 10_000
+const UNIVERSE_NODE_LIMIT = 100_000
 const validatedWires = new WeakSet<object>()
 const normalizedByWire = new WeakMap<object, Universe>()
+const sanitizedArrays = new WeakSet<object>()
 const EMPTY_RESULT: readonly never[] = Object.freeze([])
 
 export interface UniverseIndex {
@@ -62,28 +64,69 @@ const integer = (value: unknown, path: string): number => {
 }
 const flag = (value: unknown, path: string): boolean =>
   typeof value === 'boolean' ? value : fail(path, 'expected boolean')
-const list = (value: unknown, path: string): unknown[] => {
-  if (value === null) return []
+const ownArrayValues = (value: unknown, path: string): unknown[] => {
   const parsed = Array.isArray(value) ? value : fail(path, 'expected array or null')
+  if (sanitizedArrays.has(parsed)) return parsed
   const lengthDescriptor = Object.getOwnPropertyDescriptor(parsed, 'length') ?? fail(path + '.length', 'expected JSON data property')
   if (!Object.hasOwn(lengthDescriptor, 'value')) fail(path + '.length', 'expected JSON data property')
   const length = typeof lengthDescriptor.value === 'number' && Number.isSafeInteger(lengthDescriptor.value) && lengthDescriptor.value >= 0
     ? lengthDescriptor.value : fail(path + '.length', 'expected JSON data property')
   if (length > UNIVERSE_COLLECTION_LIMIT) fail(path, 'collection limit exceeded')
+  const result = new Array<unknown>(length)
   const indices = new Set<number>()
   for (const key of Reflect.ownKeys(parsed)) {
     if (key === 'length') continue
     const stringKey = typeof key === 'string' ? key : fail(path, 'unknown array key ' + String(key))
     if (!/^(0|[1-9]\d*)$/.test(stringKey)) fail(path, 'unknown array key ' + stringKey)
     const index = Number(stringKey)
-    const descriptor = Object.getOwnPropertyDescriptor(parsed, stringKey)
-    if (index >= length || !descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) {
+    const descriptor = Object.getOwnPropertyDescriptor(parsed, stringKey) ?? fail(path + '[' + stringKey + ']', 'expected JSON data property')
+    if (index >= length || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
       fail(path + '[' + stringKey + ']', 'expected JSON data property')
     }
     indices.add(index)
+    result[index] = descriptor.value
   }
   if (indices.size !== length) fail(path, 'expected dense own data properties')
-  return parsed
+  return result
+}
+const list = (value: unknown, path: string): unknown[] => value === null ? [] : ownArrayValues(value, path)
+
+function sanitizeInput(value: unknown): unknown {
+  let nodes = 0
+  const active = new WeakSet<object>()
+  const visit = (entry: unknown, path: string): unknown => {
+    if (typeof entry !== 'object' || entry === null) return entry
+    nodes += 1
+    if (nodes > UNIVERSE_NODE_LIMIT) fail(path, 'object graph limit exceeded')
+    if (active.has(entry)) fail(path, 'cyclic value is not JSON')
+    active.add(entry)
+
+    if (Array.isArray(entry)) {
+      const source = ownArrayValues(entry, path)
+      const result = source.map((item, index) => visit(item, path + '[' + index + ']'))
+      sanitizedArrays.add(result)
+      active.delete(entry)
+      return result
+    }
+
+    const result = Object.create(null) as ObjectValue
+    for (const key of Reflect.ownKeys(entry)) {
+      const stringKey = typeof key === 'string' ? key : fail(path, 'unknown key ' + String(key))
+      const descriptor = Object.getOwnPropertyDescriptor(entry, stringKey) ?? fail(path + '.' + stringKey, 'expected JSON data property')
+      if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+        fail(path + '.' + stringKey, 'expected JSON data property')
+      }
+      Object.defineProperty(result, stringKey, {
+        value: visit(descriptor.value, path + '.' + stringKey),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      })
+    }
+    active.delete(entry)
+    return result
+  }
+  return visit(value, 'universe')
 }
 const optionalText = (value: unknown, path: string): string | undefined =>
   value === undefined ? undefined : text(value, path)
@@ -367,16 +410,17 @@ function normalizedCurrent(root: ObjectValue): NormalizedCurrentUniverse {
 }
 
 export function parseUniverse(value: unknown): WireUniverse {
-  const candidate = object(value, 'universe')
+  const sanitized = sanitizeInput(value)
+  const candidate = object(sanitized, 'universe')
   const hasSchema = Object.hasOwn(candidate, 'schemaVersion')
   const hasAnalysis = Object.hasOwn(candidate, 'analysisVersion')
   if (!hasSchema && !hasAnalysis) {
     const root = shape(candidate, 'universe', ['meta', 'clusters', 'stars', 'particles', 'wormholes', 'solo', 'dark', 'nebula'])
     const normalized = deepFreeze(parseCore(root, parseLegacyStar) as NormalizedLegacyUniverse)
-    const cloned = deepFreeze(structuredClone(value) as WireUniverse)
-    validatedWires.add(cloned as object)
-    normalizedByWire.set(cloned as object, normalized)
-    return cloned
+    const wire = deepFreeze(sanitized as WireUniverse)
+    validatedWires.add(wire as object)
+    normalizedByWire.set(wire as object, normalized)
+    return wire
   }
   const root = shape(candidate, 'universe', [
     'schemaVersion', 'analysisVersion', 'meta', 'clusters', 'stars', 'particles',
@@ -387,10 +431,10 @@ export function parseUniverse(value: unknown): WireUniverse {
   }
   const universe = normalizedCurrent(root)
   validateCurrent(universe)
-  const cloned = deepFreeze(structuredClone(value) as WireUniverse)
-  validatedWires.add(cloned as object)
-  normalizedByWire.set(cloned as object, deepFreeze(universe))
-  return cloned
+  const wire = deepFreeze(sanitized as WireUniverse)
+  validatedWires.add(wire as object)
+  normalizedByWire.set(wire as object, deepFreeze(universe))
+  return wire
 }
 
 function deepFreeze<T>(value: T): T {

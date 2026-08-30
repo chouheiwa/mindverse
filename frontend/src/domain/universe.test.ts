@@ -84,12 +84,12 @@ describe('current universe indexes', () => {
     expect(index.universe.meta.items).toBe(2)
   })
 
-  test('does not reparse or reclone a validated wire before indexing', () => {
+  test('does not structured-clone or reparse a sanitized wire before indexing', () => {
     const cloneSpy = vi.spyOn(globalThis, 'structuredClone')
     const parsed = parseUniverse(fixture)
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    expect(cloneSpy).not.toHaveBeenCalled()
     indexUniverse(parsed)
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    expect(cloneSpy).not.toHaveBeenCalled()
     cloneSpy.mockRestore()
   })
 })
@@ -223,6 +223,60 @@ describe('compatibility and validation', () => {
       Object.defineProperty(changed.questions, 'extra', { value: true, enumerable: true })
     }
     expect(() => parseUniverse(changed)).toThrow(/unknown array key/)
+  })
+
+  test('ignores inherited star references and normalizes the absent own fields to empty arrays', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    delete changed.stars![0].questionIds
+    delete changed.stars![0].probeIds
+    Object.setPrototypeOf(changed.stars![0], {
+      questionIds: ['question:999'],
+      probeIds: ['article:999'],
+    })
+
+    const parsed = parseUniverse(changed)
+    if (parsed.schemaVersion !== 'universe.v1') throw new Error('expected current universe')
+    expect(Object.hasOwn(parsed.stars![0], 'questionIds')).toBe(false)
+    expect(Object.hasOwn(parsed.stars![0], 'probeIds')).toBe(false)
+    const normalized = indexUniverse(parsed).universe
+    if (normalized.schemaVersion !== 'universe.v1') throw new Error('expected normalized current universe')
+    expect(normalized.stars[0].questionIds).toEqual([])
+    expect(normalized.stars[0].probeIds).toEqual([])
+  })
+
+  test('never executes inherited optional getters', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    delete changed.answers![0].discoverySources
+    let reads = 0
+    Object.setPrototypeOf(changed.answers![0], Object.defineProperty({}, 'discoverySources', {
+      get: () => {
+        reads += 1
+        return ['scraped']
+      },
+    }))
+
+    const parsed = parseUniverse(changed)
+    expect(reads).toBe(0)
+    if (parsed.schemaVersion !== 'universe.v1') throw new Error('expected current universe')
+    expect(Object.hasOwn(parsed.answers![0], 'discoverySources')).toBe(false)
+    expect(indexUniverse(parsed).answersById.get('answer:8')?.discoverySources).toEqual([])
+  })
+
+  test('returns prototype-free records without retaining inherited unknown fields', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    Object.setPrototypeOf(changed.meta, { inheritedUnknown: 'secret' })
+
+    const parsed = parseUniverse(changed)
+
+    expect(Object.getPrototypeOf(parsed)).toBeNull()
+    expect(Object.getPrototypeOf(parsed.meta)).toBeNull()
+    expect('inheritedUnknown' in parsed.meta).toBe(false)
+  })
+
+  test('rejects an own __proto__ key decoded from JSON', () => {
+    const changed = JSON.parse(JSON.stringify(fixture)) as Record<string, unknown>
+    Object.defineProperty(changed, '__proto__', { value: {}, enumerable: true })
+    expect(() => parseUniverse(changed)).toThrow(/unknown key __proto__/)
   })
 
   test('wire parsing preserves nullable legacy slices and omitted current star references', () => {

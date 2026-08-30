@@ -151,7 +151,7 @@ func TestMergerPreservesIncompatibleIdentityConflicts(t *testing.T) {
 		t.Fatalf("同 ID 但不兼容的不可变身份必须分开保留，实际 %d 条", len(got))
 	}
 	for _, it := range got {
-		if it.Identity.Resolved || it.Identity.Admitted || it.Identity.QuestionID != "" || it.Identity.QuestionURL != "" {
+		if it.Identity.ContentID != "" || it.Identity.Resolved || it.Identity.Admitted || it.Identity.QuestionID != "" || it.Identity.QuestionURL != "" {
 			t.Fatalf("同 ContentID 的问题归属冲突必须被隔离为未准入证据：%+v", it.Identity)
 		}
 		if !strings.HasPrefix(it.Identity.EvidenceKey, "evidence:conflict:") {
@@ -226,6 +226,30 @@ func TestMergerRetainsStableEmptyTitleAsUnadmittedEvidence(t *testing.T) {
 	}
 	if identity.Admitted || identity.QuestionID != "" || identity.QuestionURL != "" {
 		t.Fatalf("缺标题时不得准入问题行星：%+v", identity)
+	}
+}
+
+func TestMergerEnrichesUntitledCanonicalObservationInBothOrders(t *testing.T) {
+	titled := ContentItem{
+		ContentType: TypeAnswer, ContentID: "456",
+		URL: "https://www.zhihu.com/question/123/answer/456", Title: "真实问题", Summary: "丰富摘要",
+	}
+	untitled := titled
+	untitled.Title = ""
+	untitled.Summary = ""
+	for _, items := range [][]ContentItem{{untitled, titled}, {titled, untitled}} {
+		m := newMerger()
+		m.addContents(items)
+		got := m.result()
+		if len(got) != 1 {
+			t.Fatalf("同一规范内容的部分观测应合并，实际 %d 条：%+v", len(got), got)
+		}
+		if got[0].Title != "真实问题" || got[0].Summary != "丰富摘要" || got[0].Identity.ContentID != "answer:456" || !got[0].Identity.Resolved || !got[0].Identity.Admitted {
+			t.Fatalf("更丰富观测应补全标题和准入身份：%+v", got[0])
+		}
+		if got[0].Identity.QuestionID != "123" || got[0].Identity.QuestionURL != "https://www.zhihu.com/question/123" {
+			t.Fatalf("应保留真实问题身份：%+v", got[0].Identity)
+		}
 	}
 }
 

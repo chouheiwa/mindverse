@@ -267,6 +267,7 @@ func (m *merger) get(identity ContentIdentity) *Item {
 	fingerprint := identityFingerprint(identity)
 	key := identity.ContentID + "\x00" + fingerprint
 	if it, ok := m.byKey[key]; ok {
+		it.Identity = enrichIdentity(it.Identity, identity)
 		return it
 	}
 	it := &Item{Identity: identity, URL: identity.URL, ObservedAt: m.observedAt}
@@ -274,6 +275,16 @@ func (m *merger) get(identity ContentIdentity) *Item {
 	m.baseKeys[identity.ContentID] = append(m.baseKeys[identity.ContentID], key)
 	m.order = append(m.order, key)
 	return it
+}
+
+func enrichIdentity(current, observed ContentIdentity) ContentIdentity {
+	if observed.Admitted && !current.Admitted {
+		current.QuestionID = observed.QuestionID
+		current.QuestionURL = observed.QuestionURL
+		current.Admitted = true
+	}
+	current.Resolved = current.Resolved || observed.Resolved
+	return current
 }
 
 func (m *merger) unresolvedIdentity(identity ContentIdentity, evidenceParts ...string) ContentIdentity {
@@ -291,7 +302,7 @@ func identityFingerprint(identity ContentIdentity) string {
 		normalizedURL = u.String()
 	}
 	sum := sha256.Sum256([]byte(strings.Join([]string{
-		string(identity.Type), identity.ContentID, normalizedURL, identity.QuestionID,
+		string(identity.Type), identity.ContentID, normalizedURL,
 	}, "\x00")))
 	return fmt.Sprintf("%x", sum[:])
 }
@@ -307,14 +318,20 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 			identity = m.unresolvedIdentity(identity, stableFields...)
 		}
 		it := m.get(identity)
-		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
+		if c.Title != "" {
+			it.Title = c.Title
+		}
+		if c.Summary != "" {
+			it.Summary = c.Summary
+		}
+		it.Type = c.ContentType
 		it.PublishedAt = earliestNonZero(it.PublishedAt, c.CreatedAt)
 		if c.LikeCount > it.LikeCount {
 			it.LikeCount = c.LikeCount
 		}
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryFavoriteList)
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCollected, At: c.FavTime})
-		if c.Author != nil {
+		if c.Author != nil && c.Author.Name != "" {
 			it.Author = c.Author.Name
 		}
 		if folder != "" {
@@ -336,7 +353,13 @@ func (m *merger) addContents(items []ContentItem) {
 				string(c.ContentType), c.ContentID, c.URL, c.Title, c.Summary, strconv.FormatInt(c.CreatedAt, 10))
 		}
 		it := m.get(identity)
-		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
+		if c.Title != "" {
+			it.Title = c.Title
+		}
+		if c.Summary != "" {
+			it.Summary = c.Summary
+		}
+		it.Type = c.ContentType
 		it.PublishedAt = earliestNonZero(it.PublishedAt, c.CreatedAt)
 		if c.LikeCount > it.LikeCount {
 			it.LikeCount = c.LikeCount
@@ -404,6 +427,7 @@ func (m *merger) result() []Item {
 		baseID := item.Identity.ContentID
 		if item.Identity.Resolved && len(m.baseKeys[baseID]) > 1 {
 			_, fingerprint, _ := strings.Cut(key, "\x00")
+			item.Identity.ContentID = ""
 			item.Identity.Resolved = false
 			item.Identity.Admitted = false
 			item.Identity.QuestionID = ""

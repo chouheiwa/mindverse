@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UniverseIndex } from '../domain/universe'
 import { buildQuestionWorkspaceModel, type PersonalWorkspaceAnswer, type WorkspaceAnswer } from './questionWorkspaceModel'
+import { useModalDialogLifecycle } from './modalDialogLifecycle'
 import './QuestionWorkspace.css'
 
 type Mode = 'personal' | 'retrospective' | 'prism'
@@ -159,45 +160,14 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   const headingRef = useRef<HTMLHeadingElement>(null)
   const tabRefs = useRef(new Map<Mode, HTMLButtonElement>())
   const previousPublicRef = useRef(isPublic)
-  const nativeModalRef = useRef(false)
   const closedRef = useRef(false)
+  const modal = useModalDialogLifecycle(dialogRef, { getReturnFocus, initialFocusRef: headingRef })
 
   useLayoutEffect(() => {
     if (previousPublicRef.current === isPublic) return
     previousPublicRef.current = isPublic
     tabRefs.current.get(activeMode)?.focus()
   }, [activeMode, isPublic])
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const returnFocus = getReturnFocus?.()
-    const inerted: Array<{ element: HTMLElement; hadAttribute: boolean }> = []
-    if (typeof dialog.showModal === 'function') {
-      if (!dialog.open) dialog.showModal()
-      nativeModalRef.current = true
-    } else {
-      dialog.setAttribute('open', '')
-      let branch: HTMLElement = dialog
-      while (branch.parentElement) {
-        const parent = branch.parentElement
-        for (const sibling of parent.children) {
-          if (sibling === branch || !(sibling instanceof HTMLElement)) continue
-          inerted.push({ element: sibling, hadAttribute: sibling.hasAttribute('inert') })
-          sibling.setAttribute('inert', '')
-        }
-        branch = parent
-        if (parent === document.body) break
-      }
-    }
-    headingRef.current?.focus()
-    return () => {
-      if (dialog.open && typeof dialog.close === 'function') dialog.close()
-      else dialog.removeAttribute('open')
-      for (const { element, hadAttribute } of inerted) if (!hadAttribute) element.removeAttribute('inert')
-      if (returnFocus?.isConnected) returnFocus.focus()
-    }
-  }, [getReturnFocus])
 
   const close = () => {
     if (closedRef.current) return
@@ -224,20 +194,11 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   }
 
   const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDialogElement>) => {
-    if (event.key === 'Escape' && !nativeModalRef.current) {
+    modal.onKeyDown(event)
+    if (event.key === 'Escape' && !modal.nativeModalRef.current) {
       event.preventDefault()
       close()
-      return
     }
-    if (event.key !== 'Tab') return
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
-    if (!focusable.length) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
   }
 
   const labels: Record<Mode, string> = { personal: '个人轨道', retrospective: '回溯', prism: '棱镜' }

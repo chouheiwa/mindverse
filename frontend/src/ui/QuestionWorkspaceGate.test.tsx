@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { StrictMode, useRef, useState } from 'react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Universe } from '../types'
@@ -55,6 +56,75 @@ describe('QuestionWorkspaceGate', () => {
     await userEvent.click(screen.getByRole('button', { name: '返回宇宙' }))
     expect(props.onRestoreCamera).toHaveBeenCalledOnce()
     expect(props.onBack).toHaveBeenCalledOnce()
+    error.mockRestore()
+  })
+
+  test.each(['Back', 'Escape'] as const)('loading %s exits once and restores originating focus after unmount in StrictMode', async (action) => {
+    const loader: QuestionWorkspaceLoader = () => new Promise(() => {})
+    function Harness() {
+      const [open, setOpen] = useState(true)
+      const origin = useRef<HTMLButtonElement>(null)
+      return <><button ref={origin}>加载来源</button>{open && <QuestionWorkspaceGate {...props} loader={loader}
+        getReturnFocus={() => origin.current} onBack={() => { props.onBack(); setOpen(false) }} />}</>
+    }
+    render(<StrictMode><Harness /></StrictMode>)
+    const dialog = screen.getByRole('dialog', { name: '正在建立问题工作台' })
+    if (action === 'Back') await userEvent.click(screen.getByRole('button', { name: '返回宇宙' }))
+    else {
+      fireEvent.keyDown(dialog, { key: 'Escape' })
+      fireEvent.keyDown(dialog, { key: 'Escape' })
+    }
+    const origin = screen.getByRole('button', { name: '加载来源' })
+    await waitFor(() => expect(origin).toHaveFocus())
+    expect(origin).not.toHaveAttribute('inert')
+    expect(props.onRestoreCamera).toHaveBeenCalledOnce()
+    expect(props.onBack).toHaveBeenCalledOnce()
+  })
+
+  test('error Back restores originating focus after the error dialog unmounts', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const loader: QuestionWorkspaceLoader = () => Promise.reject(new Error('offline'))
+    function Harness() {
+      const [open, setOpen] = useState(true)
+      const origin = useRef<HTMLButtonElement>(null)
+      return <><button ref={origin}>错误来源</button>{open && <QuestionWorkspaceGate {...props} loader={loader}
+        getReturnFocus={() => origin.current} onBack={() => { props.onBack(); setOpen(false) }} />}</>
+    }
+    render(<Harness />)
+    await screen.findByRole('dialog', { name: '问题工作台加载失败' })
+    await userEvent.click(screen.getByRole('button', { name: '返回宇宙' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '错误来源' })).toHaveFocus())
+    expect(props.onRestoreCamera).toHaveBeenCalledOnce()
+    expect(props.onBack).toHaveBeenCalledOnce()
+    error.mockRestore()
+  })
+
+  test('fallback loading dialog contains Tab and Shift+Tab without reaching inert background', () => {
+    const loader: QuestionWorkspaceLoader = () => new Promise(() => {})
+    render(<><button>背景动作</button><QuestionWorkspaceGate {...props} loader={loader} /></>)
+    const dialog = screen.getByRole('dialog', { name: '正在建立问题工作台' })
+    const back = screen.getByRole('button', { name: '返回宇宙' })
+    expect(back).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(back).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(back).toHaveFocus()
+    expect(screen.getByRole('button', { name: '背景动作' })).not.toHaveFocus()
+  })
+
+  test('fallback error dialog wraps focus between both controls', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const loader: QuestionWorkspaceLoader = () => Promise.reject(new Error('offline'))
+    render(<><button>背景动作</button><QuestionWorkspaceGate {...props} loader={loader} /></>)
+    const dialog = await screen.findByRole('dialog', { name: '问题工作台加载失败' })
+    const back = screen.getByRole('button', { name: '返回宇宙' })
+    const retry = screen.getByRole('button', { name: '重新加载' })
+    expect(back).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(retry).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(back).toHaveFocus()
+    expect(screen.getByRole('button', { name: '背景动作' })).not.toHaveFocus()
     error.mockRestore()
   })
 })

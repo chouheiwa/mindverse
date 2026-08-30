@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UniverseIndex } from '../domain/universe'
-import { buildQuestionWorkspaceModel, type WorkspaceAnswer } from './questionWorkspaceModel'
+import { buildQuestionWorkspaceModel, type PersonalWorkspaceAnswer, type WorkspaceAnswer } from './questionWorkspaceModel'
 import './QuestionWorkspace.css'
 
 type Mode = 'personal' | 'retrospective' | 'prism'
@@ -30,7 +30,7 @@ function OriginalAnswer({ answer }: { answer: WorkspaceAnswer }) {
   )
 }
 
-function PersonalPanel({ answers }: { answers: readonly WorkspaceAnswer[] }) {
+function PersonalPanel({ answers }: { answers: readonly PersonalWorkspaceAnswer[] }) {
   const created = answers.filter((answer) => answer.relations.includes('created'))
   const collected = answers.filter((answer) => answer.relations.includes('collected'))
   return (
@@ -115,12 +115,20 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   const isPublic = shared || readOnly
   const tabs: readonly Mode[] = isPublic ? ['retrospective', 'prism'] : ['personal', 'retrospective', 'prism']
   const [mode, setMode] = useState<Mode>(isPublic ? 'retrospective' : 'personal')
+  const activeMode: Mode = isPublic && mode === 'personal' ? 'retrospective' : mode
   const model = useMemo(() => buildQuestionWorkspaceModel(index, questionId, { shared, readOnly }), [index, questionId, shared, readOnly])
   const dialogRef = useRef<HTMLDialogElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const tabRefs = useRef(new Map<Mode, HTMLButtonElement>())
+  const previousPublicRef = useRef(isPublic)
   const nativeModalRef = useRef(false)
   const closedRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (previousPublicRef.current === isPublic) return
+    previousPublicRef.current = isPublic
+    tabRefs.current.get(activeMode)?.focus()
+  }, [activeMode, isPublic])
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -166,7 +174,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   }
 
   const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    const current = tabs.indexOf(mode)
+    const current = tabs.indexOf(activeMode)
     let next: number | undefined
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % tabs.length
     if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + tabs.length) % tabs.length
@@ -214,18 +222,21 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
           </div>
           <nav className="qw-rail" aria-label="问题观察模式">
             <div role="tablist" aria-orientation="vertical">
-              {tabs.map((tab, position) => <button key={tab} ref={(node) => { if (node) tabRefs.current.set(tab, node) }}
+              {tabs.map((tab, position) => <button key={tab} ref={(node) => {
+                if (node) tabRefs.current.set(tab, node)
+                else tabRefs.current.delete(tab)
+              }}
                 type="button" role="tab" id={`qw-tab-${tab}`} aria-label={labels[tab]} aria-controls={`qw-panel-${tab}`}
-                aria-selected={mode === tab} tabIndex={mode === tab ? 0 : -1}
+                aria-selected={activeMode === tab} tabIndex={activeMode === tab ? 0 : -1}
                 onKeyDown={onTabKeyDown} onClick={(event) => { selectTab(tab); event.currentTarget.focus() }}>
                 <span>{String(position + 1).padStart(2, '0')}</span>{labels[tab]}
               </button>)}
             </div>
           </nav>
-          <div className="qw-reading" role="tabpanel" id={`qw-panel-${mode}`} aria-labelledby={`qw-tab-${mode}`}>
-            {mode === 'personal' && model.personal && <PersonalPanel answers={model.personal.items} />}
-            {mode === 'retrospective' && <RetrospectivePanel chronicle={model.chronicle} />}
-            {mode === 'prism' && <PrismPanel />}
+          <div className="qw-reading" role="tabpanel" id={`qw-panel-${activeMode}`} aria-labelledby={`qw-tab-${activeMode}`}>
+            {activeMode === 'personal' && model.personal && <PersonalPanel answers={model.personal.items} />}
+            {activeMode === 'retrospective' && <RetrospectivePanel chronicle={model.chronicle} />}
+            {activeMode === 'prism' && <PrismPanel />}
           </div>
         </main>
       )}

@@ -52,13 +52,29 @@ describe('buildQuestionWorkspaceModel', () => {
     expect(model.answers[1].publicEvidence).toEqual(['favorite_list', 'own_content'])
   })
 
-  test.each([{ shared: true }, { readOnly: true }])('omits the private orbit entirely in public mode %o', (options) => {
-    const model = buildQuestionWorkspaceModel(index([answer('answer:1', {
-      bindings: [{ relation: 'created', folders: [] }],
-    })]), 'question:7', options)
+  test.each([{ shared: true }, { readOnly: true }])('removes all binding-derived data from every public model branch %o', (options) => {
+    const source = answer('answer:1', {
+      bindings: [
+        { relation: 'created', at: 1_700_000_001, folders: ['PRIVATE_FOLDER_SENTINEL'] },
+        { relation: 'collected', at: 1_700_000_002, folders: ['SECOND_PRIVATE_FOLDER'] },
+      ],
+      discoverySources: ['public_search'],
+    })
+    const before = structuredClone(source)
+    const model = buildQuestionWorkspaceModel(index([source]), 'question:7', options)
     expect(model.status).toBe('ready')
     if (model.status !== 'ready') return
     expect(Object.hasOwn(model, 'personal')).toBe(false)
+    const serialized = JSON.stringify(model)
+    expect(serialized).not.toContain('relations')
+    expect(serialized).not.toContain('folders')
+    expect(serialized).not.toContain('created')
+    expect(serialized).not.toContain('collected')
+    expect(serialized).not.toContain('PRIVATE_FOLDER_SENTINEL')
+    expect(serialized).not.toContain('SECOND_PRIVATE_FOLDER')
+    expect(serialized).not.toContain('1700000001')
+    expect(serialized).not.toContain('1700000002')
+    expect(source).toEqual(before)
   })
 
   test('uses only positive publishedAt values for exact chronicle thresholds', () => {
@@ -117,7 +133,7 @@ describe('buildQuestionWorkspaceModel', () => {
     expect(model.prism).toEqual({ status: 'abstained', reason: '证据不足，暂不生成观点结构', claims: [] })
     expect(Object.isFrozen(model)).toBe(true)
     expect(Object.isFrozen(model.answers)).toBe(true)
-    expect(Object.isFrozen(model.answers[0].relations)).toBe(true)
+    expect(Object.isFrozen(model.personal?.items[0].relations)).toBe(true)
     expect(Object.isFrozen(model.personal?.items[0].folders)).toBe(true)
   })
 

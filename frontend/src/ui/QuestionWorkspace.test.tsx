@@ -80,6 +80,30 @@ describe('QuestionWorkspace', () => {
     expect(screen.getByRole('tab', { name: '回溯' })).toHaveAttribute('aria-selected', 'true')
   })
 
+  test('keeps a valid focused tab and panel while privacy mode changes in place', async () => {
+    const source = index([answer('answer:1', { bindings: [{ relation: 'created', folders: ['私密目录'] }] })])
+    const props = { index: source, questionId: question.id, onBack: () => {}, onRestoreCamera: () => {} }
+    const view = render(<QuestionWorkspace {...props} />)
+    screen.getByRole('tab', { name: '个人轨道' }).focus()
+
+    view.rerender(<QuestionWorkspace {...props} shared />)
+    expect(screen.queryByRole('tab', { name: '个人轨道' })).not.toBeInTheDocument()
+    const retrospective = screen.getByRole('tab', { name: '回溯' })
+    expect(retrospective).toHaveAttribute('aria-selected', 'true')
+    expect(retrospective).toHaveAttribute('aria-controls', 'qw-panel-retrospective')
+    expect(screen.getByRole('tabpanel', { name: '回溯' })).toHaveAttribute('id', 'qw-panel-retrospective')
+    expect(screen.queryByText('我创作')).not.toBeInTheDocument()
+    expect(screen.queryByText('私密目录')).not.toBeInTheDocument()
+    await waitFor(() => expect(retrospective).toHaveFocus())
+
+    view.rerender(<QuestionWorkspace {...props} />)
+    const personal = screen.getByRole('tab', { name: '个人轨道' })
+    expect(personal).toHaveAttribute('aria-selected', 'true')
+    expect(personal).toHaveAttribute('aria-controls', 'qw-panel-personal')
+    expect(screen.getByRole('tabpanel', { name: '个人轨道' })).toHaveAttribute('id', 'qw-panel-personal')
+    expect(personal).toHaveFocus()
+  })
+
   test('shows only thresholds and original links when chronicle evidence is insufficient', async () => {
     const user = userEvent.setup()
     const unknown = answer('answer:1', { updatedAt: 1_900_000_000, observedAt: 2_000_000_000 })

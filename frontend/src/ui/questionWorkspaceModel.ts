@@ -17,9 +17,12 @@ export interface WorkspaceAnswer {
   readonly authorId?: string
   readonly authorName?: string
   readonly publishedAt?: number
+  readonly publicEvidence: readonly DiscoverySource[]
+}
+
+export interface PersonalWorkspaceAnswer extends WorkspaceAnswer {
   readonly relations: readonly UserContentRelation[]
   readonly folders: readonly string[]
-  readonly publicEvidence: readonly DiscoverySource[]
 }
 
 interface ChronicleBase {
@@ -43,7 +46,7 @@ export type QuestionWorkspaceModel = Readonly<{
   question: Readonly<{ id: string; title: string; url: string }>
   answerCount: number
   answers: readonly WorkspaceAnswer[]
-  personal?: Readonly<{ items: readonly WorkspaceAnswer[] }>
+  personal?: Readonly<{ items: readonly PersonalWorkspaceAnswer[] }>
   chronicle: InsufficientChronicle | AvailableChronicle
   prism: Readonly<{ status: 'abstained'; reason: '证据不足，暂不生成观点结构'; claims: readonly never[] }>
 }> | Readonly<{
@@ -76,15 +79,14 @@ export function buildQuestionWorkspaceModel(
 
   const seen = new Set<string>()
   const answers: WorkspaceAnswer[] = []
+  const personalItems: PersonalWorkspaceAnswer[] = []
+  const privateSession = !options.shared && !options.readOnly
   for (const answerId of question.answerIds) {
     if (seen.has(answerId)) continue
     seen.add(answerId)
     const answer = index.answersById.get(answerId)
     if (!answer) continue
-    const relations = unique(answer.bindings.map((binding) => binding.relation))
-      .sort((left, right) => (left === right ? 0 : left === 'created' ? -1 : 1))
-    const folders = unique(answer.bindings.flatMap((binding) => binding.folders).filter(Boolean))
-    answers.push({
+    const publicView: WorkspaceAnswer = {
       id: answer.id,
       title: answer.title,
       ...(answer.summary === undefined ? {} : { summary: answer.summary }),
@@ -92,10 +94,21 @@ export function buildQuestionWorkspaceModel(
       ...(answer.authorId === undefined ? {} : { authorId: answer.authorId }),
       ...(answer.authorName === undefined ? {} : { authorName: answer.authorName }),
       ...(answer.publishedAt === undefined ? {} : { publishedAt: answer.publishedAt }),
-      relations,
-      folders,
       publicEvidence: unique(answer.discoverySources),
-    })
+    }
+    if (!privateSession) {
+      answers.push(publicView)
+      continue
+    }
+    const relations = unique(answer.bindings.map((binding) => binding.relation))
+      .sort((left, right) => (left === right ? 0 : left === 'created' ? -1 : 1))
+    const privateView: PersonalWorkspaceAnswer = {
+      ...publicView,
+      relations,
+      folders: unique(answer.bindings.flatMap((binding) => binding.folders).filter(Boolean)),
+    }
+    answers.push(privateView)
+    if (relations.length > 0) personalItems.push(privateView)
   }
 
   const eligible = answers.filter((answer) =>
@@ -128,13 +141,12 @@ export function buildQuestionWorkspaceModel(
     flatItems: answers,
   }
 
-  const privateSession = !options.shared && !options.readOnly
   return deepFreeze({
     status: 'ready' as const,
     question: { id: question.id, title: question.title, url: question.url },
     answerCount: answers.length,
     answers,
-    ...(privateSession ? { personal: { items: answers.filter((answer) => answer.relations.length > 0) } } : {}),
+    ...(privateSession ? { personal: { items: personalItems } } : {}),
     chronicle,
     prism: { status: 'abstained' as const, reason: '证据不足，暂不生成观点结构' as const, claims: [] as never[] },
   })

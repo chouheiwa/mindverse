@@ -67,6 +67,7 @@ type session struct {
 	genToday     int
 	genDay       string
 	lastSeen     time.Time
+	active       int // guarded by Server.mu; active leases are never evictable
 }
 
 type shareStore interface {
@@ -89,6 +90,7 @@ type Server struct {
 	lastSessionCleanup time.Time
 	maxSessions        int
 	onSessionCleanup   func()
+	onSessionLease     func(*session)
 }
 
 // New 构造服务。
@@ -136,10 +138,15 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) withSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sess := s.session(w, r)
-		sess.mu.Lock()
-		sess.lastSeen = time.Now()
-		sess.mu.Unlock()
+		sess, err := s.acquireSession(w, r)
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, "会话已满，请稍后重试")
+			return
+		}
+		defer s.releaseSession(sess)
+		if s.onSessionLease != nil {
+			s.onSessionLease(sess)
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
 	})
 }
@@ -151,21 +158,30 @@ func fromCtx(r *http.Request) *session {
 	return v
 }
 
-func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
+var errSessionCapacity = errors.New("session capacity reached")
+
+func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*session, error) {
 	s.evictIdleSessions(time.Now())
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
 		if !ok && validSessionID(c.Value) {
-			s.ensureSessionCapacityLocked()
-			sess = &session{id: c.Value, lastSeen: time.Now()}
-			s.sess[c.Value] = sess
-			ok = true
+			if s.ensureSessionCapacityLocked() {
+				sess = &session{id: c.Value, lastSeen: time.Now()}
+				s.sess[c.Value] = sess
+				ok = true
+			}
+		}
+		if ok {
+			sess.active++
 		}
 		s.mu.Unlock()
 		if ok {
 			s.setSessionCookie(w, sess.id)
-			return sess
+			return sess, nil
+		}
+		if validSessionID(c.Value) {
+			return nil, errSessionCapacity
 		}
 	}
 	id, err := randomToken()
@@ -174,11 +190,26 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 	}
 	sess := &session{id: id, lastSeen: time.Now()}
 	s.mu.Lock()
-	s.ensureSessionCapacityLocked()
+	if !s.ensureSessionCapacityLocked() {
+		s.mu.Unlock()
+		return nil, errSessionCapacity
+	}
+	sess.active = 1
 	s.sess[id] = sess
 	s.mu.Unlock()
 	s.setSessionCookie(w, id)
-	return sess
+	return sess, nil
+}
+
+func (s *Server) releaseSession(sess *session) {
+	s.mu.Lock()
+	if sess.active > 0 {
+		sess.active--
+	}
+	sess.mu.Lock()
+	sess.lastSeen = time.Now()
+	sess.mu.Unlock()
+	s.mu.Unlock()
 }
 
 func (s *Server) evictIdleSessions(now time.Time) {
@@ -189,6 +220,9 @@ func (s *Server) evictIdleSessions(now time.Time) {
 	}
 	s.lastSessionCleanup = now
 	for id, sess := range s.sess {
+		if sess.active != 0 {
+			continue
+		}
 		sess.mu.Lock()
 		idle := now.Sub(sess.lastSeen) > share.TTL
 		sess.mu.Unlock()
@@ -203,13 +237,16 @@ func (s *Server) evictIdleSessions(now time.Time) {
 	}
 }
 
-func (s *Server) ensureSessionCapacityLocked() {
+func (s *Server) ensureSessionCapacityLocked() bool {
 	if s.maxSessions <= 0 || len(s.sess) < s.maxSessions {
-		return
+		return true
 	}
 	var oldestID string
 	var oldest time.Time
 	for id, sess := range s.sess {
+		if sess.active != 0 {
+			continue
+		}
 		sess.mu.Lock()
 		seen := sess.lastSeen
 		sess.mu.Unlock()
@@ -217,7 +254,11 @@ func (s *Server) ensureSessionCapacityLocked() {
 			oldestID, oldest = id, seen
 		}
 	}
+	if oldestID == "" {
+		return false
+	}
 	delete(s.sess, oldestID)
+	return true
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {

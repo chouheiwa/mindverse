@@ -270,6 +270,35 @@ func TestSessionCleanupIsThrottledAndCeilingBounded(t *testing.T) {
 	}
 }
 
+func TestSessionCeilingNeverEvictsActiveLease(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	s.maxSessions = 1
+	cookie := startSession(t, s)
+	entered, release := make(chan struct{}), make(chan struct{})
+	held := s.withSession(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release
+	}))
+	done := make(chan struct{})
+	go func() {
+		_ = doRequest(t, held, http.MethodGet, "/held", nil, cookie)
+		close(done)
+	}()
+	<-entered
+	refused := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil)
+	if refused.Code != http.StatusServiceUnavailable {
+		t.Fatalf("all-active ceiling status=%d body=%s", refused.Code, refused.Body.String())
+	}
+	s.mu.Lock()
+	kept := s.sess[cookie.Value]
+	s.mu.Unlock()
+	if kept == nil {
+		t.Fatal("active session was evicted")
+	}
+	close(release)
+	<-done
+}
+
 type blockingProvider struct{ corpus *zhihu.Corpus }
 
 func (p blockingProvider) Fetch(context.Context) (*zhihu.Corpus, error) { return p.corpus, nil }
@@ -436,6 +465,74 @@ func TestWipeSerializesAgainstShareCreate(t *testing.T) {
 		if strings.HasSuffix(entry.Name(), ".json") {
 			t.Fatalf("share survived linearized wipe: %s", entry.Name())
 		}
+	}
+}
+
+func TestCapacityPressureCannotReplaceInFlightShareSession(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	s.maxSessions = 2
+	owner := startSession(t, s)
+	installUniverse(t, s, owner, serverUniverse())
+	digest := previewDigest(t, s, owner, "question:7")
+	real := s.store.(*share.Store)
+	blocking := &blockingShareStore{real: real, entered: make(chan struct{}), release: make(chan struct{})}
+	s.store = blocking
+	s.mu.Lock()
+	original := s.sess[owner.Value]
+	s.mu.Unlock()
+	original.mu.Lock()
+	original.lastSeen = time.Now().Add(-time.Hour)
+	original.state = "active-auth-state"
+	original.mu.Unlock()
+	created := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		created <- doRequest(t, s.Routes(), http.MethodPost, "/api/share", map[string]any{"questionIds": []string{"question:7"}, "digest": digest}, owner)
+	}()
+	<-blocking.entered
+	_ = startSession(t, s)
+	_ = startSession(t, s)
+	s.mu.Lock()
+	kept := s.sess[owner.Value]
+	s.mu.Unlock()
+	if kept != original {
+		close(blocking.release)
+		<-created
+		t.Fatal("capacity pressure replaced an in-flight session object")
+	}
+	wipeLeased := make(chan struct{})
+	s.onSessionLease = func(sess *session) {
+		if sess == original {
+			close(wipeLeased)
+		}
+	}
+	wiped := make(chan *httptest.ResponseRecorder, 1)
+	go func() { wiped <- doRequest(t, s.Routes(), http.MethodDelete, "/api/session/data", nil, owner) }()
+	<-wipeLeased
+	select {
+	case rr := <-wiped:
+		close(blocking.release)
+		<-created
+		t.Fatalf("wipe bypassed in-flight session lock: status=%d", rr.Code)
+	default:
+	}
+	close(blocking.release)
+	if rr := <-created; rr.Code != http.StatusOK {
+		t.Fatalf("create status=%d", rr.Code)
+	}
+	if rr := <-wiped; rr.Code != http.StatusOK {
+		t.Fatalf("wipe status=%d", rr.Code)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			t.Fatalf("share survived wipe: %s", entry.Name())
+		}
+	}
+	original.mu.Lock()
+	defer original.mu.Unlock()
+	if original.state != "" {
+		t.Fatalf("wipe did not clear active auth state: %q", original.state)
 	}
 }
 

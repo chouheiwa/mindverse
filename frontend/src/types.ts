@@ -1,99 +1,99 @@
-// 与 Go 侧 internal/engine 的 JSON tag 逐字对齐。
-// 任何一边改字段，这里必须同步 —— 星图的每个视觉参数都绑在这些字段上。
-
+// 与 Go 侧 internal/engine 的 JSON tag 对齐。Legacy 仅保留旧紧凑字段。
 export interface Evidence { t: string; u: string; o: number; y: string }
-
-export interface Star {
-  c: string          // 概念名
-  g: number          // 所属星群
-  p: [number, number, number]
-  n: number          // 关联条目数 → 半径
-  o: number          // 我写过
-  f: number          // 我收藏
-  hue: number        // 光谱：32 琥珀 / 218 蓝白
-  sat: number        // 饱和度，中点近乎纯白
-  pe: number         // 持续性 → 亮度
-  bu: number         // 集中度 → 闪烁幅度
-  fi: string
-  la: string
-  ev: Evidence[]
+export interface LegacyStar {
+  c: string; g: number; p: [number, number, number]; n: number; o: number; f: number
+  hue: number; sat: number; pe: number; bu: number; fi: string; la: string; ev: Evidence[]
 }
-
+export type ConceptScope = 'private' | 'public'
+export interface CurrentStar extends LegacyStar {
+  id: string
+  scope: ConceptScope
+  externalQueryAllowed: boolean
+  questionIds: string[]
+  probeIds: string[]
+}
+export type Star = LegacyStar | CurrentStar
 export interface Cluster {
-  g: number
-  name: string
-  lead: string
-  c: [number, number, number]
-  n: number
-  o: number
-  f: number
-  hue: number
-  sat: number
-  mem: string[]
+  g: number; name: string; lead: string; c: [number, number, number]
+  n: number; o: number; f: number; hue: number; sat: number; mem: string[]
 }
-
 export interface WormholeEvidence { t: string; u: string; a: string; b: string }
-
 export interface Wormhole {
-  a: number; b: number
-  an: string; bn: string
-  obs: number        // 实际跨越次数
-  exp: number        // 随机预期
-  z: number
+  a: number; b: number; an: string; bn: string; obs: number; exp: number; z: number
   ev: WormholeEvidence[]
 }
-
 export interface Solo { c: string; n: number; t: string; u: string; g: string[]; p: [number, number, number] }
-/** 熄灭的星：曾经有过体量、但已经很久没有新增。gap 是距最近一次新增的月数。 */
 export interface Dark {
   c: string; n: number; f: number; o: number; gap: number
   first: string; last: string; ev: Evidence[]
 }
 export interface Nebula { c: string; n: number; burst: number; first: string; last: string }
-
 export interface Meta {
-  items: number; concepts: number; clusters: number
-  own: number; fav: number
-  span: [number, number]
-  medz: number; p10z: number
-  source: string; splits: number
+  items: number; concepts: number; clusters: number; own: number; fav: number
+  span: [number, number]; medz: number; p10z: number; source: string; splits: number
 }
-
-export interface Universe {
+export type UserContentRelation = 'created' | 'collected'
+export interface UserContentBinding {
+  relation: UserContentRelation
+  at?: number
+  folders?: string[]
+}
+export type DiscoverySource = 'public_search' | 'favorite_list' | 'own_content'
+export interface QuestionPlanet {
+  id: string; questionId: string; title: string; url: string; answerIds?: string[]
+}
+export interface PublicArtifact {
+  id: string
+  title: string
+  summary?: string
+  url: string
+  authorId?: string
+  authorName?: string
+  publishedAt?: number
+  updatedAt?: number
+  observedAt?: number
+  likeCount?: number
+  commentCount?: number
+  favoriteCount?: number
+  bindings?: UserContentBinding[]
+  discoverySources?: DiscoverySource[]
+}
+export interface AnswerSatellite extends PublicArtifact { questionId: string }
+export type ArticleProbe = PublicArtifact
+interface UniverseCore<S extends Star> {
   meta: Meta
   clusters: Cluster[]
-  stars: Star[]
-  particles: [number, number, number, number, number][]  // x,y,z,星群,是否本人创作
+  stars: S[]
+  particles: [number, number, number, number, number][]
   wormholes: Wormhole[]
   solo: Solo[]
   dark: Dark[]
   nebula: Nebula[]
 }
-
-export type GenState = 'idle' | 'running' | 'done' | 'failed'
-
-export interface Generation {
-  state: GenState
-  stage: string
-  progress: number
-  error?: string
-  universe?: Universe
-  filtered: number     // 因敏感类目未参与分析的条数，必须如实展示
-  source: string
-  calls: number
+export interface CurrentUniverse extends UniverseCore<CurrentStar> {
+  schemaVersion: 'universe.v1'
+  analysisVersion: 'engine.v1'
+  questions: QuestionPlanet[]
+  answers: AnswerSatellite[]
+  probes: ArticleProbe[]
 }
-
+export interface LegacyUniverse extends UniverseCore<LegacyStar> {
+  schemaVersion?: never
+  analysisVersion?: never
+  questions?: never
+  answers?: never
+  probes?: never
+}
+export type Universe = CurrentUniverse | LegacyUniverse
+export type GenState = 'idle' | 'running' | 'done' | 'failed'
+export interface Generation {
+  state: GenState; stage: string; progress: number; error?: string; universe?: Universe
+  filtered: number; source: string; calls: number
+}
 export interface OAuthStatus {
-  configured: boolean
-  localOnly: boolean
-  authorized: boolean
-  appId: string
-  redirectUri: string
+  configured: boolean; localOnly: boolean; authorized: boolean; appId: string; redirectUri: string
   profile: { name: string; avatar_url: string; headline: string; url: string } | null
-  stateVerified: boolean
-  csrfClaimAllowed: boolean
-  source: string
+  stateVerified: boolean; csrfClaimAllowed: boolean; source: string
   warnings: { code: string; message: string }[]
 }
-
 export type Mode = 'all' | 'worm' | 'dark' | 'nebula' | 'solo' | 'me'

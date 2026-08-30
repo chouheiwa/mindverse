@@ -144,6 +144,71 @@ func TestUniverseValidationChecksEveryStar(t *testing.T) {
 	}
 }
 
+func validCurrentEntityUniverse() Universe {
+	return Universe{
+		SchemaVersion: CurrentSchemaVersion, AnalysisVersion: CurrentAnalysisVersion,
+		Questions: []QuestionPlanet{{
+			ID: "question:7", QuestionID: "7", Title: "Question seven", URL: "https://www.zhihu.com/question/7",
+			AnswerIDs: []string{"answer:8", "answer:9"},
+		}},
+		Answers: []AnswerSatellite{
+			{ID: "answer:8", QuestionID: "question:7", Title: "Answer eight", URL: "https://www.zhihu.com/question/7/answer/8", AuthorID: "author:alice", AuthorName: "Alice", PublishedAt: 1, UpdatedAt: 2, ObservedAt: 3, LikeCount: 4, CommentCount: 5, FavoriteCount: 6, Bindings: []zhihu.UserContentBinding{{Relation: zhihu.RelationCreated, At: 1}}, DiscoverySources: []zhihu.DiscoverySource{zhihu.DiscoveryOwnContent}},
+			{ID: "answer:9", QuestionID: "question:7", Title: "Answer nine", URL: "https://www.zhihu.com/question/7/answer/9"},
+		},
+		Probes: []ArticleProbe{{ID: "article:21", Title: "Article", URL: "https://zhuanlan.zhihu.com/p/21", AuthorID: "author:bob", AuthorName: "Bob"}},
+	}
+}
+
+func TestValidateCurrentRejectsMalformedPublicEntityShapes(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Universe)
+	}{
+		{name: "question ID", mutate: func(u *Universe) { u.Questions[0].ID = "question:007" }},
+		{name: "question URL", mutate: func(u *Universe) { u.Questions[0].URL = "http://www.zhihu.com/question/7" }},
+		{name: "question title", mutate: func(u *Universe) { u.Questions[0].Title = " " }},
+		{name: "question answer order", mutate: func(u *Universe) { u.Questions[0].AnswerIDs = []string{"answer:9", "answer:8"} }},
+		{name: "answer ID", mutate: func(u *Universe) { u.Answers[0].ID = "answer:not-decimal" }},
+		{name: "answer URL", mutate: func(u *Universe) { u.Answers[0].URL = "https://www.zhihu.com/question/8/answer/8" }},
+		{name: "answer title", mutate: func(u *Universe) { u.Answers[0].Title = "" }},
+		{name: "answer author", mutate: func(u *Universe) { u.Answers[0].AuthorID = "Alice" }},
+		{name: "answer binding enum", mutate: func(u *Universe) { u.Answers[0].Bindings[0].Relation = "followed" }},
+		{name: "answer discovery enum", mutate: func(u *Universe) { u.Answers[0].DiscoverySources[0] = "scraped" }},
+		{name: "answer counter", mutate: func(u *Universe) { u.Answers[0].LikeCount = -1 }},
+		{name: "article ID", mutate: func(u *Universe) { u.Probes[0].ID = "article:0" }},
+		{name: "article URL", mutate: func(u *Universe) { u.Probes[0].URL = "https://zhuanlan.zhihu.com/p/22" }},
+		{name: "article title", mutate: func(u *Universe) { u.Probes[0].Title = "" }},
+		{name: "article counter", mutate: func(u *Universe) { u.Probes[0].CommentCount = -1 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u := validCurrentEntityUniverse()
+			tc.mutate(&u)
+			if err := u.ValidateCurrent(); err == nil {
+				t.Fatalf("malformed %s passed current validation", tc.name)
+			}
+		})
+	}
+}
+
+func TestValidateCurrentRejectsUnsortedStarReferences(t *testing.T) {
+	u := validCurrentEntityUniverse()
+	u.Questions = append(u.Questions, QuestionPlanet{ID: "question:9", QuestionID: "9", Title: "Question nine", URL: "https://www.zhihu.com/question/9"})
+	starID, _ := StableStarID(ScopePrivate, "Concept")
+	u.Stars = []Star{{ID: starID, Scope: ScopePrivate, Concept: "Concept", QuestionIDs: []string{"question:9", "question:7"}}}
+	if err := u.ValidateCurrent(); err == nil {
+		t.Fatal("unsorted current star references passed validation")
+	}
+}
+
+func TestValidateCurrentRejectsFutureVersions(t *testing.T) {
+	u := validCurrentEntityUniverse()
+	u.SchemaVersion = "universe.v2"
+	if err := u.ValidateCurrent(); err == nil {
+		t.Fatal("unknown future schema passed current validation")
+	}
+}
+
 func TestProjectKnowledgeObjectsDeduplicatesQuestions(t *testing.T) {
 	in := Input{
 		Items:    []zhihu.Item{admittedAnswer("8", "7", "Real question"), admittedAnswer("9", "7", "Real question")},

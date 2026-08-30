@@ -6,6 +6,7 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/chouheiwa/mindverse/internal/zhihu"
 )
@@ -299,8 +300,10 @@ func (u Universe) ValidateCurrent() error {
 
 	questions := make(map[string]QuestionPlanet, len(u.Questions))
 	for i, question := range u.Questions {
-		if question.ID == "" {
-			return fmt.Errorf("question %d: empty ID", i)
+		questionID, ok := namespacedDecimalID(question.ID, "question:")
+		if !ok || question.QuestionID != questionID || strings.TrimSpace(question.Title) == "" ||
+			question.URL != "https://www.zhihu.com/question/"+questionID {
+			return fmt.Errorf("question %d: invalid public shape", i)
 		}
 		if _, exists := questions[question.ID]; exists {
 			return fmt.Errorf("question %d: duplicate ID %q", i, question.ID)
@@ -309,8 +312,11 @@ func (u Universe) ValidateCurrent() error {
 	}
 	answers := make(map[string]AnswerSatellite, len(u.Answers))
 	for i, answer := range u.Answers {
-		if answer.ID == "" {
-			return fmt.Errorf("answer %d: empty ID", i)
+		answerID, ok := namespacedDecimalID(answer.ID, "answer:")
+		questionID, questionOK := namespacedDecimalID(answer.QuestionID, "question:")
+		if !ok || !questionOK || strings.TrimSpace(answer.Title) == "" ||
+			answer.URL != "https://www.zhihu.com/question/"+questionID+"/answer/"+answerID {
+			return fmt.Errorf("answer %d: invalid public shape", i)
 		}
 		if _, exists := answers[answer.ID]; exists {
 			return fmt.Errorf("answer %d: duplicate ID %q", i, answer.ID)
@@ -318,15 +324,24 @@ func (u Universe) ValidateCurrent() error {
 		if _, exists := questions[answer.QuestionID]; !exists {
 			return fmt.Errorf("answer %q: unknown question %q", answer.ID, answer.QuestionID)
 		}
+		if err := validatePublicMetadata(answer.AuthorID, answer.PublishedAt, answer.UpdatedAt, answer.ObservedAt,
+			answer.LikeCount, answer.CommentCount, answer.FavoriteCount, answer.Bindings, answer.DiscoverySources); err != nil {
+			return fmt.Errorf("answer %q: %w", answer.ID, err)
+		}
 		answers[answer.ID] = answer
 	}
 	probes := make(map[string]struct{}, len(u.Probes))
 	for i, probe := range u.Probes {
-		if probe.ID == "" {
-			return fmt.Errorf("probe %d: empty ID", i)
+		probeID, ok := namespacedDecimalID(probe.ID, "article:")
+		if !ok || strings.TrimSpace(probe.Title) == "" || probe.URL != "https://zhuanlan.zhihu.com/p/"+probeID {
+			return fmt.Errorf("probe %d: invalid public shape", i)
 		}
 		if _, exists := probes[probe.ID]; exists {
 			return fmt.Errorf("probe %d: duplicate ID %q", i, probe.ID)
+		}
+		if err := validatePublicMetadata(probe.AuthorID, probe.PublishedAt, probe.UpdatedAt, probe.ObservedAt,
+			probe.LikeCount, probe.CommentCount, probe.FavoriteCount, probe.Bindings, probe.DiscoverySources); err != nil {
+			return fmt.Errorf("probe %q: %w", probe.ID, err)
 		}
 		probes[probe.ID] = struct{}{}
 	}
@@ -376,7 +391,10 @@ func (u Universe) ValidateCurrent() error {
 
 func validateRefs(kind, owner string, refs []string, exists func(string) bool) error {
 	seen := make(map[string]struct{}, len(refs))
-	for _, id := range refs {
+	for i, id := range refs {
+		if i > 0 && refs[i-1] >= id {
+			return fmt.Errorf("%s %q: %s references are not strictly sorted", kind, owner, kind)
+		}
 		if id == "" || !exists(id) {
 			return fmt.Errorf("%s %q: unknown %s reference %q", kind, owner, kind, id)
 		}
@@ -384,6 +402,46 @@ func validateRefs(kind, owner string, refs []string, exists func(string) bool) e
 			return fmt.Errorf("%s %q: duplicate %s reference %q", kind, owner, kind, id)
 		}
 		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+func namespacedDecimalID(id, prefix string) (string, bool) {
+	raw, ok := strings.CutPrefix(id, prefix)
+	if !ok || raw == "" || raw[0] == '0' {
+		return "", false
+	}
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return raw, true
+}
+
+func validatePublicMetadata(authorID string, publishedAt, updatedAt, observedAt, likeCount, commentCount, favoriteCount int64,
+	bindings []zhihu.UserContentBinding, discoveries []zhihu.DiscoverySource) error {
+	if authorID != "" && !(zhihu.AuthorIdentity{ID: authorID, Source: zhihu.AuthorIdentityURLToken}).Valid() {
+		return fmt.Errorf("invalid verified author ID %q", authorID)
+	}
+	if publishedAt < 0 || updatedAt < 0 || observedAt < 0 {
+		return fmt.Errorf("negative artifact time")
+	}
+	if likeCount < 0 || commentCount < 0 || favoriteCount < 0 {
+		return fmt.Errorf("negative public count")
+	}
+	for _, binding := range bindings {
+		if binding.Relation != zhihu.RelationCreated && binding.Relation != zhihu.RelationCollected {
+			return fmt.Errorf("invalid user binding %q", binding.Relation)
+		}
+		if binding.At < 0 {
+			return fmt.Errorf("negative binding time")
+		}
+	}
+	for _, discovery := range discoveries {
+		if discovery != zhihu.DiscoveryPublicSearch && discovery != zhihu.DiscoveryFavoriteList && discovery != zhihu.DiscoveryOwnContent {
+			return fmt.Errorf("invalid discovery source %q", discovery)
+		}
 	}
 	return nil
 }

@@ -21,12 +21,10 @@ describe('question navigation accessibility styles', () => {
     expect(css('./QuestionWorkspace.css')).toMatch(/prefers-reduced-motion:\s*reduce/)
   })
 
-  test('uses a bounded horizontal question dock on mobile and preserves panel scroll clearance', () => {
+  test('removes the duplicate desktop question lane on mobile and preserves panel scroll clearance', () => {
     const lane = css('./QuestionLane.css')
     const panel = css('./Panel.css')
-    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.ql\s*\{[^}]*height:\s*92px/)
-    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.ql ol\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/)
-    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.ql li\s*\{[^}]*flex:\s*0 0/)
-    expect(panel).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.pnl\.open\s*\{[^}]*padding-bottom:\s*330px/)
+    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\[data-desktop-question-lane\]\s*\{[^}]*display:\s*none/)
+    expect(panel).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.pnl\.open\s*\{[^}]*padding-bottom:\s*calc\(var\(--bar-h\) \+ 32px\)/)
   })
 })

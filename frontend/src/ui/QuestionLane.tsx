@@ -7,7 +7,7 @@ export function QuestionLane({ planets, selectedId, onSelect }: {
   onSelect: (planet: QuestionPlanetDatum, trigger: HTMLButtonElement) => void
 }) {
   return (
-    <nav className="ql" aria-label="问题航道">
+    <nav className="ql" data-desktop-question-lane aria-label="问题航道">
       <details open>
         <summary>问题航道 <span>{planets.length}</span></summary>
         {planets.length ? (

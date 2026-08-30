@@ -22,7 +22,7 @@ describe('QuestionLane', () => {
     button.focus()
     await user.keyboard('{Enter}')
     expect(onSelect).toHaveBeenCalledWith(datum, button)
-    expect(screen.getByRole('navigation', { name: '问题航道' })).toBeVisible()
+    expect(screen.getByRole('navigation', { name: '问题航道' })).toHaveAttribute('data-desktop-question-lane')
   })
 
   test('states truthfully when a legacy or current star has no admitted questions', () => {

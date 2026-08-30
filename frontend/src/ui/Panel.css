@@ -23,7 +23,7 @@
 .pnl-lead b { color: var(--ink); font-weight: 500 }
 .pnl-lead em { font-style: normal; color: var(--amber) }
 .pnl h3 { font-family: var(--f-m); font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase;
-  color: var(--mute); font-weight: 400;
+  color: var(--dim); font-weight: 400;
   margin: 24px 0 10px; padding-bottom: 7px; border-bottom: 1px solid var(--rule-soft) }
 
 /* 活跃区间。
@@ -35,7 +35,7 @@
 .span .rail i { position: absolute; top: 0; bottom: 0; background: var(--amber); border-radius: 2px }
 .span .tk { position: absolute; top: -3px; width: 1px; height: 9px; background: var(--star-hi); opacity: .7 }
 .span .ax { display: flex; justify-content: space-between; gap: 10px;
-  font-family: var(--f-m); font-size: 9.5px; color: var(--mute); margin-top: 7px;
+  font-family: var(--f-m); font-size: 9.5px; color: var(--dim); margin-top: 7px;
   font-variant-numeric: tabular-nums }
 
 .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
@@ -55,12 +55,12 @@
 .evp-t { flex: 1; font-size: 13px; line-height: 1.6; color: var(--ink); font-weight: 300;
   transition: color var(--t-instant) var(--e-enter) }
 .evp:hover .evp-t { color: var(--star) }
-.evp-y { font-family: var(--f-m); font-size: 10px; color: var(--mute); flex: none }
+.evp-y { font-family: var(--f-m); font-size: 10px; color: var(--dim); flex: none }
 /* 保留给未来回答／探测器内容选中态；问题行星不使用 Evidence URL 高亮。 */
 .evp.on { background: rgba(155, 176, 255, .07); box-shadow: inset 2px 0 0 var(--star);
   margin: 0 -12px; padding: 11px 12px }
 .evp.on .evp-t { color: var(--star-hi) }
-.rest { font-family: var(--f-m); font-size: 10.5px; color: var(--mute); margin-top: 11px }
+.rest { font-family: var(--f-m); font-size: 10.5px; color: var(--dim); margin-top: 11px }
 
 /* 语义实体入口：像天文台的编号观测记录，不叠成卡片墙。 */
 .entry-section { scroll-margin-top: 18px }
@@ -69,11 +69,11 @@
   padding: 14px 0 15px; border-top: 1px solid var(--rule-soft) }
 .entry-row:last-child { border-bottom: 1px solid var(--rule-soft) }
 .entry-index { grid-column: 1; grid-row: 1 / span 4; padding-top: 2px; font-family: var(--f-m);
-  font-size: 9.5px; letter-spacing: .08em; color: var(--star); font-variant-numeric: tabular-nums }
+  font-size: 9.5px; letter-spacing: .08em; color: var(--star-hi); font-variant-numeric: tabular-nums }
 .entry-row strong { grid-column: 2; font-family: var(--f-d); font-size: 14px; line-height: 1.55;
   font-weight: 500; color: var(--ink) }
 .entry-meta { grid-column: 2; margin-top: 5px; font-family: var(--f-m); font-size: 10px;
-  line-height: 1.6; color: var(--mute); font-variant-numeric: tabular-nums }
+  line-height: 1.6; color: var(--dim); font-variant-numeric: tabular-nums }
 .entry-actions { grid-column: 2; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-top: 9px }
 .entry-actions button, .entry-actions a, .entry-original, .entry-more { min-height: 44px; display: inline-flex;
   align-items: center; justify-content: center; border: 1px solid var(--rule-soft); border-radius: 2px;
@@ -86,13 +86,13 @@
 .entry-relations { display: flex; flex-wrap: wrap; gap: 6px }
 .entry-relations span, .entry-relation-neutral { display: inline-flex; align-items: center; min-height: 20px;
   padding: 0 6px; border: 1px solid rgba(155, 176, 255, .26); color: var(--star-hi) }
-.entry-relation-neutral { border-color: var(--rule-soft); color: var(--mute) }
+.entry-relation-neutral { border-color: var(--rule-soft); color: var(--dim) }
 .entry-original { grid-column: 2; justify-self: start; min-width: 116px; margin-top: 5px; padding: 0 10px;
   color: var(--dim); background: transparent }
 .entry-more { width: 100%; margin-top: 8px; padding: 0 12px; color: var(--star-hi);
   background: rgba(24, 33, 58, .72) }
 .entry-status { display: block; margin-top: 8px; font-family: var(--f-m); font-size: 10px;
-  color: var(--mute); font-variant-numeric: tabular-nums }
+  color: var(--dim); font-variant-numeric: tabular-nums }
 .entry-empty, .entry-note { margin: 0; padding: 12px 0; font-size: 12px; line-height: 1.7; color: var(--mute) }
 .entry-note { padding-bottom: 0 }
 
@@ -104,7 +104,7 @@
 .ev:hover .ev-t { color: var(--star) }
 .ev-m { display: flex; gap: 9px; align-items: center; margin-top: 7px }
 .pill { font-family: var(--f-m); font-size: 10px; padding: 1px 6px; border-radius: 2px;
-  border: 1px solid var(--rule-soft); color: var(--mute) }
+  border: 1px solid var(--rule-soft); color: var(--dim) }
 .pill.own { color: var(--star); border-color: rgba(155, 176, 255, .28) }
 .pill.fav { color: var(--amber); border-color: rgba(255, 196, 107, .28) }
 
@@ -115,5 +115,5 @@
 .chips button:hover { color: var(--ink) }
 
 @media (max-width: 760px) {
-  .pnl.open { padding-bottom: 330px }
+  .pnl.open { padding-bottom: calc(var(--bar-h) + 32px) }
 }

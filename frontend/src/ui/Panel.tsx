@@ -9,6 +9,7 @@ interface Props {
   star: Star | null
   onClose: () => void
   onPickConcept: (concept: string) => void
+  /** Task 8 owns ShareView rendering. This component fails closed in shared mode. */
   shared: boolean
   onEnterQuestion: (questionId: string, trigger: HTMLButtonElement) => void
   /** 当前选中行星对应内容的链接，用来在列表里标出「就是这一条」 */
@@ -19,32 +20,32 @@ const ENTRY_LIMIT = 8
 const PUBLIC_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai',
 })
+const PUBLIC_DATE_KEY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Shanghai',
+})
 
-function publicDate(seconds: number | undefined): string | null {
+function publicDate(seconds: number | undefined): { label: string; dateTime: string } | null {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return null
   const date = new Date(seconds * 1000)
-  return Number.isFinite(date.getTime()) ? PUBLIC_DATE_FORMATTER.format(date) : null
+  if (!Number.isFinite(date.getTime())) return null
+  const parts = Object.fromEntries(PUBLIC_DATE_KEY_FORMATTER.formatToParts(date).map(({ type, value }) => [type, value]))
+  return { label: PUBLIC_DATE_FORMATTER.format(date), dateTime: `${parts.year}-${parts.month}-${parts.day}` }
 }
 
-const stableAuthorId = (value: string | undefined): value is string =>
-  value !== undefined && /^author:[A-Za-z0-9_-]+$/.test(value)
-
-function ProbeRelation({ probe, shared }: { probe: ArticleProbe; shared: boolean }) {
-  if (shared) return null
+function ProbeRelation({ probe }: { probe: ArticleProbe }) {
   const created = probe.bindings.some(({ relation }) => relation === 'created')
   const collected = probe.bindings.some(({ relation }) => relation === 'collected')
   if (created || collected) return <span className="entry-relations">
     {created && <span>我创作</span>}{collected && <span>我收藏</span>}
   </span>
   return <span className="entry-relation-neutral">
-    {probe.discoverySources.includes('public_search') ? '公开发现' : '无个人关系'}
+    {probe.discoverySources.includes('public_search') ? '公开发现' : '未发现可证明的个人关系'}
   </span>
 }
 
-function SemanticEntries({ index, star, shared, onEnterQuestion }: {
+function SemanticEntries({ index, star, onEnterQuestion }: {
   index: UniverseIndex
   star: Star
-  shared: boolean
   onEnterQuestion: Props['onEnterQuestion']
 }) {
   const questions = questionsForStar(index, star)
@@ -71,9 +72,9 @@ function SemanticEntries({ index, star, shared, onEnterQuestion }: {
       {!questions.length && <p className="entry-empty">尚无已收录的问题行星。</p>}
       <ol className="entry-list">
         {questions.slice(0, questionLimit).map((question, position) => {
-          const orbit = 'questionIds' in star ? star.questionIds.indexOf(question.id) + 1 : 0
+          const orbit = position + 1
           return <li className="entry-row" key={question.id}>
-            <span className="entry-index">{shared ? `问题 ${String(position + 1).padStart(2, '0')}` : orbit ? `轨道 ${String(orbit).padStart(2, '0')}` : '已收录'}</span>
+            <span className="entry-index">轨道 {String(orbit).padStart(2, '0')}</span>
             <strong>{question.title}</strong>
             <span className="entry-meta">{question.answerIds.length} 个已收录回答</span>
             <div className="entry-actions">
@@ -91,9 +92,9 @@ function SemanticEntries({ index, star, shared, onEnterQuestion }: {
       </span>}
       {questionLimit < questions.length && <button className="entry-more" type="button" onClick={() => {
         questionFocusId.current = questions[questionLimit]?.id ?? null
-        setQuestionLimit(questions.length)
+        setQuestionLimit((count) => Math.min(count + ENTRY_LIMIT, questions.length))
       }}>
-        展开全部 {questions.length} 个问题
+        加载更多问题
       </button>}
     </section>
 
@@ -109,13 +110,16 @@ function SemanticEntries({ index, star, shared, onEnterQuestion }: {
             probe.favoriteCount === undefined ? null : `${probe.favoriteCount} 收藏`,
           ].filter((item): item is string => item !== null)
           return <li className="entry-row" key={probe.id}>
-            <span className="entry-index">{shared ? '文章' : '旁轨'} {String(position + 1).padStart(2, '0')}</span>
+            <span className="entry-index">旁轨 {String(position + 1).padStart(2, '0')}</span>
             <strong>{probe.title}</strong>
-            <span className="entry-meta">{[
-              shared ? (stableAuthorId(probe.authorId) ? probe.authorName || '作者未标注' : '作者未标注') : probe.authorName || '作者未标注',
-              date, ...counts,
-            ].filter(Boolean).join(' · ')}</span>
-            <div className="entry-provenance"><ProbeRelation probe={probe} shared={shared} /></div>
+            <span className="entry-meta">
+              {probe.authorName || '作者未标注'}
+              {date
+                ? <> · <time dateTime={date.dateTime}>{date.label}</time></>
+                : <> · <span>首发时间未知</span></>}
+              {!!counts.length && <> · {counts.join(' · ')}</>}
+            </span>
+            <div className="entry-provenance"><ProbeRelation probe={probe} /></div>
             <a ref={(node) => {
               if (node) probeActions.current.set(probe.id, node)
               else probeActions.current.delete(probe.id)
@@ -128,11 +132,11 @@ function SemanticEntries({ index, star, shared, onEnterQuestion }: {
       </span>}
       {probeLimit < probes.length && <button className="entry-more" type="button" onClick={() => {
         probeFocusId.current = probes[probeLimit]?.id ?? null
-        setProbeLimit(probes.length)
+        setProbeLimit((count) => Math.min(count + ENTRY_LIMIT, probes.length))
       }}>
-        展开全部 {probes.length} 篇文章
+        加载更多文章
       </button>}
-      {!!probes.length && !shared && <p className="entry-note">创作或收藏只说明内容绑定关系，不代表赞同文章立场。</p>}
+      {!!probes.length && <p className="entry-note">创作或收藏只说明内容绑定关系，不代表赞同文章立场。</p>}
     </section>
   </>
 }
@@ -181,8 +185,8 @@ function SpanRail({ star, meta }: { star: Star; meta: Meta }) {
   )
 }
 
-function EvidenceList({ items, shared, highlight, fresh }: {
-  items: Evidence[]; shared: boolean; highlight?: string; fresh: (y: string) => number
+function EvidenceList({ items, highlight, fresh }: {
+  items: Evidence[]; highlight?: string; fresh: (y: string) => number
 }) {
   return (
     <>
@@ -192,8 +196,7 @@ function EvidenceList({ items, shared, highlight, fresh }: {
           {/* 个人内容档案的旧关系标记，不映射为 3D 问题行星。 */}
           <span className={`pdot${e.o ? ' own' : ''}`}
             style={{ opacity: 0.34 + 0.66 * fresh(e.y) }} />
-          {/* 分享快照不含原文标题 —— 只存结构与公开链接 */}
-          <span className="evp-t">{e.t || (shared ? '在知乎上打开这条内容' : '')}</span>
+          <span className="evp-t">{e.t}</span>
           <span className="evp-y">{e.y}</span>
         </a>
       ))}
@@ -213,19 +216,12 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
     return (y: string) => Math.min(1, Math.max(0, (frac(y) - lo) / (hi - lo)))
   }, [universe.meta])
 
+  if (!star || shared) return null
+
   return (
-    <aside className={`pnl${star ? ' open' : ''}`} aria-live="polite">
+    <aside className="pnl open" aria-live="polite">
       <button className="pnl-close" onClick={onClose} aria-label="关闭">×</button>
-      {star && (
-        <div className="stagger">
-          {shared ? <>
-            <div className="pnl-public-head">
-              <h2>公开观测详情</h2>
-              <p className="pnl-lead">仅显示该公开快照已收录的问题与文章；不包含个人轨迹、关系或时间线。</p>
-            </div>
-            <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star}
-              shared onEnterQuestion={onEnterQuestion} />
-          </> : <>
+      <div className="stagger">
           <div>
             <h2>{star.c}</h2>
             <div className="pnl-strip">
@@ -250,7 +246,7 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
           </div>
 
           <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star}
-            shared={shared} onEnterQuestion={onEnterQuestion} />
+            onEnterQuestion={onEnterQuestion} />
 
           <div>
             <h3>构成它的个人内容档案</h3>
@@ -258,7 +254,7 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
               <span>点越亮 = 收得越近</span>
               {star.o > 0 && <span><i className="pdot own" />暖色圈 = 我写过的</span>}
             </div>
-            <EvidenceList items={star.ev} shared={shared} highlight={highlight} fresh={fresh} />
+            <EvidenceList items={star.ev} highlight={highlight} fresh={fresh} />
             {rest > 0 && <div className="rest">另有 {rest} 条未在此列出</div>}
           </div>
 
@@ -272,9 +268,7 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
               </div>
             </div>
           )}
-          </>}
-        </div>
-      )}
+      </div>
     </aside>
   )
 }

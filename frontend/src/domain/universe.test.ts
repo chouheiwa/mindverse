@@ -11,6 +11,7 @@ import {
   questionsForStar,
   selectPlanetData,
   UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT,
+  UNIVERSE_PROBE_REFS_PER_STAR_LIMIT,
 } from './universe'
 
 const evidence = { t: 'private evidence', u: 'https://example.test/private', o: 1, y: '26.08' }
@@ -76,6 +77,15 @@ describe('current universe indexes', () => {
       (_, index) => `question:${index + 1}`,
     )
     expect(() => parseUniverse(changed)).toThrow(/stars\[0\]\.questionIds.*rendering limit/)
+  })
+
+  test('rejects a star probe-reference fanout before resolving references', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    changed.stars![0].probeIds = Array.from(
+      { length: UNIVERSE_PROBE_REFS_PER_STAR_LIMIT + 1 },
+      (_, index) => `article:${index + 1000}`,
+    )
+    expect(() => parseUniverse(changed)).toThrow(/stars\[0\]\.probeIds.*rendering limit/)
   })
 
   test('rejects a million primitive edges before allocating a complete normalized copy', () => {

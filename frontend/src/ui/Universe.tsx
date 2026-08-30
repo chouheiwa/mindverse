@@ -182,8 +182,6 @@ export function UniverseView() {
 
   const onEnterQuestion = useCallback((selected: PlanetDatum) => {
     focusCardFromLaneRef.current = false
-    rendererRef.current?.setWorkspaceOpen(true)
-    rendererRef.current?.suspend()
     setPlanet(null)
     rendererRef.current?.clearPlanet()
     // clearPlanet synchronously emits onPickPlanet(null); write entry last.
@@ -215,8 +213,6 @@ export function UniverseView() {
     if (!selected) return
     focusReturnRef.current = trigger
     focusCardFromLaneRef.current = false
-    rendererRef.current?.setWorkspaceOpen(true)
-    rendererRef.current?.suspend()
     setPlanet(null)
     rendererRef.current?.clearPlanet()
     setQuestionEntry(selected)

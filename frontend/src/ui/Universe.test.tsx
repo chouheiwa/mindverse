@@ -120,6 +120,7 @@ describe('Universe question keyboard integration', () => {
     await user.click(screen.getByRole('button', { name: '返回问题航道' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
+    expect(testState.suspendCalls).toBe(testState.resumeCalls)
     expect(trigger).toHaveFocus()
   })
 

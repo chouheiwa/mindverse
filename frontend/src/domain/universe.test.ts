@@ -1,7 +1,7 @@
 // @vitest-environment node
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import type { CurrentUniverse, LegacyUniverse, WireSolo } from '../types'
 import {
   indexUniverse,
@@ -19,8 +19,8 @@ const fixture = {
   meta: { items: 2, concepts: 2, clusters: 1, own: 2, fav: 0, span: [1, 2], medz: 0, p10z: 0, source: 'test', splits: 0 },
   clusters: [{ g: 0, name: 'Cluster', lead: 'Alpha', c: [0, 0, 0], n: 2, o: 2, f: 0, hue: 218, sat: 0, mem: ['Alpha', 'Beta'] }],
   stars: [
-    { id: 'star:v1:private:alpha', scope: 'private', externalQueryAllowed: false, questionIds: ['question:7'], probeIds: ['article:21'], c: 'Alpha', g: 0, p: [0, 0, 0], n: 1, o: 1, f: 0, hue: 218, sat: 0, pe: 1, bu: 0, fi: '2026.01', la: '2026.02', ev: [evidence] },
-    { id: 'star:v1:private:beta', scope: 'private', externalQueryAllowed: false, questionIds: ['question:7'], probeIds: ['article:21', 'article:22'], c: 'Beta', g: 0, p: [1, 1, 1], n: 1, o: 1, f: 0, hue: 218, sat: 0, pe: 1, bu: 0, fi: '2026.01', la: '2026.02', ev: [evidence] },
+    { id: 'star:v1:private:8ed3f6ad685b959e', scope: 'private', externalQueryAllowed: false, questionIds: ['question:7'], probeIds: ['article:21'], c: 'Alpha', g: 0, p: [0, 0, 0], n: 1, o: 1, f: 0, hue: 218, sat: 0, pe: 1, bu: 0, fi: '2026.01', la: '2026.02', ev: [evidence] },
+    { id: 'star:v1:private:f44e64e75f3948e9', scope: 'private', externalQueryAllowed: false, questionIds: ['question:7'], probeIds: ['article:21', 'article:22'], c: 'Beta', g: 0, p: [1, 1, 1], n: 1, o: 1, f: 0, hue: 218, sat: 0, pe: 1, bu: 0, fi: '2026.01', la: '2026.02', ev: [evidence] },
   ],
   particles: [[0, 0, 0, 0, 1]],
   wormholes: [], solo: [], dark: [], nebula: [],
@@ -33,6 +33,8 @@ const fixture = {
 } satisfies CurrentUniverse
 
 const clone = <T>(value: T): T => structuredClone(value)
+const expectKeys = (value: object, keys: readonly string[]) =>
+  expect(Object.keys(value).sort()).toEqual([...keys].sort())
 
 describe('current universe indexes', () => {
   test('two stars resolve one global question to the same object identity', () => {
@@ -55,7 +57,7 @@ describe('current universe indexes', () => {
   test('index owns deeply frozen data and exposes no mutable Map surface', () => {
     const input = clone(fixture)
     const index = indexUniverse(input)
-    const star = index.starsById.get('star:v1:private:alpha')!
+    const star = index.starsById.get('star:v1:private:8ed3f6ad685b959e')!
     const selected = questionsForStar(index, star)
 
     input.questions[0].title = 'caller mutation'
@@ -69,6 +71,27 @@ describe('current universe indexes', () => {
     expect(questionsForStar(index, star)[0]).toBe(selected[0])
     expect(index.questionsById.has('question:999')).toBe(false)
   })
+
+  test('freezes the index shell and shares one frozen empty selector result', () => {
+    const index = indexUniverse(fixture)
+    const emptyQuestions = questionsForStar(index, { ...fixture.stars[0], questionIds: [] })
+    const emptyProbes = probesForStar(index, { ...fixture.stars[0], probeIds: [] })
+    expect(Object.isFrozen(index)).toBe(true)
+    expect(emptyQuestions).toBe(emptyProbes)
+    expect(Object.isFrozen(emptyQuestions)).toBe(true)
+    expect(() => (emptyQuestions as unknown[]).push({})).toThrow(TypeError)
+    expect(() => { (index as { universe: unknown }).universe = null }).toThrow(TypeError)
+    expect(index.universe.meta.items).toBe(2)
+  })
+
+  test('does not reparse or reclone a validated wire before indexing', () => {
+    const cloneSpy = vi.spyOn(globalThis, 'structuredClone')
+    const parsed = parseUniverse(fixture)
+    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    indexUniverse(parsed)
+    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    cloneSpy.mockRestore()
+  })
 })
 
 describe('compatibility and validation', () => {
@@ -80,8 +103,96 @@ describe('compatibility and validation', () => {
     const index = indexUniverse(legacy as LegacyUniverse)
     expect(index.questionsById.size).toBe(0)
     expect(index.probesById.size).toBe(0)
-    expect(questionsForStar(index, legacy.stars![0])).toEqual([])
-    expect(probesForStar(index, legacy.stars![0])).toEqual([])
+    const questions = questionsForStar(index, legacy.stars![0])
+    const probes = probesForStar(index, legacy.stars![0])
+    expect(questions).toBe(probes)
+    expect(Object.isFrozen(questions)).toBe(true)
+  })
+
+  test('legacy rejects stars carrying current-only markers after versions and entities are stripped', () => {
+    const current = clone(fixture) as Record<string, unknown>
+    delete current.schemaVersion
+    delete current.analysisVersion
+    delete current.questions
+    delete current.answers
+    delete current.probes
+    expect(() => parseUniverse(current)).toThrow(/stars/)
+  })
+
+  test.each([
+    ['root', (u: Record<string, unknown>) => { u.extra = true }],
+    ['meta', (u: Record<string, unknown>) => {
+      Object.defineProperty(u.meta as object, 'constructor', { value: 'pollute', enumerable: true })
+    }],
+    ['star', (u: Record<string, unknown>) => { ((u.stars as Record<string, unknown>[])[0]).questionID = 'renamed' }],
+    ['evidence', (u: Record<string, unknown>) => {
+      const ev = (((u.stars as Record<string, unknown>[])[0]).ev as Record<string, unknown>[])[0]
+      Object.defineProperty(ev, '__proto__', { value: 'pollute', enumerable: true })
+    }],
+    ['cluster', (u: Record<string, unknown>) => { ((u.clusters as Record<string, unknown>[])[0]).extra = true }],
+    ['question', (u: Record<string, unknown>) => { ((u.questions as Record<string, unknown>[])[0]).titel = 'renamed' }],
+    ['answer', (u: Record<string, unknown>) => { ((u.answers as Record<string, unknown>[])[0]).extra = true }],
+    ['binding', (u: Record<string, unknown>) => { (((u.answers as Record<string, unknown>[])[0]).bindings as Record<string, unknown>[])[0].extra = true }],
+    ['probe', (u: Record<string, unknown>) => { ((u.probes as Record<string, unknown>[])[0]).extra = true }],
+    ['wormhole', (u: Record<string, unknown>) => {
+      u.wormholes = [{ a: 0, b: 1, an: 'A', bn: 'B', obs: 1, exp: 1.5, z: -2, ev: [], extra: true }]
+    }],
+    ['wormhole evidence', (u: Record<string, unknown>) => {
+      u.wormholes = [{ a: 0, b: 1, an: 'A', bn: 'B', obs: 1, exp: 1.5, z: -2, ev: [{ t: 'T', u: 'https://example.test', a: 'A', b: 'B', extra: true }] }]
+    }],
+    ['solo', (u: Record<string, unknown>) => {
+      u.solo = [{ c: 'C', n: 1, t: 'T', u: 'https://example.test', g: [], p: [0, 0, 0], extra: true }]
+    }],
+    ['dark', (u: Record<string, unknown>) => {
+      u.dark = [{ c: 'C', n: 1, f: 0, o: 1, gap: 1, first: 'A', last: 'B', ev: [], extra: true }]
+    }],
+    ['nebula', (u: Record<string, unknown>) => {
+      u.nebula = [{ c: 'C', n: 1, burst: 0.5, first: 'A', last: 'B', extra: true }]
+    }],
+  ])('rejects unknown keys on %s objects', (_name, mutate) => {
+    const changed = clone(fixture) as unknown as Record<string, unknown>
+    mutate(changed)
+    expect(() => parseUniverse(changed)).toThrow(/unknown key/)
+  })
+
+  test('rejects missing required nested keys', () => {
+    const changed = clone(fixture) as unknown as Record<string, unknown>
+    delete ((changed.questions as Record<string, unknown>[])[0]).title
+    expect(() => parseUniverse(changed)).toThrow(/missing required key title/)
+  })
+
+  test('rejects accessors because they are not JSON data properties', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    Object.defineProperty(changed.meta, 'items', { get: () => 2, enumerable: true })
+    expect(() => parseUniverse(changed)).toThrow(/JSON data property/)
+  })
+
+  test.each([
+    ['fractional meta int', (u: CurrentUniverse) => { u.meta.items = 1.5 }],
+    ['fractional star int', (u: CurrentUniverse) => { u.stars![0].n = 1.5 }],
+    ['fractional evidence int', (u: CurrentUniverse) => { u.stars![0].ev![0].o = 0.5 }],
+    ['fractional cluster int', (u: CurrentUniverse) => { u.clusters![0].g = 0.5 }],
+    ['fractional timestamp', (u: CurrentUniverse) => { u.answers![0].publishedAt = 1.5 }],
+    ['fractional binding time', (u: CurrentUniverse) => { u.answers![0].bindings![0].at = 1.5 }],
+    ['malformed author ID', (u: CurrentUniverse) => { u.answers![0].authorId = 'author:alice/evil' }],
+    ['negative public count', (u: CurrentUniverse) => { u.probes![0].likeCount = -1 }],
+    ['wrong stable star hash', (u: CurrentUniverse) => { u.stars![0].id = 'star:v1:private:0000000000000000' }],
+  ])('matches Go validation for %s', (_name, mutate) => {
+    const changed = clone(fixture) as CurrentUniverse
+    mutate(changed)
+    expect(() => parseUniverse(changed)).toThrow()
+  })
+
+  test('stable IDs use Go whitespace normalization and ASCII-only lowercase', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    changed.stars![0].c = ' \tAlPHA\n '
+    expect(() => parseUniverse(changed)).not.toThrow()
+  })
+
+  test('caps collection sizes before walking attacker-controlled input', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    changed.questions = Array.from({ length: 10_001 }, () => changed.questions![0])
+    expect(() => parseUniverse(changed)).toThrow(/limit/)
   })
 
   test('wire parsing preserves nullable legacy slices and omitted current star references', () => {
@@ -173,5 +284,20 @@ test('the Go golden contract parses every public field and remains JSON-compatib
   expect(new Set(parsed.answers!.flatMap((answer) => answer.discoverySources ?? []))).toEqual(new Set(['favorite_list', 'own_content', 'public_search']))
   expect(parsed.wormholes).toBeNull()
   expect(parsed.stars![1].ev).toBeNull()
+  expectKeys(parsed, ['schemaVersion', 'analysisVersion', 'meta', 'clusters', 'stars', 'particles', 'wormholes', 'solo', 'dark', 'nebula', 'questions', 'answers', 'probes'])
+  expectKeys(parsed.meta, ['items', 'concepts', 'clusters', 'own', 'fav', 'span', 'medz', 'p10z', 'source', 'splits'])
+  expectKeys(parsed.clusters![0], ['g', 'name', 'lead', 'c', 'n', 'o', 'f', 'hue', 'sat', 'mem'])
+  expectKeys(parsed.stars![0], ['id', 'scope', 'externalQueryAllowed', 'questionIds', 'probeIds', 'c', 'g', 'p', 'n', 'o', 'f', 'hue', 'sat', 'pe', 'bu', 'fi', 'la', 'ev'])
+  expectKeys(parsed.stars![0].ev![0], ['t', 'u', 'o', 'y'])
+  expectKeys(parsed.questions![0], ['id', 'questionId', 'title', 'url', 'answerIds'])
+  expectKeys(parsed.answers![0], ['id', 'questionId', 'title', 'summary', 'url', 'authorId', 'authorName', 'publishedAt', 'updatedAt', 'observedAt', 'likeCount', 'commentCount', 'favoriteCount', 'bindings', 'discoverySources'])
+  expectKeys(parsed.answers![0].bindings![0], ['relation', 'at', 'folders'])
+  expectKeys(parsed.probes![0], ['id', 'title', 'summary', 'url', 'authorId', 'authorName', 'publishedAt', 'updatedAt', 'observedAt', 'likeCount', 'commentCount', 'favoriteCount', 'bindings', 'discoverySources'])
+  expect(typeof parsed.meta.items).toBe('number')
+  expect(Number.isSafeInteger(parsed.answers![0].publishedAt)).toBe(true)
   expect(JSON.parse(JSON.stringify(parsed))).toEqual(raw)
+
+  const withUnknown = structuredClone(raw) as Record<string, unknown>
+  withUnknown.unknown = true
+  expect(() => parseUniverse(withUnknown)).toThrow(/unknown key/)
 })

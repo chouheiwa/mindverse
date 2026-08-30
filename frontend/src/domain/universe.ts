@@ -1,3 +1,5 @@
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import type {
   AnswerSatellite, ArticleProbe, Cluster, CurrentStar, Dark, DiscoverySource,
   Evidence, LegacyStar, Meta, Nebula, NormalizedCurrentUniverse,
@@ -7,6 +9,12 @@ import type {
 } from '../types'
 
 type ObjectValue = Record<string, unknown>
+
+/** Above realistic personal-corpus sizes; rejects hostile payloads before traversal. */
+export const UNIVERSE_COLLECTION_LIMIT = 10_000
+const validatedWires = new WeakSet<object>()
+const normalizedByWire = new WeakMap<object, Universe>()
+const EMPTY_RESULT: readonly never[] = Object.freeze([])
 
 export interface UniverseIndex {
   readonly universe: Universe
@@ -22,18 +30,47 @@ const fail = (path: string, message: string): never => {
 const object = (value: unknown, path: string): ObjectValue =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as ObjectValue : fail(path, 'expected object')
+const shape = (
+  value: unknown,
+  path: string,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): ObjectValue => {
+  const item = object(value, path)
+  const allowed = new Set([...required, ...optional])
+  for (const key of Reflect.ownKeys(item)) {
+    const stringKey = typeof key === 'string' ? key : fail(path, 'unknown key ' + String(key))
+    if (!allowed.has(stringKey)) fail(path, 'unknown key ' + stringKey)
+    const descriptor = Object.getOwnPropertyDescriptor(item, stringKey)
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      fail(path + '.' + stringKey, 'expected JSON data property')
+    }
+    if (item[stringKey] === undefined) fail(path + '.' + stringKey, 'undefined is not JSON')
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(item, key)) fail(path, 'missing required key ' + key)
+  }
+  return item
+}
 const text = (value: unknown, path: string): string =>
   typeof value === 'string' ? value : fail(path, 'expected string')
 const numeric = (value: unknown, path: string): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fail(path, 'expected finite number')
+const integer = (value: unknown, path: string): number => {
+  const parsed = numeric(value, path)
+  return Number.isSafeInteger(parsed) ? parsed : fail(path, 'expected safe integer')
+}
 const flag = (value: unknown, path: string): boolean =>
   typeof value === 'boolean' ? value : fail(path, 'expected boolean')
-const list = (value: unknown, path: string): unknown[] =>
-  value === null ? [] : Array.isArray(value) ? value : fail(path, 'expected array or null')
+const list = (value: unknown, path: string): unknown[] => {
+  const parsed = value === null ? [] : Array.isArray(value) ? value : fail(path, 'expected array or null')
+  if (parsed.length > UNIVERSE_COLLECTION_LIMIT) fail(path, 'collection limit exceeded')
+  return parsed
+}
 const optionalText = (value: unknown, path: string): string | undefined =>
   value === undefined ? undefined : text(value, path)
-const optionalNumber = (value: unknown, path: string): number | undefined =>
-  value === undefined ? undefined : numeric(value, path)
+const optionalInteger = (value: unknown, path: string): number | undefined =>
+  value === undefined ? undefined : integer(value, path)
 const textList = (value: unknown, path: string): string[] =>
   list(value, path).map((entry, index) => text(entry, path + '[' + index + ']'))
 const optionalTextList = (value: unknown, path: string): string[] =>
@@ -44,106 +81,134 @@ const numbers = (value: unknown, size: number, path: string): number[] => {
   return result
 }
 
-function parseEvidence(value: unknown, path: string): Evidence {
-  const item = object(value, path)
-  return { t: text(item.t, path + '.t'), u: text(item.u, path + '.u'), o: numeric(item.o, path + '.o'), y: text(item.y, path + '.y') }
+const integers = (value: unknown, size: number, path: string): number[] => {
+  const result = list(value, path).map((entry, index) => integer(entry, path + '[' + index + ']'))
+  if (result.length !== size) fail(path, 'expected ' + size + ' integers')
+  return result
 }
 
-function parseLegacyStar(value: unknown, path: string): LegacyStar {
-  const item = object(value, path)
+const normalizeConcept = (concept: string): string =>
+  concept.split(/\p{White_Space}+/u).filter(Boolean).join(' ').replace(/[A-Z]/g, (char) => char.toLowerCase())
+
+const stableStarID = (scope: 'private' | 'public', concept: string, path: string): string => {
+  const normalized = normalizeConcept(concept)
+  if (!normalized) fail(path, 'empty normalized concept')
+  const digest = bytesToHex(sha256(new TextEncoder().encode(normalized))).slice(0, 16)
+  return 'star:v1:' + scope + ':' + digest
+}
+
+function parseEvidence(value: unknown, path: string): Evidence {
+  const item = shape(value, path, ['t', 'u', 'o', 'y'])
+  return { t: text(item.t, path + '.t'), u: text(item.u, path + '.u'), o: integer(item.o, path + '.o'), y: text(item.y, path + '.y') }
+}
+
+const starKeys = ['c', 'g', 'p', 'n', 'o', 'f', 'hue', 'sat', 'pe', 'bu', 'fi', 'la', 'ev'] as const
+
+function parseStarBase(item: ObjectValue, path: string): LegacyStar {
   return {
-    c: text(item.c, path + '.c'), g: numeric(item.g, path + '.g'),
+    c: text(item.c, path + '.c'), g: integer(item.g, path + '.g'),
     p: numbers(item.p, 3, path + '.p') as [number, number, number],
-    n: numeric(item.n, path + '.n'), o: numeric(item.o, path + '.o'), f: numeric(item.f, path + '.f'),
-    hue: numeric(item.hue, path + '.hue'), sat: numeric(item.sat, path + '.sat'),
+    n: integer(item.n, path + '.n'), o: integer(item.o, path + '.o'), f: integer(item.f, path + '.f'),
+    hue: integer(item.hue, path + '.hue'), sat: integer(item.sat, path + '.sat'),
     pe: numeric(item.pe, path + '.pe'), bu: numeric(item.bu, path + '.bu'),
     fi: text(item.fi, path + '.fi'), la: text(item.la, path + '.la'),
     ev: list(item.ev, path + '.ev').map((entry, index) => parseEvidence(entry, path + '.ev[' + index + ']')),
   }
 }
 
+function parseLegacyStar(value: unknown, path: string): LegacyStar {
+  return parseStarBase(shape(value, path, starKeys), path)
+}
+
 function parseCurrentStar(value: unknown, path: string): CurrentStar {
-  const item = object(value, path)
+  const item = shape(
+    value,
+    path,
+    [...starKeys, 'id', 'scope', 'externalQueryAllowed'],
+    ['questionIds', 'probeIds'],
+  )
   const rawScope = text(item.scope, path + '.scope')
   if (rawScope !== 'private' && rawScope !== 'public') fail(path + '.scope', 'unsupported scope ' + rawScope)
   const scope = rawScope as 'private' | 'public'
   const externalQueryAllowed = flag(item.externalQueryAllowed, path + '.externalQueryAllowed')
   if (scope === 'private' && externalQueryAllowed) fail(path, 'private star cannot allow external queries')
   const id = text(item.id, path + '.id')
-  if (!id) fail(path + '.id', 'must not be empty')
+  const base = parseStarBase(item, path)
+  const expectedID = stableStarID(scope, base.c, path + '.c')
+  if (id !== expectedID) fail(path + '.id', 'stable ID does not match scope and concept')
   return {
-    ...parseLegacyStar(value, path), id, scope, externalQueryAllowed,
+    ...base, id, scope, externalQueryAllowed,
     questionIds: optionalTextList(item.questionIds, path + '.questionIds'),
     probeIds: optionalTextList(item.probeIds, path + '.probeIds'),
   }
 }
 
 function parseMeta(value: unknown, path: string): Meta {
-  const item = object(value, path)
+  const item = shape(value, path, ['items', 'concepts', 'clusters', 'own', 'fav', 'span', 'medz', 'p10z', 'source', 'splits'])
   return {
-    items: numeric(item.items, path + '.items'), concepts: numeric(item.concepts, path + '.concepts'),
-    clusters: numeric(item.clusters, path + '.clusters'), own: numeric(item.own, path + '.own'),
-    fav: numeric(item.fav, path + '.fav'), span: numbers(item.span, 2, path + '.span') as [number, number],
+    items: integer(item.items, path + '.items'), concepts: integer(item.concepts, path + '.concepts'),
+    clusters: integer(item.clusters, path + '.clusters'), own: integer(item.own, path + '.own'),
+    fav: integer(item.fav, path + '.fav'), span: integers(item.span, 2, path + '.span') as [number, number],
     medz: numeric(item.medz, path + '.medz'), p10z: numeric(item.p10z, path + '.p10z'),
-    source: text(item.source, path + '.source'), splits: numeric(item.splits, path + '.splits'),
+    source: text(item.source, path + '.source'), splits: integer(item.splits, path + '.splits'),
   }
 }
 
 function parseCluster(value: unknown, path: string): Cluster {
-  const item = object(value, path)
+  const item = shape(value, path, ['g', 'name', 'lead', 'c', 'n', 'o', 'f', 'hue', 'sat', 'mem'])
   return {
-    g: numeric(item.g, path + '.g'), name: text(item.name, path + '.name'), lead: text(item.lead, path + '.lead'),
+    g: integer(item.g, path + '.g'), name: text(item.name, path + '.name'), lead: text(item.lead, path + '.lead'),
     c: numbers(item.c, 3, path + '.c') as [number, number, number],
-    n: numeric(item.n, path + '.n'), o: numeric(item.o, path + '.o'), f: numeric(item.f, path + '.f'),
-    hue: numeric(item.hue, path + '.hue'), sat: numeric(item.sat, path + '.sat'),
+    n: integer(item.n, path + '.n'), o: integer(item.o, path + '.o'), f: integer(item.f, path + '.f'),
+    hue: integer(item.hue, path + '.hue'), sat: integer(item.sat, path + '.sat'),
     mem: textList(item.mem, path + '.mem'),
   }
 }
 
 function parseWormhole(value: unknown, path: string): Wormhole {
-  const item = object(value, path)
+  const item = shape(value, path, ['a', 'b', 'an', 'bn', 'obs', 'exp', 'z', 'ev'])
   return {
-    a: numeric(item.a, path + '.a'), b: numeric(item.b, path + '.b'),
+    a: integer(item.a, path + '.a'), b: integer(item.b, path + '.b'),
     an: text(item.an, path + '.an'), bn: text(item.bn, path + '.bn'),
-    obs: numeric(item.obs, path + '.obs'), exp: numeric(item.exp, path + '.exp'), z: numeric(item.z, path + '.z'),
+    obs: integer(item.obs, path + '.obs'), exp: numeric(item.exp, path + '.exp'), z: numeric(item.z, path + '.z'),
     ev: list(item.ev, path + '.ev').map((entry, index) => {
       const evPath = path + '.ev[' + index + ']'
-      const ev = object(entry, evPath)
+      const ev = shape(entry, evPath, ['t', 'u', 'a', 'b'])
       return { t: text(ev.t, evPath + '.t'), u: text(ev.u, evPath + '.u'), a: text(ev.a, evPath + '.a'), b: text(ev.b, evPath + '.b') }
     }),
   }
 }
 
 function parseSolo(value: unknown, path: string): Solo {
-  const item = object(value, path)
-  return { c: text(item.c, path + '.c'), n: numeric(item.n, path + '.n'), t: text(item.t, path + '.t'), u: text(item.u, path + '.u'), g: textList(item.g, path + '.g'), p: numbers(item.p, 3, path + '.p') as [number, number, number] }
+  const item = shape(value, path, ['c', 'n', 't', 'u', 'g', 'p'])
+  return { c: text(item.c, path + '.c'), n: integer(item.n, path + '.n'), t: text(item.t, path + '.t'), u: text(item.u, path + '.u'), g: textList(item.g, path + '.g'), p: numbers(item.p, 3, path + '.p') as [number, number, number] }
 }
 function parseDark(value: unknown, path: string): Dark {
-  const item = object(value, path)
+  const item = shape(value, path, ['c', 'n', 'f', 'o', 'gap', 'first', 'last', 'ev'])
   return {
-    c: text(item.c, path + '.c'), n: numeric(item.n, path + '.n'), f: numeric(item.f, path + '.f'),
-    o: numeric(item.o, path + '.o'), gap: numeric(item.gap, path + '.gap'),
+    c: text(item.c, path + '.c'), n: integer(item.n, path + '.n'), f: integer(item.f, path + '.f'),
+    o: integer(item.o, path + '.o'), gap: integer(item.gap, path + '.gap'),
     first: text(item.first, path + '.first'), last: text(item.last, path + '.last'),
     ev: list(item.ev, path + '.ev').map((entry, index) => parseEvidence(entry, path + '.ev[' + index + ']')),
   }
 }
 function parseNebula(value: unknown, path: string): Nebula {
-  const item = object(value, path)
-  return { c: text(item.c, path + '.c'), n: numeric(item.n, path + '.n'), burst: numeric(item.burst, path + '.burst'), first: text(item.first, path + '.first'), last: text(item.last, path + '.last') }
+  const item = shape(value, path, ['c', 'n', 'burst', 'first', 'last'])
+  return { c: text(item.c, path + '.c'), n: integer(item.n, path + '.n'), burst: numeric(item.burst, path + '.burst'), first: text(item.first, path + '.first'), last: text(item.last, path + '.last') }
 }
 
 const relations: readonly UserContentRelation[] = ['created', 'collected']
 const discoveries: readonly DiscoverySource[] = ['public_search', 'favorite_list', 'own_content']
 
 function parseBinding(value: unknown, path: string): UserContentBinding {
-  const item = object(value, path)
+  const item = shape(value, path, ['relation'], ['at', 'folders'])
   const relation = text(item.relation, path + '.relation')
   if (!relations.includes(relation as UserContentRelation)) fail(path + '.relation', 'unsupported relation ' + relation)
   const result: UserContentBinding = {
     relation: relation as UserContentRelation,
     folders: optionalTextList(item.folders, path + '.folders'),
   }
-  const at = optionalNumber(item.at, path + '.at')
+  const at = optionalInteger(item.at, path + '.at')
   if (at !== undefined) {
     if (at < 0) fail(path + '.at', 'must not be negative')
     result.at = at
@@ -152,7 +217,7 @@ function parseBinding(value: unknown, path: string): UserContentBinding {
 }
 
 function parseQuestion(value: unknown, path: string): QuestionPlanet {
-  const item = object(value, path)
+  const item = shape(value, path, ['id', 'questionId', 'title', 'url'], ['answerIds'])
   return {
     id: text(item.id, path + '.id'), questionId: text(item.questionId, path + '.questionId'),
     title: text(item.title, path + '.title'), url: text(item.url, path + '.url'),
@@ -160,8 +225,19 @@ function parseQuestion(value: unknown, path: string): QuestionPlanet {
   }
 }
 
-function parseArtifact(value: unknown, path: string): ArticleProbe {
-  const item = object(value, path)
+const artifactRequired = ['id', 'title', 'url'] as const
+const artifactOptional = [
+  'summary', 'authorId', 'authorName', 'publishedAt', 'updatedAt', 'observedAt',
+  'likeCount', 'commentCount', 'favoriteCount', 'bindings', 'discoverySources',
+] as const
+
+function parseArtifact(value: unknown, path: string, isAnswer = false): ArticleProbe {
+  const item = shape(
+    value,
+    path,
+    isAnswer ? [...artifactRequired, 'questionId'] : artifactRequired,
+    artifactOptional,
+  )
   const result: ArticleProbe = {
     id: text(item.id, path + '.id'),
     title: text(item.title, path + '.title'),
@@ -178,18 +254,21 @@ function parseArtifact(value: unknown, path: string): ArticleProbe {
     if (parsed !== undefined) result[key] = parsed
   }
   for (const key of ['publishedAt', 'updatedAt', 'observedAt', 'likeCount', 'commentCount', 'favoriteCount'] as const) {
-    const parsed = optionalNumber(item[key], path + '.' + key)
+    const parsed = optionalInteger(item[key], path + '.' + key)
     if (parsed !== undefined) {
       if (parsed < 0) fail(path + '.' + key, 'must not be negative')
       result[key] = parsed
     }
+  }
+  if (result.authorId !== undefined && result.authorId !== '' && !/^author:[A-Za-z0-9_-]+$/.test(result.authorId)) {
+    fail(path + '.authorId', 'invalid verified author ID')
   }
   return result
 }
 
 function parseAnswer(value: unknown, path: string): AnswerSatellite {
   const item = object(value, path)
-  return { ...parseArtifact(value, path), questionId: text(item.questionId, path + '.questionId') }
+  return { ...parseArtifact(value, path, true), questionId: text(item.questionId, path + '.questionId') }
 }
 
 function parseCore<S extends Star>(root: ObjectValue, starParser: (value: unknown, path: string) => S) {
@@ -270,22 +349,30 @@ function normalizedCurrent(root: ObjectValue): NormalizedCurrentUniverse {
 }
 
 export function parseUniverse(value: unknown): WireUniverse {
-  const root = object(value, 'universe')
-  const hasSchema = root.schemaVersion !== undefined
-  const hasAnalysis = root.analysisVersion !== undefined
+  const candidate = object(value, 'universe')
+  const hasSchema = Object.hasOwn(candidate, 'schemaVersion')
+  const hasAnalysis = Object.hasOwn(candidate, 'analysisVersion')
   if (!hasSchema && !hasAnalysis) {
-    if (root.questions !== undefined || root.answers !== undefined || root.probes !== undefined) {
-      fail('universe', 'legacy universe cannot contain current entities')
-    }
-    parseCore(root, parseLegacyStar)
-    return structuredClone(value) as WireUniverse
+    const root = shape(candidate, 'universe', ['meta', 'clusters', 'stars', 'particles', 'wormholes', 'solo', 'dark', 'nebula'])
+    const normalized = deepFreeze(parseCore(root, parseLegacyStar) as NormalizedLegacyUniverse)
+    const cloned = deepFreeze(structuredClone(value) as WireUniverse)
+    validatedWires.add(cloned as object)
+    normalizedByWire.set(cloned as object, normalized)
+    return cloned
   }
+  const root = shape(candidate, 'universe', [
+    'schemaVersion', 'analysisVersion', 'meta', 'clusters', 'stars', 'particles',
+    'wormholes', 'solo', 'dark', 'nebula', 'questions', 'answers', 'probes',
+  ])
   if (root.schemaVersion !== 'universe.v1' || root.analysisVersion !== 'engine.v1') {
     fail('universe', 'unsupported versions ' + String(root.schemaVersion) + '/' + String(root.analysisVersion))
   }
   const universe = normalizedCurrent(root)
   validateCurrent(universe)
-  return structuredClone(value) as WireUniverse
+  const cloned = deepFreeze(structuredClone(value) as WireUniverse)
+  validatedWires.add(cloned as object)
+  normalizedByWire.set(cloned as object, deepFreeze(universe))
+  return cloned
 }
 
 function deepFreeze<T>(value: T): T {
@@ -318,34 +405,37 @@ class ReadonlyMapFacade<K, V> implements ReadonlyMap<K, V> {
 const readonlyMap = <K, V>(source: Map<K, V>): ReadonlyMap<K, V> => new ReadonlyMapFacade(source)
 
 export function indexUniverse(input: WireUniverse | Universe): UniverseIndex {
-  const wire = parseUniverse(input)
+  const wire = typeof input === 'object' && input !== null && validatedWires.has(input as object)
+    ? input as WireUniverse
+    : parseUniverse(input)
+  const normalized = normalizedByWire.get(wire as object) ?? fail('universe', 'validated normalization unavailable')
   if (wire.schemaVersion !== 'universe.v1') {
-    const normalized = deepFreeze(parseCore(object(wire, 'universe'), parseLegacyStar) as NormalizedLegacyUniverse)
-    return {
+    return Object.freeze({
       universe: normalized,
       starsById: readonlyMap(new Map()),
       questionsById: readonlyMap(new Map()),
       answersById: readonlyMap(new Map()),
       probesById: readonlyMap(new Map()),
-    }
+    })
   }
-  const normalized = deepFreeze(normalizedCurrent(object(wire, 'universe')))
-  return {
-    universe: normalized,
-    starsById: readonlyMap(uniqueMap(normalized.stars, 'stars')),
-    questionsById: readonlyMap(uniqueMap(normalized.questions, 'questions')),
-    answersById: readonlyMap(uniqueMap(normalized.answers, 'answers')),
-    probesById: readonlyMap(uniqueMap(normalized.probes, 'probes')),
-  }
+  if (normalized.schemaVersion !== 'universe.v1') fail('universe', 'normalization version mismatch')
+  const current = normalized as NormalizedCurrentUniverse
+  return Object.freeze({
+    universe: current,
+    starsById: readonlyMap(uniqueMap(current.stars, 'stars')),
+    questionsById: readonlyMap(uniqueMap(current.questions, 'questions')),
+    answersById: readonlyMap(uniqueMap(current.answers, 'answers')),
+    probesById: readonlyMap(uniqueMap(current.probes, 'probes')),
+  })
 }
 
 export function questionsForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly QuestionPlanet[] {
-  if (!('questionIds' in star)) return []
-  return Object.freeze((star.questionIds ?? []).map((id) => index.questionsById.get(id)).filter((item): item is QuestionPlanet => item !== undefined))
+  if (!('questionIds' in star) || !star.questionIds?.length) return EMPTY_RESULT
+  return Object.freeze(star.questionIds.map((id) => index.questionsById.get(id)).filter((item): item is QuestionPlanet => item !== undefined))
 }
 export function probesForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly ArticleProbe[] {
-  if (!('probeIds' in star)) return []
-  return Object.freeze((star.probeIds ?? []).map((id) => index.probesById.get(id)).filter((item): item is ArticleProbe => item !== undefined))
+  if (!('probeIds' in star) || !star.probeIds?.length) return EMPTY_RESULT
+  return Object.freeze(star.probeIds.map((id) => index.probesById.get(id)).filter((item): item is ArticleProbe => item !== undefined))
 }
 export function publicStarsForShare(index: UniverseIndex): readonly CurrentStar[] {
   return Object.freeze([...index.starsById.values()]

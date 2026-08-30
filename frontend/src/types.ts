@@ -129,7 +129,7 @@ export interface NormalizedLegacyUniverse extends UniverseCore<LegacyStar> {
 export type Universe = NormalizedCurrentUniverse | NormalizedLegacyUniverse
 export type GenState = 'idle' | 'running' | 'done' | 'failed'
 export interface Generation {
-  state: GenState; stage: string; progress: number; error?: string; universe?: WireUniverse
+  state: GenState; stage: string; progress: number; error?: string; universe?: Universe
   filtered: number; source: string; calls: number
 }
 export interface OAuthStatus {

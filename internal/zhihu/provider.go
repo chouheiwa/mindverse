@@ -392,7 +392,7 @@ func (m *merger) result() []Item {
 	out := make([]Item, 0, len(m.order))
 	for _, key := range m.order {
 		it := m.byKey[key]
-		if it.Title == "" {
+		if !it.Identity.Resolved && it.URL == "" && strings.TrimSpace(it.Title) == "" && strings.TrimSpace(it.Summary) == "" {
 			continue
 		}
 		for i := range it.Bindings {

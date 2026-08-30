@@ -209,6 +209,26 @@ func TestMergerResultDeepCopiesNestedSlices(t *testing.T) {
 	}
 }
 
+func TestMergerRetainsStableEmptyTitleAsUnadmittedEvidence(t *testing.T) {
+	m := newMerger()
+	m.addContents([]ContentItem{{
+		ContentType: TypeAnswer,
+		ContentID:   "456",
+		URL:         "https://www.zhihu.com/question/123/answer/456",
+	}})
+	got := m.result()
+	if len(got) != 1 {
+		t.Fatalf("有稳定内容身份但缺标题的记录应作为证据保留，实际 %d 条", len(got))
+	}
+	identity := got[0].Identity
+	if !identity.Resolved || identity.ContentID != "answer:456" {
+		t.Fatalf("应保留稳定内容身份：%+v", identity)
+	}
+	if identity.Admitted || identity.QuestionID != "" || identity.QuestionURL != "" {
+		t.Fatalf("缺标题时不得准入问题行星：%+v", identity)
+	}
+}
+
 func TestLiveProviderUsesSingleInjectedObservationTime(t *testing.T) {
 	const observed = int64(1800000000)
 	var clockCalls int

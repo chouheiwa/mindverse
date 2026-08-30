@@ -13,6 +13,13 @@ export interface CurrentStar extends LegacyStar {
   probeIds: string[]
 }
 export type Star = LegacyStar | CurrentStar
+export type NullableSlice<T> = T[] | null
+export type WireLegacyStar = Omit<LegacyStar, 'ev'> & { ev: NullableSlice<Evidence> }
+export type WireCurrentStar = Omit<CurrentStar, 'ev' | 'questionIds' | 'probeIds'> & {
+  ev: NullableSlice<Evidence>
+  questionIds?: NullableSlice<string>
+  probeIds?: NullableSlice<string>
+}
 export interface Cluster {
   g: number; name: string; lead: string; c: [number, number, number]
   n: number; o: number; f: number; hue: number; sat: number; mem: string[]
@@ -36,11 +43,11 @@ export type UserContentRelation = 'created' | 'collected'
 export interface UserContentBinding {
   relation: UserContentRelation
   at?: number
-  folders?: string[]
+  folders: string[]
 }
 export type DiscoverySource = 'public_search' | 'favorite_list' | 'own_content'
 export interface QuestionPlanet {
-  id: string; questionId: string; title: string; url: string; answerIds?: string[]
+  id: string; questionId: string; title: string; url: string; answerIds: string[]
 }
 export interface PublicArtifact {
   id: string
@@ -55,11 +62,23 @@ export interface PublicArtifact {
   likeCount?: number
   commentCount?: number
   favoriteCount?: number
-  bindings?: UserContentBinding[]
-  discoverySources?: DiscoverySource[]
+  bindings: UserContentBinding[]
+  discoverySources: DiscoverySource[]
 }
 export interface AnswerSatellite extends PublicArtifact { questionId: string }
 export type ArticleProbe = PublicArtifact
+export type WireUserContentBinding = Omit<UserContentBinding, 'folders'> & {
+  folders?: NullableSlice<string>
+}
+export type WireQuestionPlanet = Omit<QuestionPlanet, 'answerIds'> & {
+  answerIds?: NullableSlice<string>
+}
+export type WirePublicArtifact = Omit<PublicArtifact, 'bindings' | 'discoverySources'> & {
+  bindings?: NullableSlice<WireUserContentBinding>
+  discoverySources?: NullableSlice<DiscoverySource>
+}
+export type WireAnswerSatellite = WirePublicArtifact & { questionId: string }
+export type WireArticleProbe = WirePublicArtifact
 interface UniverseCore<S extends Star> {
   meta: Meta
   clusters: Cluster[]
@@ -70,24 +89,46 @@ interface UniverseCore<S extends Star> {
   dark: Dark[]
   nebula: Nebula[]
 }
-export interface CurrentUniverse extends UniverseCore<CurrentStar> {
+interface WireUniverseCore<S extends WireLegacyStar> {
+  meta: Meta
+  clusters: NullableSlice<Omit<Cluster, 'mem'> & { mem: NullableSlice<string> }>
+  stars: NullableSlice<S>
+  particles: NullableSlice<[number, number, number, number, number]>
+  wormholes: NullableSlice<Omit<Wormhole, 'ev'> & { ev: NullableSlice<WormholeEvidence> }>
+  solo: NullableSlice<Solo>
+  dark: NullableSlice<Omit<Dark, 'ev'> & { ev: NullableSlice<Evidence> }>
+  nebula: NullableSlice<Nebula>
+}
+export interface CurrentUniverse extends WireUniverseCore<WireCurrentStar> {
   schemaVersion: 'universe.v1'
   analysisVersion: 'engine.v1'
-  questions: QuestionPlanet[]
-  answers: AnswerSatellite[]
-  probes: ArticleProbe[]
+  questions: NullableSlice<WireQuestionPlanet>
+  answers: NullableSlice<WireAnswerSatellite>
+  probes: NullableSlice<WireArticleProbe>
 }
-export interface LegacyUniverse extends UniverseCore<LegacyStar> {
+export interface LegacyUniverse extends WireUniverseCore<WireLegacyStar> {
   schemaVersion?: never
   analysisVersion?: never
   questions?: never
   answers?: never
   probes?: never
 }
-export type Universe = CurrentUniverse | LegacyUniverse
+export type WireUniverse = CurrentUniverse | LegacyUniverse
+export interface NormalizedCurrentUniverse extends UniverseCore<CurrentStar> {
+  schemaVersion: 'universe.v1'
+  analysisVersion: 'engine.v1'
+  questions: QuestionPlanet[]
+  answers: AnswerSatellite[]
+  probes: ArticleProbe[]
+}
+export interface NormalizedLegacyUniverse extends UniverseCore<LegacyStar> {
+  schemaVersion?: never
+  analysisVersion?: never
+}
+export type Universe = NormalizedCurrentUniverse | NormalizedLegacyUniverse
 export type GenState = 'idle' | 'running' | 'done' | 'failed'
 export interface Generation {
-  state: GenState; stage: string; progress: number; error?: string; universe?: Universe
+  state: GenState; stage: string; progress: number; error?: string; universe?: WireUniverse
   filtered: number; source: string; calls: number
 }
 export interface OAuthStatus {

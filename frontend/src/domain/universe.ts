@@ -1,7 +1,9 @@
 import type {
-  AnswerSatellite, ArticleProbe, Cluster, CurrentStar, CurrentUniverse, Dark,
-  DiscoverySource, Evidence, LegacyStar, LegacyUniverse, Meta, Nebula,
-  QuestionPlanet, Solo, Star, Universe, UserContentBinding, UserContentRelation, Wormhole,
+  AnswerSatellite, ArticleProbe, Cluster, CurrentStar, Dark, DiscoverySource,
+  Evidence, LegacyStar, Meta, Nebula, NormalizedCurrentUniverse,
+  NormalizedLegacyUniverse, QuestionPlanet, Solo, Star, Universe,
+  UserContentBinding, UserContentRelation, WireCurrentStar, WireLegacyStar,
+  WireUniverse, Wormhole,
 } from '../types'
 
 type ObjectValue = Record<string, unknown>
@@ -137,29 +139,40 @@ function parseBinding(value: unknown, path: string): UserContentBinding {
   const item = object(value, path)
   const relation = text(item.relation, path + '.relation')
   if (!relations.includes(relation as UserContentRelation)) fail(path + '.relation', 'unsupported relation ' + relation)
-  const result: UserContentBinding = { relation: relation as UserContentRelation }
+  const result: UserContentBinding = {
+    relation: relation as UserContentRelation,
+    folders: optionalTextList(item.folders, path + '.folders'),
+  }
   const at = optionalNumber(item.at, path + '.at')
   if (at !== undefined) {
     if (at < 0) fail(path + '.at', 'must not be negative')
     result.at = at
   }
-  if (item.folders !== undefined) result.folders = textList(item.folders, path + '.folders')
   return result
 }
 
 function parseQuestion(value: unknown, path: string): QuestionPlanet {
   const item = object(value, path)
-  const result: QuestionPlanet = {
+  return {
     id: text(item.id, path + '.id'), questionId: text(item.questionId, path + '.questionId'),
     title: text(item.title, path + '.title'), url: text(item.url, path + '.url'),
+    answerIds: optionalTextList(item.answerIds, path + '.answerIds'),
   }
-  if (item.answerIds !== undefined) result.answerIds = textList(item.answerIds, path + '.answerIds')
-  return result
 }
 
 function parseArtifact(value: unknown, path: string): ArticleProbe {
   const item = object(value, path)
-  const result: ArticleProbe = { id: text(item.id, path + '.id'), title: text(item.title, path + '.title'), url: text(item.url, path + '.url') }
+  const result: ArticleProbe = {
+    id: text(item.id, path + '.id'),
+    title: text(item.title, path + '.title'),
+    url: text(item.url, path + '.url'),
+    bindings: (item.bindings === undefined ? [] : list(item.bindings, path + '.bindings'))
+      .map((entry, index) => parseBinding(entry, path + '.bindings[' + index + ']')),
+    discoverySources: textList(item.discoverySources, path + '.discoverySources').map((source, index) => {
+      if (!discoveries.includes(source as DiscoverySource)) fail(path + '.discoverySources[' + index + ']', 'unsupported source ' + source)
+      return source as DiscoverySource
+    }),
+  }
   for (const key of ['summary', 'authorId', 'authorName'] as const) {
     const parsed = optionalText(item[key], path + '.' + key)
     if (parsed !== undefined) result[key] = parsed
@@ -170,13 +183,6 @@ function parseArtifact(value: unknown, path: string): ArticleProbe {
       if (parsed < 0) fail(path + '.' + key, 'must not be negative')
       result[key] = parsed
     }
-  }
-  if (item.bindings !== undefined) result.bindings = list(item.bindings, path + '.bindings').map((entry, index) => parseBinding(entry, path + '.bindings[' + index + ']'))
-  if (item.discoverySources !== undefined) {
-    result.discoverySources = textList(item.discoverySources, path + '.discoverySources').map((source, index) => {
-      if (!discoveries.includes(source as DiscoverySource)) fail(path + '.discoverySources[' + index + ']', 'unsupported source ' + source)
-      return source as DiscoverySource
-    })
   }
   return result
 }
@@ -215,7 +221,7 @@ function validateRefs(ids: readonly string[], available: ReadonlyMap<string, unk
   })
 }
 
-function validateCurrent(universe: CurrentUniverse): void {
+function validateCurrent(universe: NormalizedCurrentUniverse): void {
   uniqueMap(universe.stars, 'stars')
   const questions = uniqueMap(universe.questions, 'questions')
   const answers = uniqueMap(universe.answers, 'answers')
@@ -253,7 +259,17 @@ function validateCurrent(universe: CurrentUniverse): void {
   })
 }
 
-export function parseUniverse(value: unknown): Universe {
+function normalizedCurrent(root: ObjectValue): NormalizedCurrentUniverse {
+  return {
+    schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
+    ...parseCore(root, parseCurrentStar),
+    questions: list(root.questions, 'questions').map((entry, index) => parseQuestion(entry, 'questions[' + index + ']')),
+    answers: list(root.answers, 'answers').map((entry, index) => parseAnswer(entry, 'answers[' + index + ']')),
+    probes: list(root.probes, 'probes').map((entry, index) => parseArtifact(entry, 'probes[' + index + ']')),
+  }
+}
+
+export function parseUniverse(value: unknown): WireUniverse {
   const root = object(value, 'universe')
   const hasSchema = root.schemaVersion !== undefined
   const hasAnalysis = root.analysisVersion !== undefined
@@ -261,45 +277,78 @@ export function parseUniverse(value: unknown): Universe {
     if (root.questions !== undefined || root.answers !== undefined || root.probes !== undefined) {
       fail('universe', 'legacy universe cannot contain current entities')
     }
-    return parseCore(root, parseLegacyStar) as LegacyUniverse
+    parseCore(root, parseLegacyStar)
+    return structuredClone(value) as WireUniverse
   }
   if (root.schemaVersion !== 'universe.v1' || root.analysisVersion !== 'engine.v1') {
     fail('universe', 'unsupported versions ' + String(root.schemaVersion) + '/' + String(root.analysisVersion))
   }
-  const universe: CurrentUniverse = {
-    schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
-    ...parseCore(root, parseCurrentStar),
-    questions: list(root.questions, 'questions').map((entry, index) => parseQuestion(entry, 'questions[' + index + ']')),
-    answers: list(root.answers, 'answers').map((entry, index) => parseAnswer(entry, 'answers[' + index + ']')),
-    probes: list(root.probes, 'probes').map((entry, index) => parseArtifact(entry, 'probes[' + index + ']')),
-  }
+  const universe = normalizedCurrent(root)
   validateCurrent(universe)
-  return universe
+  return structuredClone(value) as WireUniverse
 }
 
-export function indexUniverse(universe: Universe): UniverseIndex {
-  if (universe.schemaVersion !== 'universe.v1') {
-    return { universe, starsById: new Map(), questionsById: new Map(), answersById: new Map(), probesById: new Map() }
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value
+  for (const child of Object.values(value)) deepFreeze(child)
+  return Object.freeze(value)
+}
+
+class ReadonlyMapFacade<K, V> implements ReadonlyMap<K, V> {
+  readonly #source: Map<K, V>
+
+  constructor(source: Map<K, V>) {
+    this.#source = source
+    Object.freeze(this)
   }
+
+  get size(): number { return this.#source.size }
+  get [Symbol.toStringTag](): string { return 'ReadonlyMap' }
+  has(key: K): boolean { return this.#source.has(key) }
+  get(key: K): V | undefined { return this.#source.get(key) }
+  entries(): MapIterator<[K, V]> { return this.#source.entries() }
+  keys(): MapIterator<K> { return this.#source.keys() }
+  values(): MapIterator<V> { return this.#source.values() }
+  [Symbol.iterator](): MapIterator<[K, V]> { return this.#source[Symbol.iterator]() }
+  forEach(callbackfn: (value: V, key: K, map: ReadonlyMap<K, V>) => void, thisArg?: unknown): void {
+    this.#source.forEach((value, key) => callbackfn.call(thisArg, value, key, this))
+  }
+}
+
+const readonlyMap = <K, V>(source: Map<K, V>): ReadonlyMap<K, V> => new ReadonlyMapFacade(source)
+
+export function indexUniverse(input: WireUniverse | Universe): UniverseIndex {
+  const wire = parseUniverse(input)
+  if (wire.schemaVersion !== 'universe.v1') {
+    const normalized = deepFreeze(parseCore(object(wire, 'universe'), parseLegacyStar) as NormalizedLegacyUniverse)
+    return {
+      universe: normalized,
+      starsById: readonlyMap(new Map()),
+      questionsById: readonlyMap(new Map()),
+      answersById: readonlyMap(new Map()),
+      probesById: readonlyMap(new Map()),
+    }
+  }
+  const normalized = deepFreeze(normalizedCurrent(object(wire, 'universe')))
   return {
-    universe,
-    starsById: uniqueMap(universe.stars, 'stars'),
-    questionsById: uniqueMap(universe.questions, 'questions'),
-    answersById: uniqueMap(universe.answers, 'answers'),
-    probesById: uniqueMap(universe.probes, 'probes'),
+    universe: normalized,
+    starsById: readonlyMap(uniqueMap(normalized.stars, 'stars')),
+    questionsById: readonlyMap(uniqueMap(normalized.questions, 'questions')),
+    answersById: readonlyMap(uniqueMap(normalized.answers, 'answers')),
+    probesById: readonlyMap(uniqueMap(normalized.probes, 'probes')),
   }
 }
 
-export function questionsForStar(index: UniverseIndex, star: Star): QuestionPlanet[] {
+export function questionsForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly QuestionPlanet[] {
   if (!('questionIds' in star)) return []
-  return star.questionIds.map((id) => index.questionsById.get(id)).filter((item): item is QuestionPlanet => item !== undefined)
+  return Object.freeze((star.questionIds ?? []).map((id) => index.questionsById.get(id)).filter((item): item is QuestionPlanet => item !== undefined))
 }
-export function probesForStar(index: UniverseIndex, star: Star): ArticleProbe[] {
+export function probesForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly ArticleProbe[] {
   if (!('probeIds' in star)) return []
-  return star.probeIds.map((id) => index.probesById.get(id)).filter((item): item is ArticleProbe => item !== undefined)
+  return Object.freeze((star.probeIds ?? []).map((id) => index.probesById.get(id)).filter((item): item is ArticleProbe => item !== undefined))
 }
-export function publicStarsForShare(index: UniverseIndex): CurrentStar[] {
-  return [...index.starsById.values()]
+export function publicStarsForShare(index: UniverseIndex): readonly CurrentStar[] {
+  return Object.freeze([...index.starsById.values()]
     .filter((star) => star.scope === 'public' && star.externalQueryAllowed)
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => left.id.localeCompare(right.id)))
 }

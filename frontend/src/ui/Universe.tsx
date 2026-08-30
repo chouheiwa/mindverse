@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone, shareIdFromPath } from '../api'
+import { indexUniverse } from '../domain/universe'
 import { Renderer } from '../starmap/Renderer'
 import { Loading } from './Loading'
 import { Panel } from './Panel'
@@ -55,7 +56,7 @@ export function UniverseView() {
           return
         }
         const g = await pollUntilDone((p) => setGen({ stage: p.stage, progress: p.progress }), ac.signal)
-        setUniverse(g.universe!)
+        setUniverse(indexUniverse(g.universe!).universe)
         setFiltered(g.filtered)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))

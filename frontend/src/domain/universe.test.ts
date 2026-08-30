@@ -13,7 +13,7 @@ import {
 
 const evidence = { t: 'private evidence', u: 'https://example.test/private', o: 1, y: '26.08' }
 
-const fixture: CurrentUniverse = {
+const fixture = {
   schemaVersion: 'universe.v1',
   analysisVersion: 'engine.v1',
   meta: { items: 2, concepts: 2, clusters: 1, own: 2, fav: 0, span: [1, 2], medz: 0, p10z: 0, source: 'test', splits: 0 },
@@ -30,7 +30,7 @@ const fixture: CurrentUniverse = {
     { id: 'article:21', title: 'Probe 21', summary: 'Summary', url: 'https://zhuanlan.zhihu.com/p/21', authorId: 'author:alice', authorName: 'Alice', publishedAt: 1, updatedAt: 2, observedAt: 3, likeCount: 4, commentCount: 5, favoriteCount: 6, bindings: [{ relation: 'collected', at: 2, folders: ['Reading'] }], discoverySources: ['favorite_list'] },
     { id: 'article:22', title: 'Probe 22', summary: '', url: 'https://zhuanlan.zhihu.com/p/22', authorId: '', authorName: '', publishedAt: 0, updatedAt: 0, observedAt: 0, likeCount: 0, commentCount: 0, favoriteCount: 0, bindings: [], discoverySources: ['public_search'] },
   ],
-}
+} satisfies CurrentUniverse
 
 const clone = <T>(value: T): T => structuredClone(value)
 
@@ -43,13 +43,31 @@ describe('current universe indexes', () => {
   test('probes resolve uniquely in deterministic reference order', () => {
     const parsed = parseUniverse(clone(fixture))
     if (parsed.schemaVersion !== 'universe.v1') throw new Error('expected current universe')
-    expect(probesForStar(indexUniverse(parsed), parsed.stars[1]).map((probe) => probe.id)).toEqual(['article:21', 'article:22'])
+    expect(probesForStar(indexUniverse(parsed), parsed.stars![1]).map((probe) => probe.id)).toEqual(['article:21', 'article:22'])
   })
 
   test('private stars stay in the personal index but never enter share selectors', () => {
     const index = indexUniverse(fixture)
     expect([...index.starsById.values()]).toEqual(fixture.stars)
     expect(publicStarsForShare(index)).toEqual([])
+  })
+
+  test('index owns deeply frozen data and exposes no mutable Map surface', () => {
+    const input = clone(fixture)
+    const index = indexUniverse(input)
+    const star = index.starsById.get('star:v1:private:alpha')!
+    const selected = questionsForStar(index, star)
+
+    input.questions[0].title = 'caller mutation'
+    input.stars[0].questionIds[0] = 'question:999'
+    expect(() => (index.questionsById as Map<string, unknown>).set('question:999', {})).toThrow(TypeError)
+    expect(() => { (selected[0] as { title: string }).title = 'selected mutation' }).toThrow(TypeError)
+    expect(() => { star.questionIds.push('question:999') }).toThrow(TypeError)
+
+    expect(Object.isFrozen(selected)).toBe(true)
+    expect(index.questionsById.get('question:7')?.title).toBe('Question')
+    expect(questionsForStar(index, star)[0]).toBe(selected[0])
+    expect(index.questionsById.has('question:999')).toBe(false)
   })
 })
 
@@ -62,17 +80,42 @@ describe('compatibility and validation', () => {
     const index = indexUniverse(legacy as LegacyUniverse)
     expect(index.questionsById.size).toBe(0)
     expect(index.probesById.size).toBe(0)
-    expect(questionsForStar(index, legacy.stars[0])).toEqual([])
-    expect(probesForStar(index, legacy.stars[0])).toEqual([])
+    expect(questionsForStar(index, legacy.stars![0])).toEqual([])
+    expect(probesForStar(index, legacy.stars![0])).toEqual([])
+  })
+
+  test('wire parsing preserves nullable legacy slices and omitted current star references', () => {
+    const legacy = parseUniverse({
+      meta: fixture.meta,
+      clusters: null,
+      stars: null,
+      particles: null,
+      wormholes: null,
+      solo: null,
+      dark: null,
+      nebula: null,
+    })
+    expect(legacy.clusters).toBeNull()
+    expect(legacy.stars).toBeNull()
+
+    const current = clone(fixture) as CurrentUniverse
+    delete current.stars![0].questionIds
+    delete current.stars![0].probeIds
+    current.wormholes = null
+    const parsed = parseUniverse(current)
+    if (parsed.schemaVersion !== 'universe.v1') throw new Error('expected current universe')
+    expect(parsed.wormholes).toBeNull()
+    expect('questionIds' in parsed.stars![0]).toBe(false)
+    expect('probeIds' in parsed.stars![0]).toBe(false)
   })
 
   test.each([
-    ['duplicate question', (u: CurrentUniverse) => { u.questions.push(clone(u.questions[0])) }],
-    ['missing question reference', (u: CurrentUniverse) => { u.stars[0].questionIds = ['question:999'] }],
-    ['duplicate probe reference', (u: CurrentUniverse) => { u.stars[0].probeIds = ['article:21', 'article:21'] }],
+    ['duplicate question', (u: CurrentUniverse) => { u.questions!.push(clone(u.questions![0])) }],
+    ['missing question reference', (u: CurrentUniverse) => { u.stars![0].questionIds = ['question:999'] }],
+    ['duplicate probe reference', (u: CurrentUniverse) => { u.stars![0].probeIds = ['article:21', 'article:21'] }],
     ['unsupported schema', (u: CurrentUniverse) => { (u as { schemaVersion: string }).schemaVersion = 'universe.v2' }],
-    ['unsupported relation', (u: CurrentUniverse) => { (u.answers[0].bindings![0] as { relation: string }).relation = 'followed' }],
-    ['unsupported discovery source', (u: CurrentUniverse) => { (u.probes[0].discoverySources as string[])[0] = 'scraped' }],
+    ['unsupported relation', (u: CurrentUniverse) => { (u.answers![0].bindings![0] as { relation: string }).relation = 'followed' }],
+    ['unsupported discovery source', (u: CurrentUniverse) => { (u.probes![0].discoverySources as string[])[0] = 'scraped' }],
   ])('rejects %s', (_name, mutate) => {
     const changed = clone(fixture)
     mutate(changed)
@@ -86,17 +129,10 @@ test('the Go golden contract parses every public field and remains JSON-compatib
   const parsed = parseUniverse(raw)
   if (parsed.schemaVersion !== 'universe.v1') throw new Error('expected current golden universe')
 
-  expect(new Set(parsed.stars.map((star) => star.scope))).toEqual(new Set(['private', 'public']))
-  expect(new Set(parsed.answers.flatMap((answer) => (answer.bindings ?? []).map((binding) => binding.relation)))).toEqual(new Set(['created', 'collected']))
-  expect(new Set(parsed.answers.flatMap((answer) => answer.discoverySources ?? []))).toEqual(new Set(['favorite_list', 'own_content', 'public_search']))
-  expect(parsed.questions[0]).toMatchObject({ id: 'question:7', questionId: '7', title: 'Question', url: expect.any(String), answerIds: ['answer:8'] })
-  expect(parsed.answers[0]).toMatchObject({ id: 'answer:8', questionId: 'question:7', title: 'Question', summary: 'Answer summary', url: expect.any(String), authorId: 'author:alice', authorName: 'Alice', publishedAt: 100, updatedAt: 120, observedAt: 140, likeCount: 1, commentCount: 2, favoriteCount: 3, bindings: expect.any(Array), discoverySources: expect.any(Array) })
-  expect(parsed.probes[0]).toMatchObject({ id: 'article:21', title: 'Article', summary: 'Article summary', url: expect.any(String), authorId: 'author:bob', authorName: 'Bob', publishedAt: 200, updatedAt: 220, observedAt: 240, likeCount: 4, commentCount: 5, favoriteCount: 6, bindings: expect.any(Array), discoverySources: expect.any(Array) })
-  const goldenEntities = raw as { questions: unknown; answers: unknown; probes: unknown }
-  expect({ questions: parsed.questions, answers: parsed.answers, probes: parsed.probes }).toEqual({
-    questions: goldenEntities.questions,
-    answers: goldenEntities.answers,
-    probes: goldenEntities.probes,
-  })
-  expect(JSON.parse(JSON.stringify(parsed))).toMatchObject({ schemaVersion: 'universe.v1', analysisVersion: 'engine.v1' })
+  expect(new Set(parsed.stars!.map((star) => star.scope))).toEqual(new Set(['private', 'public']))
+  expect(new Set(parsed.answers!.flatMap((answer) => (answer.bindings ?? []).map((binding) => binding.relation)))).toEqual(new Set(['created', 'collected']))
+  expect(new Set(parsed.answers!.flatMap((answer) => answer.discoverySources ?? []))).toEqual(new Set(['favorite_list', 'own_content', 'public_search']))
+  expect(parsed.wormholes).toBeNull()
+  expect(parsed.stars![1].ev).toBeNull()
+  expect(JSON.parse(JSON.stringify(parsed))).toEqual(raw)
 })

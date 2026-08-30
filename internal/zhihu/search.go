@@ -78,6 +78,7 @@ func (s SearchItem) ToItem(folder string, clocks ...func() time.Time) Item {
 		ConceptHints:     hints,
 		Author:           s.AuthorName,
 		LikeCount:        int64(s.VoteUpCount),
+		CommentCount:     int64(s.CommentCount),
 	}
 }
 

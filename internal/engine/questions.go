@@ -90,10 +90,27 @@ func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]
 	questions := map[string]*QuestionPlanet{}
 	answers := map[string]*AnswerSatellite{}
 	probes := map[string]*ArticleProbe{}
+	answerQuestion := map[string]string{}
+	conflictedAnswers := map[string]bool{}
+	for i := range in.Items {
+		answerID, questionID, _, ok := parseAdmittedAnswer(in.Items[i])
+		if !ok {
+			continue
+		}
+		questionRef := "question:" + questionID
+		if previous, exists := answerQuestion[answerID]; exists && previous != questionRef {
+			conflictedAnswers[answerID] = true
+		} else {
+			answerQuestion[answerID] = questionRef
+		}
+	}
 
 	for i := range in.Items {
 		item := in.Items[i]
 		if answerID, questionID, questionURL, ok := parseAdmittedAnswer(item); ok {
+			if conflictedAnswers[answerID] {
+				continue
+			}
 			questionRef := "question:" + questionID
 			q := questions[questionRef]
 			if q == nil {
@@ -131,7 +148,7 @@ func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]
 	for i := range stars {
 		for _, itemIndex := range itemsByStarID[stars[i].ID] {
 			item := in.Items[itemIndex]
-			if _, questionID, _, ok := parseAdmittedAnswer(item); ok {
+			if answerID, questionID, _, ok := parseAdmittedAnswer(item); ok && !conflictedAnswers[answerID] {
 				stars[i].QuestionIDs = appendUnique(stars[i].QuestionIDs, "question:"+questionID)
 			} else if questionID, _, ok := parseAdmittedQuestion(item); ok {
 				stars[i].QuestionIDs = appendUnique(stars[i].QuestionIDs, "question:"+questionID)

@@ -213,6 +213,37 @@ func TestAnswerSatellitesAreCompleteAndDeduplicated(t *testing.T) {
 	}
 }
 
+func TestAnswerIdentityConflictAcrossQuestionsIsQuarantined(t *testing.T) {
+	question7 := admittedAnswer("8", "7", "Question seven")
+	question9 := admittedAnswer("8", "9", "Question nine")
+	orders := [][]zhihu.Item{{question7, question9}, {question9, question7}}
+	var want []byte
+	for i, items := range orders {
+		u, err := Run(Input{Items: items, Concepts: [][]string{{"Concept"}, {"Concept"}}}, smallOptions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(u.Answers) != 0 || len(u.Questions) != 0 || len(u.Stars) != 1 || len(u.Stars[0].QuestionIDs) != 0 {
+			t.Fatalf("case %d: conflicting answer escaped quarantine: answers=%+v questions=%+v star=%+v", i, u.Answers, u.Questions, u.Stars)
+		}
+		if len(u.Stars[0].Evidence) != 2 {
+			t.Fatalf("case %d: quarantine discarded private evidence: %+v", i, u.Stars[0].Evidence)
+		}
+		publicJSON, err := json.Marshal(struct {
+			Questions []QuestionPlanet  `json:"questions"`
+			Answers   []AnswerSatellite `json:"answers"`
+		}{u.Questions, u.Answers})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			want = publicJSON
+		} else if !reflect.DeepEqual(publicJSON, want) {
+			t.Fatalf("quarantine depends on input order: %s / %s", want, publicJSON)
+		}
+	}
+}
+
 func TestUnknownAuthorCannotSatisfyAuthorThreshold(t *testing.T) {
 	it := admittedAnswer("8", "7", "Question")
 	it.Author = "Display name only"
@@ -227,6 +258,7 @@ func TestUnknownAuthorCannotSatisfyAuthorThreshold(t *testing.T) {
 
 func TestArticleProbeIsSingleEntity(t *testing.T) {
 	a := admittedArticle("21", "Article")
+	a.CommentCount = 12
 	a.Bindings = []zhihu.UserContentBinding{{Relation: zhihu.RelationCollected, At: 20}}
 	a.DiscoverySources = []zhihu.DiscoverySource{zhihu.DiscoveryFavoriteList}
 	b := a
@@ -236,7 +268,8 @@ func TestArticleProbeIsSingleEntity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(u.Probes) != 1 || u.Probes[0].ID != "article:21" || len(u.Probes[0].Bindings) != 2 || len(u.Probes[0].DiscoverySources) != 2 {
+	if len(u.Probes) != 1 || u.Probes[0].ID != "article:21" || u.Probes[0].CommentCount != 12 ||
+		len(u.Probes[0].Bindings) != 2 || len(u.Probes[0].DiscoverySources) != 2 {
 		t.Fatalf("article was duplicated or relations collapsed: %+v", u.Probes)
 	}
 	for _, star := range u.Stars {

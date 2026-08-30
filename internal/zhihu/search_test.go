@@ -78,7 +78,7 @@ func TestSearchZhihuMapsAuthError(t *testing.T) {
 func TestSearchItemToItem(t *testing.T) {
 	s := SearchItem{
 		Title: "标题", ContentText: "摘要", ContentType: "Article",
-		URL: "https://zhuanlan.zhihu.com/p/1", EditTime: 1700000000, VoteUpCount: 7,
+		URL: "https://zhuanlan.zhihu.com/p/1", EditTime: 1700000000, VoteUpCount: 7, CommentCount: 11,
 	}
 	it := s.ToItem("游戏与博弈", func() time.Time { return time.Unix(1800000000, 0) })
 	if it.Own {
@@ -92,6 +92,9 @@ func TestSearchItemToItem(t *testing.T) {
 	}
 	if len(it.Folders) != 0 {
 		t.Fatal("公共搜索方向不得写入 legacy 收藏夹")
+	}
+	if it.LikeCount != 7 || it.CommentCount != 11 {
+		t.Fatalf("搜索公开计数丢失: like=%d comment=%d", it.LikeCount, it.CommentCount)
 	}
 }
 

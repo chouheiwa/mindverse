@@ -45,7 +45,7 @@ npm --prefix frontend audit --registry=https://registry.npmjs.org --audit-level=
 
 分享默认不选任何内容。用户逐项选择问题后，服务端先返回真正的白名单预览；只有选择未改变且预览摘要仍匹配时才能创建链接。公开视图只包含所选问题及其公开回答字段，不包含私有恒星、个人绑定、收藏/创作区分、采集时间或文章探测器。
 
-分享所有权与服务器签发的高熵会话绑定；未知 cookie 从不会被接受为会话 ID。OAuth 成功时，尚未拥有公开分享的会话会旋转 ID；已拥有 share owner proof 的会话则保持原服务器签发 ID，避免 OAuth 回调响应丢失后用户失去撤销能力。清除会话数据会级联撤销其全部分享。OAuth token 和私人宇宙只存内存，不落盘。`data/snapshots/` 当前是服务端持久化目录：`*.json` 是可撤销的公开分享快照，`.sessions` 只保存「当前确实拥有公开分享」的会话哈希和独立 owner 标识；匿名访问、OAuth 状态、token 和私人 GET 不会写入该索引。升级时如果索引缺失、损坏或版本过旧，服务会一次性隔离无法证明撤销权的旧公开分享，原链接随即返回 404，隔离文件保留 `owner-proof-missing` 原因供审计。这些运行时文件均不应提交；当前 HTTP 链路尚未接入私人认知快照持久化。
+分享所有权与服务器签发的高熵会话绑定；未知 cookie 从不会被接受为会话 ID。OAuth 成功时认证会话始终旋转。如果旧会话拥有公开分享，`owner-registry.v2` 会在安装 token 前原子写入「新 ID = primary、旧 ID = recovery」；旧 cookie 只能撤销原 owner 已有的分享或清理该 owner 的全部分享，不能读取 OAuth 状态、私人宇宙或发起新任务。新 cookie 的首次私有请求会确认 primary 并删除 recovery；如回调响应中断，recovery 保留到分享过期或撤销，但始终不具备认证权限。OAuth token 和私人宇宙只存内存，不落盘。`data/snapshots/` 当前是服务端持久化目录：`*.json` 是可撤销的公开分享快照，`.sessions` 每个实际 share owner 最多保存一个 primary 和一个 recovery 哈希；容量仍按 owner 而非 alias 计数。匿名访问、OAuth 状态、token 和私人 GET 不会写入该索引。升级时如果索引缺失、损坏或版本过旧，服务会一次性隔离无法证明撤销权的旧公开分享，原链接随即返回 404，隔离文件保留 `owner-proof-missing` 原因供审计。这些运行时文件均不应提交；当前 HTTP 链路尚未接入私人认知快照持久化。
 
 ## 文档
 

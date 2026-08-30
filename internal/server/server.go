@@ -72,6 +72,8 @@ type session struct {
 	genDay         string
 	lastSeen       time.Time
 	active         int // guarded by Server.mu; active leases are never evictable
+	revocationOnly bool
+	confirmPrimary bool
 }
 
 type shareStore interface {
@@ -143,6 +145,9 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	private := func(pattern string, handler http.HandlerFunc) {
+		mux.Handle(pattern, noStore(s.csrfGuard(s.withSession(requireFullSession(handler)))))
+	}
+	revocable := func(pattern string, handler http.HandlerFunc) {
 		mux.Handle(pattern, noStore(s.csrfGuard(s.withSession(handler))))
 	}
 	private("GET /api/oauth/status", s.oauthStatus)
@@ -156,8 +161,8 @@ func (s *Server) Routes() http.Handler {
 	private("POST /api/share", s.shareCreate)
 	private("POST /api/share/preview", s.sharePreview)
 	mux.Handle("GET /api/share/{id}", noStore(http.HandlerFunc(s.shareGet)))
-	private("DELETE /api/share/{id}", s.shareDelete)
-	private("DELETE /api/session/data", s.wipe)
+	revocable("DELETE /api/share/{id}", s.shareDelete)
+	revocable("DELETE /api/session/data", s.wipe)
 	// 分享页复用同一张星图，数据由 /api/share/{id} 提供
 	mux.HandleFunc("GET /s/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -169,6 +174,16 @@ func (s *Server) Routes() http.Handler {
 	})
 	mux.Handle("/", http.FileServer(http.Dir(s.cfg.WebDir)))
 	return mux
+}
+
+func requireFullSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sess := fromCtx(r); sess != nil && sess.revocationOnly {
+			writeErr(w, http.StatusForbidden, "该会话仅可撤销此前创建的公开分享")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func noStore(next http.Handler) http.Handler {
@@ -248,13 +263,30 @@ func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*sessio
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
-		owner, issued := s.registry.lookup(c.Value, now)
-		if !ok && validSessionID(c.Value) && issued {
-			if s.ensureSessionCapacityLocked() {
-				sess = &session{id: c.Value, ownerID: owner, lastSeen: now}
-				s.sess[c.Value] = sess
-				ok = true
+		if ok && sess.confirmPrimary {
+			_, confirmErr := s.registry.confirmPrimary(c.Value, now)
+			if confirmErr != nil {
+				s.mu.Unlock()
+				return nil, confirmErr
 			}
+			sess.confirmPrimary = false
+		}
+		owner, role, issued := s.registry.lookupRole(c.Value, now)
+		if !ok && validSessionID(c.Value) && issued && role == registryRecovery {
+			s.mu.Unlock()
+			sess = &session{id: c.Value, ownerID: owner, lastSeen: now, revocationOnly: true}
+			s.setSessionCookie(w, sess.id)
+			return sess, nil
+		}
+		if !ok && validSessionID(c.Value) && issued && role == registryPrimary && s.ensureSessionCapacityLocked() {
+			_, confirmErr := s.registry.confirmPrimary(c.Value, now)
+			if confirmErr != nil {
+				s.mu.Unlock()
+				return nil, confirmErr
+			}
+			sess = &session{id: c.Value, ownerID: owner, lastSeen: now}
+			s.sess[c.Value] = sess
+			ok = true
 		}
 		if ok {
 			sess.active++
@@ -287,6 +319,9 @@ func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*sessio
 }
 
 func (s *Server) releaseSession(sess *session) {
+	if sess.revocationOnly {
+		return
+	}
 	s.mu.Lock()
 	if sess.active > 0 {
 		sess.active--
@@ -419,12 +454,15 @@ func randomToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// installAuthenticatedSession rotates an unpromoted session, closing fixation
-// because unknown client-chosen IDs are never accepted. A promoted session keeps
-// its already server-proven high-entropy ID: its cookie is the durable revocation
-// capability, so changing it cannot be made atomic with delivery of Set-Cookie.
+// installAuthenticatedSession always rotates the authentication bearer. If the
+// old session owns shares, registry rotation first commits a new primary plus an
+// old-ID recovery alias. Only then may credentials enter the new in-memory session.
 // Caller must hold old.opMu.
 func (s *Server) installAuthenticatedSession(w http.ResponseWriter, old *session, tok *zhihu.Token, profile *zhihu.Profile) error {
+	newID, err := randomToken()
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -434,38 +472,38 @@ func (s *Server) installAuthenticatedSession(w http.ResponseWriter, old *session
 	old.mu.Lock()
 	defer old.mu.Unlock()
 	owner := sessionOwner(old)
-	proofOwner, promoted := s.registry.lookup(old.id, now)
-	if promoted {
-		if proofOwner != owner {
-			return errors.New("inconsistent promoted session owner")
-		}
-		old.token, old.profile, old.stateChecked, old.lastSeen = tok, profile, true, now
-		s.setSessionCookie(w, old.id)
-		return nil
+	promoted, registryErr := s.registry.rotateIfPromoted(old.id, newID, owner, now.Add(share.TTL))
+	if registryErr != nil && !promoted {
+		return registryErr
 	}
-	newID, err := randomToken()
-	if err != nil {
-		return err
-	}
+	preservedGen, preservedSeed := old.gen, old.seedCorpus
 	if old.genCancel != nil {
 		old.genCancel()
-		old.genCancel = nil
+		preservedGen = generation{}
+	}
+	nextEpoch := old.epoch + 1
+	scrubOld := func() {
+		delete(s.sess, old.id)
+		old.epoch++
+		old.authOp++
+		old.genCancel, old.authCancel = nil, nil
+		old.token, old.profile, old.seedCorpus = nil, nil, nil
+		old.state, old.stateExpiresAt, old.stateChecked = "", time.Time{}, false
 		old.gen = generation{}
 	}
-	fresh := &session{
-		id: newID, ownerID: owner, epoch: old.epoch + 1,
-		token: tok, profile: profile, stateChecked: true,
-		gen: old.gen, seedCorpus: old.seedCorpus,
-		genToday: old.genToday, genDay: old.genDay, lastSeen: now,
+	if promoted && registryErr != nil {
+		scrubOld()
+		return registryErr
 	}
-	delete(s.sess, old.id)
+	fresh := &session{
+		id: newID, ownerID: owner, epoch: nextEpoch,
+		token: tok, profile: profile, stateChecked: true,
+		gen: preservedGen, seedCorpus: preservedSeed,
+		genToday: old.genToday, genDay: old.genDay, lastSeen: now,
+		confirmPrimary: promoted,
+	}
+	scrubOld()
 	s.sess[newID] = fresh
-	old.epoch++
-	old.authOp++
-	old.authCancel = nil
-	old.token, old.profile, old.seedCorpus = nil, nil, nil
-	old.state, old.stateExpiresAt, old.stateChecked = "", time.Time{}, false
-	old.gen = generation{}
 	s.setSessionCookie(w, newID)
 	return nil
 }
@@ -1066,7 +1104,7 @@ func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
-	if !s.currentSession(sess) {
+	if !sess.revocationOnly && !s.currentSession(sess) {
 		writeErr(w, http.StatusConflict, "会话已旋转")
 		return
 	}
@@ -1085,7 +1123,7 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
-	if !s.currentSession(sess) {
+	if !sess.revocationOnly && !s.currentSession(sess) {
 		writeErr(w, http.StatusConflict, "会话已旋转")
 		return
 	}
@@ -1096,6 +1134,10 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cleanupShareOwner(sess)
+	if sess.revocationOnly {
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
 	sess.mu.Lock()
 	sess.epoch++
 	if sess.genCancel != nil {

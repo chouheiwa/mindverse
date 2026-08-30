@@ -276,6 +276,37 @@ func TestPreOwnerRegistryFormatQuarantines81fbShare(t *testing.T) {
 	}
 }
 
+func TestOwnerRegistryV1IsSafelyMigratedByQuarantiningItsShares(t *testing.T) {
+	dir := t.TempDir()
+	store, err := share.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := randomToken()
+	sessionID, _ := randomToken()
+	view, _ := share.BuildView(serverUniverse(), share.ShareSelection{QuestionIDs: []string{"question:7"}})
+	record, err := store.Create(owner, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := registryEnvelope{Version: "owner-registry.v1", Records: map[string]sessionRecord{
+		sessionHash(sessionID): {Owner: owner, ExpiresAt: time.Now().Add(time.Hour)},
+	}}
+	raw, _ := json.Marshal(old)
+	if err := os.WriteFile(filepath.Join(dir, ".sessions"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := testServer(t, dir)
+	if rr := doRequest(t, s.Routes(), http.MethodGet, "/api/share/"+record.ID, nil, nil); rr.Code != http.StatusNotFound {
+		t.Fatalf("v1 owner proof kept share public: %d", rr.Code)
+	}
+	shareQuarantine, _ := filepath.Glob(filepath.Join(dir, record.ID+".owner-proof-missing*"))
+	registryQuarantine, _ := filepath.Glob(filepath.Join(dir, ".sessions.registry-invalid*"))
+	if len(shareQuarantine) != 1 || len(registryQuarantine) != 1 {
+		t.Fatalf("v1 migration not auditable: share=%v registry=%v", shareQuarantine, registryQuarantine)
+	}
+}
+
 func TestCorruptRegistryStartsFailClosedAndQuarantinesShares(t *testing.T) {
 	dir := t.TempDir()
 	store, err := share.NewStore(dir)
@@ -397,23 +428,55 @@ func TestRegistryCommittedDemotionAndRotationStayAlignedOnDirectorySyncFailure(t
 		if !rotated || !errors.As(err, &uncertain) {
 			t.Fatalf("committed rotation result: rotated=%v err=%v", rotated, err)
 		}
-		if _, oldExists := r.records[sessionHash(oldID)]; oldExists {
-			t.Fatalf("committed rotation retained old ID: %v", r.records)
+		if old, oldExists := r.records[sessionHash(oldID)]; !oldExists || old.Role != registryRecovery {
+			t.Fatalf("committed rotation lost recovery alias: %v", r.records)
 		}
-		if _, newExists := r.records[sessionHash(newID)]; !newExists {
+		if primary, newExists := r.records[sessionHash(newID)]; !newExists || primary.Role != registryPrimary {
 			t.Fatalf("committed rotation missing new ID: %v", r.records)
 		}
 		reloaded, state, reloadErr := loadSessionRegistry(filepath.Dir(r.path), time.Now())
 		if reloadErr != nil || state != registryCurrent {
 			t.Fatalf("committed rotation did not reload: state=%q err=%v", state, reloadErr)
 		}
-		if _, oldExists := reloaded.lookup(oldID, time.Now()); oldExists {
-			t.Fatal("committed rotation restored old ID after reload")
+		if _, role, oldExists := reloaded.lookupRole(oldID, time.Now()); !oldExists || role != registryRecovery {
+			t.Fatal("committed rotation lost recovery alias after reload")
 		}
 		if reloadedOwner, newExists := reloaded.lookup(newID, time.Now()); !newExists || reloadedOwner != owner {
 			t.Fatalf("committed rotation lost new ID after reload: owner=%q exists=%v", reloadedOwner, newExists)
 		}
 	})
+}
+
+func TestRegistryCapacityCountsOwnersAndRotationKeepsOneRecoveryAlias(t *testing.T) {
+	r := newSessionRegistry(t.TempDir())
+	r.maxOwners = 1
+	oldID, _ := randomToken()
+	newID, _ := randomToken()
+	newestID, _ := randomToken()
+	owner, _ := randomToken()
+	otherID, _ := randomToken()
+	otherOwner, _ := randomToken()
+	if err := r.promote(oldID, owner, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if rotated, err := r.rotateIfPromoted(oldID, newID, owner, time.Now().Add(time.Hour)); !rotated || err != nil {
+		t.Fatalf("first rotation: rotated=%v err=%v", rotated, err)
+	}
+	if len(r.records) != 2 {
+		t.Fatalf("primary+recovery records=%d want 2: %v", len(r.records), r.records)
+	}
+	if rotated, err := r.rotateIfPromoted(newID, newestID, owner, time.Now().Add(time.Hour)); !rotated || err != nil {
+		t.Fatalf("second rotation: rotated=%v err=%v", rotated, err)
+	}
+	if len(r.records) != 2 {
+		t.Fatalf("repeated rotation accumulated aliases: %v", r.records)
+	}
+	if _, oldExists := r.lookup(oldID, time.Now()); oldExists {
+		t.Fatal("oldest recovery alias survived repeated rotation")
+	}
+	if err := r.promote(otherID, otherOwner, time.Now().Add(time.Hour)); !errors.Is(err, errSessionCapacity) {
+		t.Fatalf("second owner bypassed owner capacity: %v", err)
+	}
 }
 
 func TestDurabilityUncertainPromotionCannotCreateShareOrLeaveOwnerProof(t *testing.T) {
@@ -449,6 +512,60 @@ func TestDurabilityUncertainPromotionCannotCreateShareOrLeaveOwnerProof(t *testi
 	}
 }
 
+func TestPromotedOAuthRegistryFailureRespectsFilesystemCommitPoint(t *testing.T) {
+	t.Run("before rename keeps old full session", func(t *testing.T) {
+		s := testServer(t, t.TempDir())
+		transport := &countingOAuthTransport{}
+		configureOAuth(s, transport)
+		oldCookie := startSession(t, s)
+		installUniverse(t, s, oldCookie, serverUniverse())
+		_ = createShare(t, s, oldCookie, "question:7")
+		state := beginOAuth(t, s, oldCookie)
+		s.registry.renameFile = func(string, string) error { return errors.New("rename failed") }
+		rr := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("pre-rename callback status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if universe := doRequest(t, s.Routes(), http.MethodGet, "/api/universe", nil, oldCookie); universe.Code != http.StatusOK || !strings.Contains(universe.Body.String(), "question:7") {
+			t.Fatalf("pre-rename failure destroyed old full session: status=%d body=%s", universe.Code, universe.Body.String())
+		}
+	})
+
+	t.Run("after rename exposes old ID only as recovery", func(t *testing.T) {
+		dir := t.TempDir()
+		s := testServer(t, dir)
+		transport := &countingOAuthTransport{}
+		configureOAuth(s, transport)
+		oldCookie := startSession(t, s)
+		installUniverse(t, s, oldCookie, serverUniverse())
+		shareID := createShare(t, s, oldCookie, "question:7")
+		state := beginOAuth(t, s, oldCookie)
+		s.registry.syncDir = func(string) error { return errors.New("dir sync failed") }
+		rr := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("post-rename callback status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		for _, cookie := range rr.Result().Cookies() {
+			if cookie.Name == cookieName && cookie.Value != oldCookie.Value {
+				t.Fatalf("durability-uncertain callback disclosed new primary cookie: %+v", cookie)
+			}
+		}
+		s.mu.Lock()
+		_, oldStillFull := s.sess[oldCookie.Value]
+		s.mu.Unlock()
+		if oldStillFull {
+			t.Fatal("durability-uncertain rotation retained old full session")
+		}
+		restarted := testServer(t, dir)
+		if status := doRequest(t, restarted.Routes(), http.MethodGet, "/api/oauth/status", nil, oldCookie); status.Code != http.StatusForbidden || strings.Contains(status.Body.String(), `"authorized":true`) {
+			t.Fatalf("post-rename recovery exposed auth: status=%d body=%s", status.Code, status.Body.String())
+		}
+		if deleted := doRequest(t, restarted.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, oldCookie); deleted.Code != http.StatusOK {
+			t.Fatalf("post-rename recovery could not revoke after restart: %d %s", deleted.Code, deleted.Body.String())
+		}
+	})
+}
+
 func TestRegistryLoadRepairsFileAndDirectoryPermissions(t *testing.T) {
 	dir := t.TempDir()
 	r := newSessionRegistry(dir)
@@ -482,7 +599,7 @@ func TestProductionSessionCookieIsSecureAndOAuthCompatible(t *testing.T) {
 	}
 }
 
-func TestOAuthPromotedSessionKeepsServerIDSoLostResponseCannotStrandShare(t *testing.T) {
+func TestPromotedOAuthRotatesAndOldBearerIsRevocationOnlyUntilPrimaryConfirmation(t *testing.T) {
 	s := testServer(t, t.TempDir())
 	transport := &countingOAuthTransport{}
 	configureOAuth(s, transport)
@@ -491,34 +608,200 @@ func TestOAuthPromotedSessionKeepsServerIDSoLostResponseCannotStrandShare(t *tes
 	defer func() { http.DefaultTransport = oldDefault }()
 	oldCookie := startSession(t, s)
 	installUniverse(t, s, oldCookie, serverUniverse())
+	firstShareID := createShare(t, s, oldCookie, "question:7")
+	secondShareID := createShare(t, s, oldCookie, "question:7")
+	state := beginOAuth(t, s, oldCookie)
+	rr := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("callback status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var newCookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookieName && c.Value != oldCookie.Value {
+			newCookie = c
+		}
+	}
+	if newCookie == nil {
+		t.Fatalf("promoted OAuth did not rotate bearer: old=%q cookies=%+v", oldCookie.Value, rr.Result().Cookies())
+	}
+	replay := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=second&state="+url.QueryEscape(state), nil, oldCookie)
+	if replay.Code < 400 || transport.exchanges.Load() != 1 {
+		t.Fatalf("consumed state replayed: status=%d exchanges=%d", replay.Code, transport.exchanges.Load())
+	}
+	blocked := []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, "/api/oauth/status", nil},
+		{http.MethodGet, "/api/universe", nil},
+		{http.MethodPost, "/api/universe", nil},
+		{http.MethodGet, "/auth/start", nil},
+		{http.MethodGet, "/auth/callback?authorization_code=stolen&state=stolen", nil},
+		{http.MethodPost, "/auth/logout", nil},
+		{http.MethodGet, "/api/seed/topics", nil},
+		{http.MethodPost, "/api/seed", map[string]any{"picks": []string{"technology"}}},
+		{http.MethodPost, "/api/share/preview", map[string]any{"questionIds": []string{"question:7"}}},
+		{http.MethodPost, "/api/share", map[string]any{"questionIds": []string{"question:7"}, "digest": strings.Repeat("a", 64)}},
+	}
+	for _, tc := range blocked {
+		blockedResponse := doRequest(t, s.Routes(), tc.method, tc.path, tc.body, oldCookie)
+		if blockedResponse.Code != http.StatusForbidden || strings.Contains(blockedResponse.Body.String(), `"authorized":true`) || strings.Contains(blockedResponse.Body.String(), "question:7") {
+			t.Fatalf("recovery bearer accessed %s %s: status=%d body=%s", tc.method, tc.path, blockedResponse.Code, blockedResponse.Body.String())
+		}
+	}
+	if deleted := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/"+firstShareID, nil, oldCookie); deleted.Code != http.StatusOK {
+		t.Fatalf("recovery bearer could not revoke existing share: status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	newStatus := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, newCookie)
+	if !strings.Contains(newStatus.Body.String(), `"authorized":true`) || !strings.Contains(newStatus.Body.String(), `"stateVerified":true`) {
+		t.Fatalf("new primary did not receive verified authorization: %s", newStatus.Body.String())
+	}
+	privateUniverse := doRequest(t, s.Routes(), http.MethodGet, "/api/universe", nil, newCookie)
+	if privateUniverse.Code != http.StatusOK || !strings.Contains(privateUniverse.Body.String(), "question:7") {
+		t.Fatalf("new primary lost private universe: status=%d body=%s", privateUniverse.Code, privateUniverse.Body.String())
+	}
+	if deleted := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/"+secondShareID, nil, oldCookie); deleted.Code != http.StatusNotFound {
+		t.Fatalf("confirmed recovery alias retained revocation: status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if deleted := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/"+secondShareID, nil, newCookie); deleted.Code != http.StatusOK {
+		t.Fatalf("primary could not revoke remaining share: status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if len(s.registry.records) != 0 {
+		t.Fatalf("last share deletion retained primary/recovery proof: %v", s.registry.records)
+	}
+}
+
+func TestRestartedPrimaryConfirmationRemovesRecoveryAlias(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	transport := &countingOAuthTransport{}
+	configureOAuth(s, transport)
+	oldCookie := startSession(t, s)
+	installUniverse(t, s, oldCookie, serverUniverse())
+	shareID := createShare(t, s, oldCookie, "question:7")
+	state := beginOAuth(t, s, oldCookie)
+	callback := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+	var newCookie *http.Cookie
+	for _, cookie := range callback.Result().Cookies() {
+		if cookie.Name == cookieName && cookie.Value != oldCookie.Value {
+			newCookie = cookie
+		}
+	}
+	if newCookie == nil {
+		t.Fatalf("missing rotated primary cookie: %+v", callback.Result().Cookies())
+	}
+	restarted := testServer(t, dir)
+	// Tokens are intentionally memory-only after restart, but this is a full
+	// primary request and therefore confirms delivery and removes recovery.
+	if status := doRequest(t, restarted.Routes(), http.MethodGet, "/api/oauth/status", nil, newCookie); status.Code != http.StatusOK {
+		t.Fatalf("restarted primary was not accepted: %d %s", status.Code, status.Body.String())
+	}
+	if len(restarted.registry.records) != 1 {
+		t.Fatalf("primary confirmation retained recovery: %v", restarted.registry.records)
+	}
+	if deleted := doRequest(t, restarted.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, oldCookie); deleted.Code != http.StatusNotFound {
+		t.Fatalf("confirmed old alias still revoked share: %d %s", deleted.Code, deleted.Body.String())
+	}
+	if deleted := doRequest(t, restarted.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, newCookie); deleted.Code != http.StatusOK {
+		t.Fatalf("restarted primary lost revocation: %d %s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestLostPromotedOAuthResponseLeavesOnlyRestartSafeRevocation(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	transport := &countingOAuthTransport{}
+	configureOAuth(s, transport)
+	oldCookie := startSession(t, s)
+	installUniverse(t, s, oldCookie, serverUniverse())
 	shareID := createShare(t, s, oldCookie, "question:7")
 	state := beginOAuth(t, s, oldCookie)
 	rr := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
 	if rr.Code != http.StatusFound {
 		t.Fatalf("callback status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	var responseCookie *http.Cookie
-	for _, c := range rr.Result().Cookies() {
-		if c.Name == cookieName {
-			responseCookie = c
+	if len(s.registry.records) != 2 {
+		t.Fatalf("rotation did not persist primary+recovery: %v", s.registry.records)
+	}
+	restarted := testServer(t, dir)
+	for _, path := range []string{"/api/oauth/status", "/api/universe"} {
+		blocked := doRequest(t, restarted.Routes(), http.MethodGet, path, nil, oldCookie)
+		if blocked.Code != http.StatusForbidden || strings.Contains(blocked.Body.String(), `"authorized":true`) || strings.Contains(blocked.Body.String(), "question:7") {
+			t.Fatalf("restarted recovery leaked private route %s: status=%d body=%s", path, blocked.Code, blocked.Body.String())
 		}
 	}
-	if responseCookie == nil || responseCookie.Value != oldCookie.Value {
-		t.Fatalf("promoted session ID changed: old=%q response=%+v", oldCookie.Value, responseCookie)
-	}
-	replay := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=second&state="+url.QueryEscape(state), nil, oldCookie)
-	if replay.Code < 400 || transport.exchanges.Load() != 1 {
-		t.Fatalf("consumed state replayed: status=%d exchanges=%d", replay.Code, transport.exchanges.Load())
-	}
-	status := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, oldCookie)
-	if !strings.Contains(status.Body.String(), `"authorized":true`) || !strings.Contains(status.Body.String(), `"stateVerified":true`) {
-		t.Fatalf("promoted session did not receive verified authorization: %s", status.Body.String())
-	}
-
-	// Simulate the redirect/Set-Cookie response being lost followed by a process restart.
-	restarted := testServer(t, s.cfg.SnapshotDir)
 	if deleted := doRequest(t, restarted.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, oldCookie); deleted.Code != http.StatusOK {
 		t.Fatalf("lost callback response stranded share after restart: status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestExpiredLastShareClearsPrimaryAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	transport := &countingOAuthTransport{}
+	configureOAuth(s, transport)
+	oldCookie := startSession(t, s)
+	installUniverse(t, s, oldCookie, serverUniverse())
+	shareID := createShare(t, s, oldCookie, "question:7")
+	state := beginOAuth(t, s, oldCookie)
+	callback := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+	if callback.Code != http.StatusFound || len(s.registry.records) != 2 {
+		t.Fatalf("missing primary/recovery before expiry: status=%d records=%v", callback.Code, s.registry.records)
+	}
+	path := filepath.Join(dir, shareID+".json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record share.Record
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatal(err)
+	}
+	record.CreatedAt = time.Now().Add(-share.TTL)
+	record.ExpiresAt = time.Now().Add(-time.Second)
+	raw, _ = json.Marshal(record)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if expired := doRequest(t, s.Routes(), http.MethodGet, "/api/share/"+shareID, nil, nil); expired.Code != http.StatusNotFound {
+		t.Fatalf("expired share status=%d", expired.Code)
+	}
+	if len(s.registry.records) != 0 {
+		t.Fatalf("expired last share retained owner aliases: %v", s.registry.records)
+	}
+}
+
+func TestRecoveryWipeRevokesSharesWithoutTouchingNewAuthenticatedSession(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	transport := &countingOAuthTransport{}
+	configureOAuth(s, transport)
+	oldCookie := startSession(t, s)
+	installUniverse(t, s, oldCookie, serverUniverse())
+	shareID := createShare(t, s, oldCookie, "question:7")
+	state := beginOAuth(t, s, oldCookie)
+	rr := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+	var newCookie *http.Cookie
+	for _, cookie := range rr.Result().Cookies() {
+		if cookie.Name == cookieName && cookie.Value != oldCookie.Value {
+			newCookie = cookie
+		}
+	}
+	if rr.Code != http.StatusFound || newCookie == nil {
+		t.Fatalf("promoted callback did not rotate: status=%d cookies=%+v", rr.Code, rr.Result().Cookies())
+	}
+	if wiped := doRequest(t, s.Routes(), http.MethodDelete, "/api/session/data", nil, oldCookie); wiped.Code != http.StatusOK {
+		t.Fatalf("recovery cleanup status=%d body=%s", wiped.Code, wiped.Body.String())
+	}
+	if public := doRequest(t, s.Routes(), http.MethodGet, "/api/share/"+shareID, nil, nil); public.Code != http.StatusNotFound {
+		t.Fatalf("recovery cleanup left share public: %d", public.Code)
+	}
+	status := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, newCookie)
+	if !strings.Contains(status.Body.String(), `"authorized":true`) {
+		t.Fatalf("recovery cleanup altered new auth session: %s", status.Body.String())
+	}
+	universe := doRequest(t, s.Routes(), http.MethodGet, "/api/universe", nil, newCookie)
+	if universe.Code != http.StatusOK || !strings.Contains(universe.Body.String(), "question:7") {
+		t.Fatalf("recovery cleanup altered new private universe: %d %s", universe.Code, universe.Body.String())
 	}
 }
 

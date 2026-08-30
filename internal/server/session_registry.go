@@ -15,7 +15,14 @@ import (
 	"github.com/chouheiwa/mindverse/internal/share"
 )
 
-const ownerRegistryVersion = "owner-registry.v1"
+const ownerRegistryVersion = "owner-registry.v2"
+
+type registryRole string
+
+const (
+	registryPrimary  registryRole = "primary"
+	registryRecovery registryRole = "recovery"
+)
 
 var errRegistryDurabilityUncertain = errors.New("registry durability uncertain")
 
@@ -32,8 +39,9 @@ func (e *registryDurabilityError) Unwrap() []error {
 func (e *registryDurabilityError) DurabilityUncertain() bool { return true }
 
 type sessionRecord struct {
-	Owner     string    `json:"owner"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Owner     string       `json:"owner"`
+	Role      registryRole `json:"role"`
+	ExpiresAt time.Time    `json:"expiresAt"`
 }
 
 type registryEnvelope struct {
@@ -54,7 +62,7 @@ const (
 type sessionRegistry struct {
 	path       string
 	records    map[string]sessionRecord
-	maxRecords int
+	maxOwners  int
 	renameFile func(string, string) error
 	syncDir    func(string) error
 	onPersist  func()
@@ -63,7 +71,7 @@ type sessionRegistry struct {
 func newSessionRegistry(dir string) *sessionRegistry {
 	return &sessionRegistry{
 		path: filepath.Join(dir, ".sessions"), records: map[string]sessionRecord{},
-		maxRecords: share.MaxActiveShares, renameFile: os.Rename, syncDir: syncDirectory,
+		maxOwners: share.MaxActiveShares, renameFile: os.Rename, syncDir: syncDirectory,
 	}
 }
 
@@ -91,22 +99,50 @@ func loadSessionRegistry(dir string, now time.Time) (*sessionRegistry, registryL
 			decodeErr = fmt.Errorf("trailing registry JSON")
 		}
 	}
-	if decodeErr != nil || envelope.Version != ownerRegistryVersion || envelope.Records == nil || len(envelope.Records) > r.maxRecords {
+	if decodeErr != nil || envelope.Version != ownerRegistryVersion || envelope.Records == nil || len(envelope.Records) > 2*r.maxOwners {
 		if err := quarantineRegistry(r.path, r.syncDir); err != nil {
 			return nil, registryInvalid, err
 		}
 		return r, registryInvalid, nil
 	}
-	next := map[string]sessionRecord{}
-	changed := false
+	byOwner := map[string]map[registryRole]string{}
+	expiryByOwner := map[string]time.Time{}
+	expiredOwners := map[string]struct{}{}
 	for key, record := range envelope.Records {
-		if !validHash(key) || !validSessionID(record.Owner) || record.ExpiresAt.IsZero() || !record.ExpiresAt.After(now) || record.ExpiresAt.After(now.Add(share.TTL+time.Minute)) {
-			changed = true
+		if !validHash(key) || !validSessionID(record.Owner) || (record.Role != registryPrimary && record.Role != registryRecovery) ||
+			record.ExpiresAt.IsZero() || record.ExpiresAt.After(now.Add(share.TTL+time.Minute)) {
+			return quarantineInvalidRegistry(r)
+		}
+		if byOwner[record.Owner] == nil {
+			byOwner[record.Owner] = map[registryRole]string{}
+			expiryByOwner[record.Owner] = record.ExpiresAt
+		}
+		if _, duplicate := byOwner[record.Owner][record.Role]; duplicate || !record.ExpiresAt.Equal(expiryByOwner[record.Owner]) {
+			return quarantineInvalidRegistry(r)
+		}
+		byOwner[record.Owner][record.Role] = key
+		if !record.ExpiresAt.After(now) {
+			expiredOwners[record.Owner] = struct{}{}
+		}
+	}
+	if len(byOwner) > r.maxOwners {
+		return quarantineInvalidRegistry(r)
+	}
+	for owner, roles := range byOwner {
+		if _, primary := roles[registryPrimary]; !primary || len(roles) > 2 {
+			return quarantineInvalidRegistry(r)
+		}
+		if _, expired := expiredOwners[owner]; expired {
 			continue
 		}
-		next[key] = record
 	}
-	if changed {
+	next := map[string]sessionRecord{}
+	for key, record := range envelope.Records {
+		if _, expired := expiredOwners[record.Owner]; !expired {
+			next[key] = record
+		}
+	}
+	if len(next) != len(envelope.Records) {
 		if err := r.commit(next); err != nil {
 			return r, registryInvalid, err
 		}
@@ -114,6 +150,13 @@ func loadSessionRegistry(dir string, now time.Time) (*sessionRegistry, registryL
 		r.records = next
 	}
 	return r, registryCurrent, nil
+}
+
+func quarantineInvalidRegistry(r *sessionRegistry) (*sessionRegistry, registryLoadState, error) {
+	if err := quarantineRegistry(r.path, r.syncDir); err != nil {
+		return nil, registryInvalid, err
+	}
+	return r, registryInvalid, nil
 }
 
 func sessionHash(id string) string {
@@ -139,32 +182,90 @@ func (r *sessionRegistry) lookup(id string, now time.Time) (string, bool) {
 	return record.Owner, ok && record.Owner != "" && record.ExpiresAt.After(now)
 }
 
+func (r *sessionRegistry) lookupRole(id string, now time.Time) (string, registryRole, bool) {
+	record, ok := r.records[sessionHash(id)]
+	return record.Owner, record.Role, ok && record.Owner != "" && record.ExpiresAt.After(now)
+}
+
+func ownerCount(records map[string]sessionRecord) int {
+	owners := map[string]struct{}{}
+	for _, record := range records {
+		owners[record.Owner] = struct{}{}
+	}
+	return len(owners)
+}
+
+func pruneExpiredOwners(records map[string]sessionRecord, now time.Time) {
+	expired := map[string]struct{}{}
+	for _, record := range records {
+		if !record.ExpiresAt.After(now) {
+			expired[record.Owner] = struct{}{}
+		}
+	}
+	for key, record := range records {
+		if _, remove := expired[record.Owner]; remove {
+			delete(records, key)
+		}
+	}
+}
+
 func (r *sessionRegistry) promote(id, owner string, expiresAt time.Time) error {
 	next := cloneRecords(r.records)
 	now := time.Now()
-	for key, record := range next {
-		if !record.ExpiresAt.After(now) {
-			delete(next, key)
+	pruneExpiredOwners(next, now)
+	key := sessionHash(id)
+	ownerExists := false
+	for recordKey, record := range next {
+		if record.Owner == owner {
+			ownerExists = true
+			if record.Role == registryPrimary && recordKey != key {
+				delete(next, recordKey)
+			}
 		}
 	}
-	key := sessionHash(id)
-	if _, exists := next[key]; !exists && r.maxRecords > 0 && len(next) >= r.maxRecords {
+	if !ownerExists && r.maxOwners > 0 && ownerCount(next) >= r.maxOwners {
 		return errSessionCapacity
 	}
-	next[key] = sessionRecord{Owner: owner, ExpiresAt: expiresAt}
+	next[key] = sessionRecord{Owner: owner, Role: registryPrimary, ExpiresAt: expiresAt}
 	return r.commit(next)
 }
 
 func (r *sessionRegistry) rotateIfPromoted(oldID, newID, owner string, expiresAt time.Time) (bool, error) {
 	oldKey := sessionHash(oldID)
-	if _, exists := r.records[oldKey]; !exists {
+	old, exists := r.records[oldKey]
+	if !exists || old.Role != registryPrimary || old.Owner != owner {
 		return false, nil
 	}
 	next := cloneRecords(r.records)
-	delete(next, oldKey)
-	next[sessionHash(newID)] = sessionRecord{Owner: owner, ExpiresAt: expiresAt}
+	for key, record := range next {
+		if record.Owner == owner {
+			delete(next, key)
+		}
+	}
+	next[sessionHash(newID)] = sessionRecord{Owner: owner, Role: registryPrimary, ExpiresAt: expiresAt}
+	next[oldKey] = sessionRecord{Owner: owner, Role: registryRecovery, ExpiresAt: expiresAt}
 	err := r.commit(next)
 	return err == nil || errors.Is(err, errRegistryDurabilityUncertain), err
+}
+
+func (r *sessionRegistry) confirmPrimary(id string, now time.Time) (bool, error) {
+	key := sessionHash(id)
+	record, exists := r.records[key]
+	if !exists || record.Role != registryPrimary || !record.ExpiresAt.After(now) {
+		return false, nil
+	}
+	next := cloneRecords(r.records)
+	changed := false
+	for otherKey, other := range next {
+		if other.Owner == record.Owner && other.Role == registryRecovery {
+			delete(next, otherKey)
+			changed = true
+		}
+	}
+	if !changed {
+		return true, nil
+	}
+	return true, r.commit(next)
 }
 
 func (r *sessionRegistry) removeOwner(owner string) error {
@@ -196,7 +297,9 @@ func (r *sessionRegistry) retainOwners(ownerKeys map[string]struct{}) error {
 func (r *sessionRegistry) provenOwnerKeys() map[string]struct{} {
 	result := make(map[string]struct{}, len(r.records))
 	for _, record := range r.records {
-		result[sessionHash(record.Owner)] = struct{}{}
+		if record.Role == registryPrimary {
+			result[sessionHash(record.Owner)] = struct{}{}
+		}
 	}
 	return result
 }

@@ -1,4 +1,4 @@
-// Package snapshot 存取分享快照。
+// Package snapshot stores private universe snapshots with read compatibility.
 //
 // 核心约束：只存派生结构与公开链接，绝不存 Title、Summary 或任何正文。
 // 打开分享页时星图由快照重建；证据条目只显示链接，标题需访问者自行点开。
@@ -21,11 +21,12 @@ import (
 // TTL 是快照的存活期。用户也可以随时销毁。
 const TTL = 30 * 24 * time.Hour
 
-// Snapshot 是可分享的派生结构。
+// Snapshot is a private, version-aware universe snapshot.
 type Snapshot struct {
 	ID        string          `json:"id"`
 	CreatedAt time.Time       `json:"createdAt"`
 	ExpiresAt time.Time       `json:"expiresAt"`
+	Legacy    bool            `json:"legacy,omitempty"`
 	Universe  engine.Universe `json:"universe"`
 }
 
@@ -65,13 +66,28 @@ func validID(id string) bool {
 
 func (s *Store) path(id string) string { return filepath.Join(s.dir, id+".json") }
 
-// Save 剥掉原文后落盘。
+// Save validates, strips prose from, and persists a current-version snapshot.
 func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
+	if u == nil {
+		return nil, fmt.Errorf("invalid snapshot universe: nil")
+	}
+	normalized := *u
+	if normalized.SchemaVersion != "" && normalized.SchemaVersion != engine.CurrentSchemaVersion {
+		return nil, fmt.Errorf("invalid snapshot universe version")
+	}
+	if normalized.AnalysisVersion != "" && normalized.AnalysisVersion != engine.CurrentAnalysisVersion {
+		return nil, fmt.Errorf("invalid snapshot analysis version")
+	}
+	normalized.SchemaVersion = engine.CurrentSchemaVersion
+	normalized.AnalysisVersion = engine.CurrentAnalysisVersion
+	if err := normalized.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid snapshot universe: %w", err)
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
-	stripped := strip(*u)
+	stripped := strip(normalized)
 	snap := &Snapshot{
 		ID: id, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(TTL), Universe: stripped,
 	}
@@ -81,10 +97,35 @@ func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.WriteFile(s.path(id), b, 0o600); err != nil {
+	if err := atomicWrite(s.path(id), b); err != nil {
 		return nil, fmt.Errorf("写入快照失败: %w", err)
 	}
 	return snap, nil
+}
+
+func atomicWrite(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".snapshot-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Load 读取快照；过期即视为不存在。
@@ -101,6 +142,30 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 	var snap Snapshot
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, fmt.Errorf("快照已损坏")
+	}
+	if snap.Universe.SchemaVersion == "" && snap.Universe.AnalysisVersion == "" {
+		snap.Legacy = true
+		// Compatibility is deliberately one-way: old evidence is never inferred
+		// to be a public question, answer, or article probe.
+		snap.Universe.Questions = []engine.QuestionPlanet{}
+		snap.Universe.Answers = []engine.AnswerSatellite{}
+		snap.Universe.Probes = []engine.ArticleProbe{}
+	} else {
+		if snap.Universe.SchemaVersion != engine.CurrentSchemaVersion || snap.Universe.AnalysisVersion != engine.CurrentAnalysisVersion {
+			return nil, fmt.Errorf("invalid snapshot universe version")
+		}
+		if snap.Universe.Questions == nil {
+			snap.Universe.Questions = []engine.QuestionPlanet{}
+		}
+		if snap.Universe.Answers == nil {
+			snap.Universe.Answers = []engine.AnswerSatellite{}
+		}
+		if snap.Universe.Probes == nil {
+			snap.Universe.Probes = []engine.ArticleProbe{}
+		}
+		if err := snap.Universe.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid snapshot universe: %w", err)
+		}
 	}
 	if time.Now().After(snap.ExpiresAt) {
 		_ = s.Delete(id)

@@ -1,7 +1,12 @@
 package snapshot
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/chouheiwa/mindverse/internal/engine"
 )
@@ -9,13 +14,77 @@ import (
 func sample() *engine.Universe {
 	ev := []engine.Evidence{{Title: "一条真实标题", URL: "https://www.zhihu.com/answer/1", Own: 1, When: "26.08"}}
 	return &engine.Universe{
+		SchemaVersion: engine.CurrentSchemaVersion, AnalysisVersion: engine.CurrentAnalysisVersion,
 		Meta:     engine.Meta{Items: 1, Clusters: 1},
 		Clusters: []engine.Cluster{{ID: 0, Name: "把底层讲明白"}},
-		Stars:    []engine.Star{{Concept: "并发", Evidence: ev}},
+		Stars:    []engine.Star{{ID: "star:v1:private:test", Scope: engine.ScopePrivate, Concept: "并发", Evidence: ev}},
 		Dark:     []engine.Dark{{Concept: "网文写作", Fav: 11, Evidence: ev}},
 		Solo:     []engine.Solo{{Concept: "分布式系统", Title: "为什么你总是抓不到狼", URL: "https://zhuanlan.zhihu.com/p/2"}},
 		Wormholes: []engine.Wormhole{{NameA: "A", NameB: "B",
 			Evidence: []engine.WormholeEvidence{{Title: "标题", URL: "https://www.zhihu.com/answer/3"}}}},
+	}
+}
+
+func TestNewSnapshotCarriesVersions(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Save(sample())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Legacy || snap.Universe.SchemaVersion == "" || snap.Universe.AnalysisVersion == "" {
+		t.Fatalf("new snapshot was not versioned: %+v", snap)
+	}
+}
+
+func TestLegacySnapshotRemainsReadableWithoutUpgradingEvidence(t *testing.T) {
+	dir := t.TempDir()
+	legacy := map[string]any{
+		"id": "legacy_1", "createdAt": "2026-08-01T00:00:00Z", "expiresAt": "2099-08-01T00:00:00Z",
+		"universe": map[string]any{
+			"stars": []any{map[string]any{"c": "legacy", "ev": []any{map[string]any{"t": "old", "u": "https://www.zhihu.com/question/7"}}}},
+		},
+	}
+	b, _ := json.Marshal(legacy)
+	if err := os.WriteFile(filepath.Join(dir, "legacy_1.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := NewStore(dir)
+	got, err := s.Load("legacy_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Legacy {
+		t.Fatal("snapshot missing versions must be explicitly marked legacy")
+	}
+	if len(got.Universe.Questions) != 0 || len(got.Universe.Answers) != 0 || len(got.Universe.Probes) != 0 {
+		t.Fatalf("legacy evidence was auto-upgraded: %+v", got.Universe)
+	}
+}
+
+func TestNewSchemaInvalidUniverseIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	bad := sample()
+	bad.Stars[0].Scope = ""
+	snap := Snapshot{ID: "invalid_1", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), Universe: *bad}
+	b, _ := json.Marshal(snap)
+	if err := os.WriteFile(filepath.Join(dir, "invalid_1.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := NewStore(dir)
+	if _, err := s.Load("invalid_1"); err == nil || !strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("new-schema invalid universe should be rejected, got %v", err)
+	}
+}
+
+func TestSaveRejectsUnsupportedVersion(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	u := sample()
+	u.SchemaVersion = "universe.future"
+	if _, err := s.Save(u); err == nil {
+		t.Fatal("unsupported schema version should not be silently rewritten")
 	}
 }
 

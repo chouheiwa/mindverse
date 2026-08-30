@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 	"github.com/chouheiwa/mindverse/internal/engine"
 	"github.com/chouheiwa/mindverse/internal/extract"
 	"github.com/chouheiwa/mindverse/internal/seed"
-	"github.com/chouheiwa/mindverse/internal/snapshot"
+	"github.com/chouheiwa/mindverse/internal/share"
 	"github.com/chouheiwa/mindverse/internal/zhihu"
 )
 
@@ -63,7 +64,7 @@ type session struct {
 type Server struct {
 	cfg   *config.Config
 	oauth *zhihu.OAuth
-	store *snapshot.Store
+	store *share.Store
 	ext   extract.Extractor
 	seed  *seed.Builder
 
@@ -73,7 +74,7 @@ type Server struct {
 
 // New 构造服务。
 func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
-	store, err := snapshot.NewStore(cfg.SnapshotDir)
+	store, err := share.NewStore(cfg.SnapshotDir)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +99,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/universe", s.universeStart)
 	mux.HandleFunc("GET /api/universe", s.universeGet)
 	mux.HandleFunc("POST /api/share", s.shareCreate)
+	mux.HandleFunc("POST /api/share/preview", s.sharePreview)
 	mux.HandleFunc("GET /api/share/{id}", s.shareGet)
 	mux.HandleFunc("DELETE /api/share/{id}", s.shareDelete)
 	mux.HandleFunc("DELETE /api/session/data", s.wipe)
@@ -132,6 +134,11 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
+		if !ok && validSessionID(c.Value) {
+			sess = &session{id: c.Value, lastSeen: time.Now()}
+			s.sess[c.Value] = sess
+			ok = true
+		}
 		s.mu.Unlock()
 		if ok {
 			return sess
@@ -150,6 +157,11 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 		Secure: !s.cfg.LocalOnly(),
 	})
 	return sess
+}
+
+func validSessionID(id string) bool {
+	b, err := base64.RawURLEncoding.DecodeString(id)
+	return err == nil && len(b) == 24
 }
 
 // ── 处理器 ──
@@ -435,6 +447,10 @@ func (s *Server) universeGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
+	selection, ok := readShareSelection(w, r)
+	if !ok {
+		return
+	}
 	sess := fromCtx(r)
 	sess.mu.Lock()
 	u := sess.gen.Universe
@@ -443,28 +459,74 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "还没有可分享的星图")
 		return
 	}
-	snap, err := s.store.Save(u)
+	view, err := share.BuildView(u, selection)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(view.Questions) == 0 {
+		writeErr(w, http.StatusBadRequest, "请至少选择一个问题")
+		return
+	}
+	record, err := s.store.Create(sess.id, view)
 	if err != nil {
 		writeErr(w, 500, "保存分享快照失败")
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"id": snap.ID, "url": "/s/" + snap.ID, "expiresAt": snap.ExpiresAt,
+		"id": record.ID, "url": "/s/" + record.ID, "expiresAt": record.ExpiresAt,
 	})
 }
 
+func (s *Server) sharePreview(w http.ResponseWriter, r *http.Request) {
+	selection, ok := readShareSelection(w, r)
+	if !ok {
+		return
+	}
+	sess := fromCtx(r)
+	sess.mu.Lock()
+	u := sess.gen.Universe
+	sess.mu.Unlock()
+	if u == nil {
+		writeErr(w, http.StatusConflict, "还没有可分享的星图")
+		return
+	}
+	view, err := share.BuildView(u, selection)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func readShareSelection(w http.ResponseWriter, r *http.Request) (share.ShareSelection, bool) {
+	var selection share.ShareSelection
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&selection); err != nil {
+		writeErr(w, http.StatusBadRequest, "分享选择无效")
+		return share.ShareSelection{}, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeErr(w, http.StatusBadRequest, "分享选择无效")
+		return share.ShareSelection{}, false
+	}
+	return selection, true
+}
+
 func (s *Server) shareGet(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.store.Load(r.PathValue("id"))
+	record, err := s.store.Load(r.PathValue("id"))
 	if err != nil {
 		writeErr(w, 404, err.Error())
 		return
 	}
-	writeJSON(w, 200, snap)
+	writeJSON(w, 200, record.View)
 }
 
 func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.Delete(r.PathValue("id")); err != nil {
-		writeErr(w, 400, err.Error())
+	sess := fromCtx(r)
+	if err := s.store.DeleteOwned(r.PathValue("id"), sess.id); err != nil {
+		writeErr(w, http.StatusNotFound, "分享不存在或已过期")
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -473,6 +535,10 @@ func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {
 // wipe 实现界面上的「立即删除我的宇宙」：清空会话内的一切，即时生效。
 func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
+	if err := s.store.DeleteAllOwned(sess.id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "删除分享失败")
+		return
+	}
 	sess.mu.Lock()
 	sess.gen = generation{}
 	sess.token, sess.profile, sess.seedCorpus = nil, nil, nil

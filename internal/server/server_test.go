@@ -254,6 +254,24 @@ func TestPublicRoutesDoNotCreateSessions(t *testing.T) {
 	}
 }
 
+func TestPublicSharePageRejectsNonCanonicalEncodedPaths(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	if err := os.WriteFile(filepath.Join(s.cfg.WebDir, "universe.html"), []byte("public shell"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rr := doRequest(t, s.Routes(), http.MethodGet, "/s/public_1", nil, nil); rr.Code != http.StatusOK {
+		t.Fatalf("canonical public path returned %d, want 200", rr.Code)
+	}
+	for _, path := range []string{"/s/%70ublic_1", "/s/public_1%2fextra", "/s/%2570ublic_1", "/s/public_1/"} {
+		t.Run(path, func(t *testing.T) {
+			rr := doRequest(t, s.Routes(), http.MethodGet, path, nil, nil)
+			if rr.Code != http.StatusNotFound {
+				t.Fatalf("non-canonical public path returned %d, want 404", rr.Code)
+			}
+		})
+	}
+}
+
 func TestSessionCleanupIsThrottledAndCeilingBounded(t *testing.T) {
 	s := testServer(t, t.TempDir())
 	s.maxSessions = 3

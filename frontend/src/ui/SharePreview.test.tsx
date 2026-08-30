@@ -163,10 +163,16 @@ describe('SharePreview explicit consent', () => {
       const [open, setOpen] = useState(true)
       return <><button onClick={() => setOpen(true)}>再次打开</button><SharePreview open={open} universe={universe} onClose={() => setOpen(false)} /></>
     }
-    render(<Harness />)
+    const { container } = render(<Harness />)
     await user.click(screen.getByRole('checkbox', { name: /问题七/ }))
     await user.click(await screen.findByRole('button', { name: '创建公开链接' }))
     await user.click(await screen.findByRole('button', { name: '关闭分享选择' }))
+    const closedDialog = container.querySelector('dialog')!
+    expect(closedDialog).not.toHaveAttribute('open')
+    expect(closedDialog).toHaveAttribute('inert')
+    expect(closedDialog).not.toBeVisible()
+    expect(getComputedStyle(closedDialog).display).toBe('none')
+    expect(closedDialog.getBoundingClientRect()).toMatchObject({ width: 0, height: 0 })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '再次打开' }))
     expect(await screen.findByRole('link', { name: '打开公开页' })).toHaveAttribute('href', '/s/share_1')

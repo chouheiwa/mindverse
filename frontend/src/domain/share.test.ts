@@ -21,7 +21,10 @@ export const shareFixture = {
 describe('share.v1 public boundary', () => {
   test('parses the canonical fixture emitted by the Go share DTO', () => {
     const golden = JSON.parse(readFileSync(new URL('../../../internal/share/testdata/share_contract.json', import.meta.url), 'utf8'))
-    expect(parseShareView(golden)).toMatchObject({ schemaVersion: 'share.v1', questions: [{ id: 'question:7' }], answers: [{ id: 'answer:8' }] })
+    const parsed = parseShareView(golden)
+    expect(parsed).toMatchObject({ schemaVersion: 'share.v1', answers: [{ id: 'answer:8' }] })
+    expect(parsed.questions.find(({ id }) => id === 'question:7')).toBeDefined()
+    expect(parsed.questions.find(({ id }) => id === 'question:9')?.answerIds).toEqual([])
   })
   test('parses, freezes, and indexes the exact public whitelist', () => {
     const view = parseShareView(structuredClone(shareFixture))

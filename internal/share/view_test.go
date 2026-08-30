@@ -101,6 +101,7 @@ func TestShareViewValidateRejectsMalformedPublicData(t *testing.T) {
 		{"schema", func(v *ShareView) { v.SchemaVersion = "share.v2" }},
 		{"question URL", func(v *ShareView) { v.Questions[0].URL = "https://example.com/7" }},
 		{"answer ref", func(v *ShareView) { v.Questions[0].AnswerIDs = []string{"answer:9"} }},
+		{"nil answer refs", func(v *ShareView) { v.Questions[0].AnswerIDs = nil }},
 		{"negative count", func(v *ShareView) { v.Answers[0].LikeCount = -1 }},
 		{"unverified author display", func(v *ShareView) { v.Answers[0].AuthorID = "" }},
 	}
@@ -167,7 +168,9 @@ func TestBuildShareViewRejectsSelectionAboveContractLimit(t *testing.T) {
 }
 
 func TestShareContractGolden(t *testing.T) {
-	view, err := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	u := shareUniverse()
+	u.Questions[1].AnswerIDs = []string{}
+	view, err := BuildView(u, ShareSelection{QuestionIDs: []string{"question:7", "question:9"}})
 	if err != nil {
 		t.Fatal(err)
 	}

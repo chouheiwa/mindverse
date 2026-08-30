@@ -9,6 +9,13 @@
       "answerIds": [
         "answer:8"
       ]
+    },
+    {
+      "id": "question:9",
+      "questionId": "9",
+      "title": "Other question",
+      "url": "https://www.zhihu.com/question/9",
+      "answerIds": []
     }
   ],
   "answers": [

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -128,10 +129,28 @@ func (s *Server) Routes() http.Handler {
 	private("DELETE /api/session/data", s.wipe)
 	// 分享页复用同一张星图，数据由 /api/share/{id} 提供
 	mux.HandleFunc("GET /s/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !publicShareID(id) || r.URL.EscapedPath() != "/s/"+url.PathEscape(id) {
+			http.NotFound(w, r)
+			return
+		}
 		http.ServeFile(w, r, filepath.Join(s.cfg.WebDir, "universe.html"))
 	})
 	mux.Handle("/", http.FileServer(http.Dir(s.cfg.WebDir)))
 	return mux
+}
+
+func publicShareID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // ── 会话 ──

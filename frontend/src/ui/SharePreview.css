@@ -1,5 +1,6 @@
 .sp-dialog { inset: 0; width: min(1120px, calc(100vw - 36px)); max-width: none; height: min(820px, calc(100dvh - 36px)); max-height: none;
   display: grid; grid-template-rows: auto minmax(0, 1fr) auto; margin: auto; padding: 0; border: 1px solid var(--rule); border-radius: 4px; background: #080c1a; color: var(--ink); overflow: hidden }
+.sp-dialog:not([open]) { display: none }
 .sp-dialog::backdrop { background: rgba(2, 3, 9, .82) }
 .sp-head { height: 94px; display: flex; align-items: center; justify-content: space-between; padding: 18px 26px; border-bottom: 1px solid var(--rule) }
 .sp-kicker { color: var(--star); font: 10px/1.4 var(--f-m); letter-spacing: .16em }

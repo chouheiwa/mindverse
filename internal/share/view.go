@@ -207,7 +207,7 @@ func (v ShareView) Validate() error {
 	}
 	questions := make(map[string]Question, len(v.Questions))
 	for i, question := range v.Questions {
-		if !canonicalShareQuestion(question) {
+		if !canonicalShareQuestion(question) || question.AnswerIDs == nil {
 			return fmt.Errorf("question %d: invalid public shape", i)
 		}
 		if _, duplicate := questions[question.ID]; duplicate {

@@ -147,7 +147,7 @@ export function SharePreview({ open = true, universe, onClose, getReturnFocus }:
   }
 
   return (
-    <dialog ref={dialogRef} className="sp-dialog" aria-labelledby="sp-title" onKeyDown={lifecycle.onKeyDown}
+    <dialog ref={dialogRef} className="sp-dialog" aria-labelledby="sp-title" inert={!open} onKeyDown={lifecycle.onKeyDown}
       onCancel={(event) => { event.preventDefault(); if (!operationLocked) onClose() }}>
       <header className="sp-head">
         <div>

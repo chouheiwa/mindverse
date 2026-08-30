@@ -35,7 +35,12 @@ type Item struct {
 	Own       bool        `json:"own"`       // true=我写的，false=我收藏的
 	Folders   []string    `json:"folders"`   // 所属收藏夹名，概念抽取的先验
 	Author    string      `json:"author,omitempty"`
-	LikeCount int64       `json:"likeCount"`
+	// AuthorID is present only when ingestion observed a stable URL token or a
+	// canonical Zhihu profile URL. Author remains display-only identity.
+	AuthorID      string `json:"authorId,omitempty"`
+	LikeCount     int64  `json:"likeCount"`
+	CommentCount  int64  `json:"commentCount,omitempty"`
+	FavoriteCount int64  `json:"favoriteCount,omitempty"`
 }
 
 func (i Item) hasDomainTruth() bool {
@@ -329,10 +334,19 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 		if c.LikeCount > it.LikeCount {
 			it.LikeCount = c.LikeCount
 		}
+		if c.CommentCount > it.CommentCount {
+			it.CommentCount = c.CommentCount
+		}
+		if c.FavoriteCount > it.FavoriteCount {
+			it.FavoriteCount = c.FavoriteCount
+		}
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryFavoriteList)
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCollected, At: c.FavTime})
 		if c.Author != nil && c.Author.Name != "" {
 			it.Author = c.Author.Name
+		}
+		if c.Author != nil && it.AuthorID == "" {
+			it.AuthorID = stableAuthorID(c.Author)
 		}
 		if folder != "" {
 			it.Bindings = addBindingFolder(it.Bindings, RelationCollected, folder)
@@ -343,6 +357,30 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 			}
 		}
 	}
+}
+
+func stableAuthorID(author *ContentAuthor) string {
+	if author == nil {
+		return ""
+	}
+	if token := strings.TrimSpace(author.URLToken); token != "" && token == author.URLToken &&
+		!strings.ContainsAny(token, "/?# 	\r\n") {
+		return "author:" + token
+	}
+	u, err := url.Parse(author.URL)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, "www.zhihu.com") ||
+		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return ""
+	}
+	const prefix = "/people/"
+	if !strings.HasPrefix(u.EscapedPath(), prefix) {
+		return ""
+	}
+	token := strings.TrimPrefix(u.EscapedPath(), prefix)
+	if token == "" || strings.Contains(token, "/") {
+		return ""
+	}
+	return "author:" + token
 }
 
 func (m *merger) addContents(items []ContentItem) {
@@ -363,6 +401,12 @@ func (m *merger) addContents(items []ContentItem) {
 		it.PublishedAt = earliestNonZero(it.PublishedAt, c.CreatedAt)
 		if c.LikeCount > it.LikeCount {
 			it.LikeCount = c.LikeCount
+		}
+		if c.CommentCount > it.CommentCount {
+			it.CommentCount = c.CommentCount
+		}
+		if c.FavoriteCount > it.FavoriteCount {
+			it.FavoriteCount = c.FavoriteCount
 		}
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCreated, At: c.CreatedAt})
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryOwnContent)

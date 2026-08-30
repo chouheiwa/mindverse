@@ -34,6 +34,46 @@ func TestItemTruthHelpersPreferBindingsAndNewTimes(t *testing.T) {
 	}
 }
 
+func TestCollectionAuthorIdentityRequiresStableSource(t *testing.T) {
+	tests := []struct {
+		name   string
+		author *ContentAuthor
+		wantID string
+	}{
+		{
+			name:   "url token",
+			author: &ContentAuthor{Name: "Alice", URLToken: "alice-1", URL: "https://www.zhihu.com/people/someone-else"},
+			wantID: "author:alice-1",
+		},
+		{
+			name:   "canonical profile URL",
+			author: &ContentAuthor{Name: "Bob", URL: "https://www.zhihu.com/people/bob-2"},
+			wantID: "author:bob-2",
+		},
+		{
+			name:   "display name only",
+			author: &ContentAuthor{Name: "Carol"},
+		},
+		{
+			name:   "noncanonical profile URL",
+			author: &ContentAuthor{Name: "Dave", URL: "https://www.zhihu.com/people/dave-4?utm_source=test"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newMerger(999)
+			m.addCollections([]CollectionItem{{
+				ContentID: "8", ContentType: TypeAnswer,
+				URL: "https://www.zhihu.com/question/7/answer/8", Title: "question", Author: tt.author,
+			}}, "")
+			got := m.result()
+			if len(got) != 1 || got[0].AuthorID != tt.wantID {
+				t.Fatalf("AuthorID = %q, want %q; item=%+v", got[0].AuthorID, tt.wantID, got)
+			}
+		})
+	}
+}
+
 func TestMockProviderLoadsRealSample(t *testing.T) {
 	p := &MockProvider{Path: "../../testdata/corpus_sample.json"}
 	c, err := p.Fetch(context.Background())

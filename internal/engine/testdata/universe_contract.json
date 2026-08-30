@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "universe.v1",
+  "analysisVersion": "engine.v1",
+  "meta": {
+    "items": 1,
+    "concepts": 1,
+    "clusters": 1,
+    "own": 0,
+    "fav": 0,
+    "span": [
+      0,
+      0
+    ],
+    "medz": 0,
+    "p10z": 0,
+    "source": "",
+    "splits": 0
+  },
+  "clusters": [
+    {
+      "g": 0,
+      "name": "Cluster",
+      "lead": "Concept",
+      "c": [
+        0,
+        0,
+        0
+      ],
+      "n": 1,
+      "o": 0,
+      "f": 0,
+      "hue": 218,
+      "sat": 0,
+      "mem": [
+        "Concept"
+      ]
+    }
+  ],
+  "stars": [
+    {
+      "id": "star:v1:private:da5e11efa36720a4",
+      "scope": "private",
+      "externalQueryAllowed": false,
+      "questionIds": [
+        "question:7"
+      ],
+      "c": "Concept",
+      "g": 0,
+      "p": [
+        0,
+        0,
+        0
+      ],
+      "n": 1,
+      "o": 0,
+      "f": 0,
+      "hue": 218,
+      "sat": 0,
+      "pe": 0,
+      "bu": 0,
+      "fi": "",
+      "la": "",
+      "ev": [
+        {
+          "t": "Question",
+          "u": "https://www.zhihu.com/question/7/answer/8",
+          "o": 0,
+          "y": ""
+        }
+      ]
+    }
+  ],
+  "particles": [
+    [
+      6.7,
+      -3.2,
+      11.2,
+      0,
+      0
+    ]
+  ],
+  "wormholes": null,
+  "solo": null,
+  "dark": null,
+  "nebula": null,
+  "questions": [
+    {
+      "id": "question:7",
+      "questionId": "7",
+      "title": "Question",
+      "url": "https://www.zhihu.com/question/7",
+      "answerIds": [
+        "answer:8"
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "id": "answer:8",
+      "questionId": "question:7",
+      "title": "Question",
+      "url": "https://www.zhihu.com/question/7/answer/8"
+    }
+  ],
+  "probes": []
+}

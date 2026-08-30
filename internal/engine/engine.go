@@ -113,7 +113,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		temp[c] = computeTemporal(ts, own, fav)
 	}
 
-	u := &Universe{}
+	u := &Universe{SchemaVersion: CurrentSchemaVersion, AnalysisVersion: CurrentAnalysisVersion}
 
 	// 色温主轴：活跃月数（真正有内容的自然月数）的位次。
 	//
@@ -137,6 +137,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		t := temp[c]
 		hue, sat := spectrum(starRank[c])
 		u.Stars = append(u.Stars, Star{
+			Scope:   ScopePrivate,
 			Concept: cn, Cluster: comm[c], Pos: lay.starPos[c],
 			N: b.degConc[c], Own: t.Own, Fav: t.Fav, Hue: hue, Sat: sat,
 			Persist: t.Persist, Burst: t.Burst, First: t.First, Last: t.Last,
@@ -144,6 +145,16 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		})
 	}
 	sort.Slice(u.Stars, func(i, j int) bool { return u.Stars[i].Concept < u.Stars[j].Concept })
+	if err := assignStableStarIDs(u.Stars, StableStarID); err != nil {
+		return nil, err
+	}
+	itemsByStarID := make(map[string][]int, len(u.Stars))
+	for _, star := range u.Stars {
+		if conceptIndex, ok := b.index[star.Concept]; ok {
+			itemsByStarID[star.ID] = append([]int(nil), itemsOf[conceptIndex]...)
+		}
+	}
+	u.Questions, u.Answers, u.Probes = projectKnowledgeObjects(in, u.Stars, itemsByStarID)
 
 	// 星群
 	gids := make([]int, 0, len(clusterOf))

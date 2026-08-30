@@ -6,6 +6,20 @@ package engine
 
 import "github.com/chouheiwa/mindverse/internal/zhihu"
 
+const (
+	CurrentSchemaVersion   = "universe.v1"
+	CurrentAnalysisVersion = "engine.v1"
+)
+
+// ConceptScope is part of a star's identity. Private model-extracted concepts
+// must never be promoted to a queryable public concept by inference.
+type ConceptScope string
+
+const (
+	ScopePrivate ConceptScope = "private"
+	ScopePublic  ConceptScope = "public"
+)
+
 // Input 是引擎的输入：语料 + 与之等长的概念标注。
 type Input struct {
 	Items    []zhihu.Item
@@ -69,19 +83,74 @@ type Evidence struct {
 
 // Star 一颗恒星，对应一个概念。
 type Star struct {
-	Concept  string     `json:"c"`
-	Cluster  int        `json:"g"`
-	Pos      [3]float64 `json:"p"`
-	N        int        `json:"n"`
-	Own      int        `json:"o"`
-	Fav      int        `json:"f"`
-	Hue      int        `json:"hue"`
-	Sat      int        `json:"sat"`
-	Persist  float64    `json:"pe"` // 持续性 → 亮度
-	Burst    float64    `json:"bu"` // 集中度 → 星云判据
-	First    string     `json:"fi"`
-	Last     string     `json:"la"`
-	Evidence []Evidence `json:"ev"`
+	ID                   string       `json:"id"`
+	Scope                ConceptScope `json:"scope"`
+	ExternalQueryAllowed bool         `json:"externalQueryAllowed"`
+	QuestionIDs          []string     `json:"questionIds,omitempty"`
+	ProbeIDs             []string     `json:"probeIds,omitempty"`
+	Concept              string       `json:"c"`
+	Cluster              int          `json:"g"`
+	Pos                  [3]float64   `json:"p"`
+	N                    int          `json:"n"`
+	Own                  int          `json:"o"`
+	Fav                  int          `json:"f"`
+	Hue                  int          `json:"hue"`
+	Sat                  int          `json:"sat"`
+	Persist              float64      `json:"pe"` // 持续性 → 亮度
+	Burst                float64      `json:"bu"` // 集中度 → 星云判据
+	First                string       `json:"fi"`
+	Last                 string       `json:"la"`
+	Evidence             []Evidence   `json:"ev"`
+}
+
+// QuestionPlanet is a globally deduplicated, real Zhihu question. ID uses the
+// namespaced form question:{questionId}; URL is always canonical.
+type QuestionPlanet struct {
+	ID         string   `json:"id"`
+	QuestionID string   `json:"questionId"`
+	Title      string   `json:"title"`
+	URL        string   `json:"url"`
+	AnswerIDs  []string `json:"answerIds,omitempty"`
+}
+
+// AnswerSatellite is a public answer artifact bound to one admitted question.
+// Bindings describe current-user relations; discoverySources describe how the
+// artifact was observed and never imply a user relation.
+type AnswerSatellite struct {
+	ID               string                     `json:"id"`
+	QuestionID       string                     `json:"questionId"`
+	Title            string                     `json:"title"`
+	Summary          string                     `json:"summary,omitempty"`
+	URL              string                     `json:"url"`
+	AuthorID         string                     `json:"authorId,omitempty"`
+	AuthorName       string                     `json:"authorName,omitempty"`
+	PublishedAt      int64                      `json:"publishedAt,omitempty"`
+	UpdatedAt        int64                      `json:"updatedAt,omitempty"`
+	ObservedAt       int64                      `json:"observedAt,omitempty"`
+	LikeCount        int64                      `json:"likeCount,omitempty"`
+	CommentCount     int64                      `json:"commentCount,omitempty"`
+	FavoriteCount    int64                      `json:"favoriteCount,omitempty"`
+	Bindings         []zhihu.UserContentBinding `json:"bindings,omitempty"`
+	DiscoverySources []zhihu.DiscoverySource    `json:"discoverySources,omitempty"`
+}
+
+// ArticleProbe is a globally deduplicated public article. It intentionally has
+// no question field: articles are independent probes, not fabricated planets.
+type ArticleProbe struct {
+	ID               string                     `json:"id"`
+	Title            string                     `json:"title"`
+	Summary          string                     `json:"summary,omitempty"`
+	URL              string                     `json:"url"`
+	AuthorID         string                     `json:"authorId,omitempty"`
+	AuthorName       string                     `json:"authorName,omitempty"`
+	PublishedAt      int64                      `json:"publishedAt,omitempty"`
+	UpdatedAt        int64                      `json:"updatedAt,omitempty"`
+	ObservedAt       int64                      `json:"observedAt,omitempty"`
+	LikeCount        int64                      `json:"likeCount,omitempty"`
+	CommentCount     int64                      `json:"commentCount,omitempty"`
+	FavoriteCount    int64                      `json:"favoriteCount,omitempty"`
+	Bindings         []zhihu.UserContentBinding `json:"bindings,omitempty"`
+	DiscoverySources []zhihu.DiscoverySource    `json:"discoverySources,omitempty"`
 }
 
 // Cluster 一个主题星群。
@@ -172,12 +241,17 @@ type Meta struct {
 
 // Universe 是引擎的完整输出，也是前端 /api/universe 的响应体。
 type Universe struct {
-	Meta      Meta         `json:"meta"`
-	Clusters  []Cluster    `json:"clusters"`
-	Stars     []Star       `json:"stars"`
-	Particles [][5]float64 `json:"particles"` // x,y,z,clusterID,own
-	Wormholes []Wormhole   `json:"wormholes"`
-	Solo      []Solo       `json:"solo"`
-	Dark      []Dark       `json:"dark"`
-	Nebula    []Nebula     `json:"nebula"`
+	SchemaVersion   string            `json:"schemaVersion"`
+	AnalysisVersion string            `json:"analysisVersion"`
+	Meta            Meta              `json:"meta"`
+	Clusters        []Cluster         `json:"clusters"`
+	Stars           []Star            `json:"stars"`
+	Particles       [][5]float64      `json:"particles"` // x,y,z,clusterID,own
+	Wormholes       []Wormhole        `json:"wormholes"`
+	Solo            []Solo            `json:"solo"`
+	Dark            []Dark            `json:"dark"`
+	Nebula          []Nebula          `json:"nebula"`
+	Questions       []QuestionPlanet  `json:"questions"`
+	Answers         []AnswerSatellite `json:"answers"`
+	Probes          []ArticleProbe    `json:"probes"`
 }

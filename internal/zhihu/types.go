@@ -8,7 +8,31 @@ package zhihu
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
+
+// AuthorIdentitySource records which stable public discriminator established
+// an author identity. Display names never establish identity.
+type AuthorIdentitySource string
+
+const (
+	AuthorIdentityURLToken   AuthorIdentitySource = "url_token"
+	AuthorIdentityProfileURL AuthorIdentitySource = "profile_url"
+)
+
+// AuthorIdentity is a coherent, validated stable author identity. ID is always
+// author:{safe-url-token}; Name is the display name from that same observation.
+type AuthorIdentity struct {
+	ID     string               `json:"id"`
+	Name   string               `json:"name,omitempty"`
+	Source AuthorIdentitySource `json:"source"`
+}
+
+func (a AuthorIdentity) Valid() bool {
+	token, ok := strings.CutPrefix(a.ID, "author:")
+	return ok && safeAuthorToken(token) &&
+		(a.Source == AuthorIdentityURLToken || a.Source == AuthorIdentityProfileURL)
+}
 
 // 开放平台业务错误码。
 const (

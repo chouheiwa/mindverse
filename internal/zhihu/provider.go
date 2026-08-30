@@ -36,15 +36,19 @@ type Item struct {
 	Folders   []string    `json:"folders"`   // 所属收藏夹名，概念抽取的先验
 	Author    string      `json:"author,omitempty"`
 	// AuthorID is present only when ingestion observed a stable URL token or a
-	// canonical Zhihu profile URL. Author remains display-only identity.
-	AuthorID      string `json:"authorId,omitempty"`
-	LikeCount     int64  `json:"likeCount"`
-	CommentCount  int64  `json:"commentCount,omitempty"`
-	FavoriteCount int64  `json:"favoriteCount,omitempty"`
+	// canonical Zhihu profile URL. Deprecated: consumers must validate and use
+	// AuthorIdentity; this scalar remains only for compatibility.
+	AuthorID       string          `json:"authorId,omitempty"`
+	AuthorIdentity *AuthorIdentity `json:"authorIdentity,omitempty"`
+	LikeCount      int64           `json:"likeCount"`
+	CommentCount   int64           `json:"commentCount,omitempty"`
+	FavoriteCount  int64           `json:"favoriteCount,omitempty"`
+
+	authorIdentityConflict bool
 }
 
 func (i Item) hasDomainTruth() bool {
-	return i.Identity.ContentID != "" || len(i.Bindings) > 0 || len(i.DiscoverySources) > 0 || len(i.ConceptHints) > 0 || i.PublishedAt > 0 || i.UpdatedAt > 0 || i.ObservedAt > 0
+	return i.Identity.ContentID != "" || i.AuthorIdentity != nil || len(i.Bindings) > 0 || len(i.DiscoverySources) > 0 || len(i.ConceptHints) > 0 || i.PublishedAt > 0 || i.UpdatedAt > 0 || i.ObservedAt > 0
 }
 
 // IsCreated reports a real authored binding, falling back to legacy Own only
@@ -342,12 +346,7 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 		}
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryFavoriteList)
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCollected, At: c.FavTime})
-		if c.Author != nil && c.Author.Name != "" {
-			it.Author = c.Author.Name
-		}
-		if c.Author != nil && it.AuthorID == "" {
-			it.AuthorID = stableAuthorID(c.Author)
-		}
+		mergeAuthorObservation(it, c.Author)
 		if folder != "" {
 			it.Bindings = addBindingFolder(it.Bindings, RelationCollected, folder)
 		}
@@ -359,28 +358,69 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 	}
 }
 
-func stableAuthorID(author *ContentAuthor) string {
+func ResolveAuthorIdentity(author *ContentAuthor) *AuthorIdentity {
 	if author == nil {
-		return ""
+		return nil
 	}
 	if token := strings.TrimSpace(author.URLToken); token == author.URLToken && safeAuthorToken(token) {
-		return "author:" + token
+		return &AuthorIdentity{ID: "author:" + token, Name: author.Name, Source: AuthorIdentityURLToken}
 	}
 	u, err := url.Parse(author.URL)
 	if err != nil || u.Scheme != "https" || u.Host != "www.zhihu.com" || u.Port() != "" || u.Opaque != "" ||
 		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
-		return ""
+		return nil
 	}
 	const prefix = "/people/"
 	if !strings.HasPrefix(u.Path, prefix) {
-		return ""
+		return nil
 	}
 	token := strings.TrimPrefix(u.Path, prefix)
 	expectedPath := prefix + token
 	if !safeAuthorToken(token) || u.Path != expectedPath || u.EscapedPath() != expectedPath {
-		return ""
+		return nil
 	}
-	return "author:" + token
+	return &AuthorIdentity{ID: "author:" + token, Name: author.Name, Source: AuthorIdentityProfileURL}
+}
+
+func mergeAuthorObservation(item *Item, author *ContentAuthor) {
+	if author == nil {
+		return
+	}
+	identity := ResolveAuthorIdentity(author)
+	if item.authorIdentityConflict {
+		item.Author = deterministicDisplayName(item.Author, author.Name)
+		return
+	}
+	if identity == nil {
+		if item.AuthorIdentity == nil {
+			item.Author = deterministicDisplayName(item.Author, author.Name)
+		}
+		return
+	}
+	if item.AuthorIdentity == nil {
+		copyIdentity := *identity
+		item.AuthorIdentity = &copyIdentity
+		item.AuthorID = identity.ID
+		item.Author = identity.Name
+		return
+	}
+	if item.AuthorIdentity.ID != identity.ID {
+		item.Author = deterministicDisplayName(item.AuthorIdentity.Name, identity.Name)
+		item.AuthorIdentity = nil
+		item.AuthorID = ""
+		item.authorIdentityConflict = true
+		return
+	}
+	item.AuthorIdentity.Name = deterministicDisplayName(item.AuthorIdentity.Name, identity.Name)
+	item.Author = item.AuthorIdentity.Name
+	item.AuthorID = item.AuthorIdentity.ID
+}
+
+func deterministicDisplayName(current, candidate string) string {
+	if current == "" || (candidate != "" && candidate < current) {
+		return candidate
+	}
+	return current
 }
 
 func safeAuthorToken(token string) bool {
@@ -497,6 +537,10 @@ func (m *merger) result() []Item {
 }
 
 func cloneItem(item Item) Item {
+	if item.AuthorIdentity != nil {
+		identity := *item.AuthorIdentity
+		item.AuthorIdentity = &identity
+	}
 	item.Bindings = append([]UserContentBinding(nil), item.Bindings...)
 	for i := range item.Bindings {
 		item.Bindings[i].Folders = append([]string(nil), item.Bindings[i].Folders...)

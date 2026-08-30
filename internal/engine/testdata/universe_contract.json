@@ -2,14 +2,14 @@
   "schemaVersion": "universe.v1",
   "analysisVersion": "engine.v1",
   "meta": {
-    "items": 1,
-    "concepts": 1,
+    "items": 2,
+    "concepts": 2,
     "clusters": 1,
-    "own": 0,
+    "own": 2,
     "fav": 0,
     "span": [
-      0,
-      0
+      150,
+      250
     ],
     "medz": 0,
     "p10z": 0,
@@ -26,13 +26,14 @@
         0,
         0
       ],
-      "n": 1,
-      "o": 0,
+      "n": 3,
+      "o": 2,
       "f": 0,
       "hue": 218,
       "sat": 0,
       "mem": [
-        "Concept"
+        "Concept",
+        "Public Concept"
       ]
     }
   ],
@@ -44,6 +45,9 @@
       "questionIds": [
         "question:7"
       ],
+      "probeIds": [
+        "article:21"
+      ],
       "c": "Concept",
       "g": 0,
       "p": [
@@ -51,23 +55,57 @@
         0,
         0
       ],
+      "n": 2,
+      "o": 2,
+      "f": 0,
+      "hue": 218,
+      "sat": 0,
+      "pe": 1,
+      "bu": 1,
+      "fi": "1970.01",
+      "la": "1970.01",
+      "ev": [
+        {
+          "t": "Article",
+          "u": "https://zhuanlan.zhihu.com/p/21",
+          "o": 1,
+          "y": "70.01"
+        },
+        {
+          "t": "Question",
+          "u": "https://www.zhihu.com/question/7/answer/8",
+          "o": 1,
+          "y": "70.01"
+        }
+      ]
+    },
+    {
+      "id": "star:v1:public:873ab36caee1a6eb",
+      "scope": "public",
+      "externalQueryAllowed": true,
+      "questionIds": [
+        "question:7"
+      ],
+      "probeIds": [
+        "article:21"
+      ],
+      "c": "Public Concept",
+      "g": 0,
+      "p": [
+        1,
+        2,
+        3
+      ],
       "n": 1,
       "o": 0,
       "f": 0,
-      "hue": 218,
+      "hue": 0,
       "sat": 0,
       "pe": 0,
       "bu": 0,
       "fi": "",
       "la": "",
-      "ev": [
-        {
-          "t": "Question",
-          "u": "https://www.zhihu.com/question/7/answer/8",
-          "o": 0,
-          "y": ""
-        }
-      ]
+      "ev": null
     }
   ],
   "particles": [
@@ -76,7 +114,14 @@
       -3.2,
       11.2,
       0,
-      0
+      1
+    ],
+    [
+      -6.1,
+      -1.1,
+      -9.3,
+      0,
+      1
     ]
   ],
   "wormholes": null,
@@ -99,8 +144,68 @@
       "id": "answer:8",
       "questionId": "question:7",
       "title": "Question",
-      "url": "https://www.zhihu.com/question/7/answer/8"
+      "summary": "Answer summary",
+      "url": "https://www.zhihu.com/question/7/answer/8",
+      "authorId": "author:alice",
+      "authorName": "Alice",
+      "publishedAt": 100,
+      "updatedAt": 120,
+      "observedAt": 140,
+      "likeCount": 1,
+      "commentCount": 2,
+      "favoriteCount": 3,
+      "bindings": [
+        {
+          "relation": "collected",
+          "at": 150,
+          "folders": [
+            "Answers"
+          ]
+        },
+        {
+          "relation": "created",
+          "at": 100
+        }
+      ],
+      "discoverySources": [
+        "favorite_list",
+        "own_content",
+        "public_search"
+      ]
     }
   ],
-  "probes": []
+  "probes": [
+    {
+      "id": "article:21",
+      "title": "Article",
+      "summary": "Article summary",
+      "url": "https://zhuanlan.zhihu.com/p/21",
+      "authorId": "author:bob",
+      "authorName": "Bob",
+      "publishedAt": 200,
+      "updatedAt": 220,
+      "observedAt": 240,
+      "likeCount": 4,
+      "commentCount": 5,
+      "favoriteCount": 6,
+      "bindings": [
+        {
+          "relation": "collected",
+          "at": 250,
+          "folders": [
+            "Articles"
+          ]
+        },
+        {
+          "relation": "created",
+          "at": 200
+        }
+      ],
+      "discoverySources": [
+        "favorite_list",
+        "own_content",
+        "public_search"
+      ]
+    }
+  ]
 }

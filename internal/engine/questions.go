@@ -88,20 +88,32 @@ func assignStableStarIDs(stars []Star, build starIDFunc) error {
 
 func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]int) ([]QuestionPlanet, []AnswerSatellite, []ArticleProbe) {
 	questions := map[string]*QuestionPlanet{}
+	questionAnswerSets := map[string]map[string]struct{}{}
 	answers := map[string]*AnswerSatellite{}
 	probes := map[string]*ArticleProbe{}
 	answerQuestion := map[string]string{}
 	conflictedAnswers := map[string]bool{}
+	authorByContent := map[string]string{}
+	conflictedAuthors := map[string]bool{}
 	for i := range in.Items {
-		answerID, questionID, _, ok := parseAdmittedAnswer(in.Items[i])
-		if !ok {
+		item := in.Items[i]
+		if answerID, questionID, _, ok := parseAdmittedAnswer(item); ok {
+			questionRef := "question:" + questionID
+			if previous, exists := answerQuestion[answerID]; exists && previous != questionRef {
+				conflictedAnswers[answerID] = true
+			} else {
+				answerQuestion[answerID] = questionRef
+			}
+		}
+		contentID, projectable := projectableArtifactID(item)
+		authorID, _, verified := validatedAuthor(item)
+		if !projectable || !verified {
 			continue
 		}
-		questionRef := "question:" + questionID
-		if previous, exists := answerQuestion[answerID]; exists && previous != questionRef {
-			conflictedAnswers[answerID] = true
+		if previous, exists := authorByContent[contentID]; exists && previous != authorID {
+			conflictedAuthors[contentID] = true
 		} else {
-			answerQuestion[answerID] = questionRef
+			authorByContent[contentID] = authorID
 		}
 	}
 
@@ -119,11 +131,14 @@ func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]
 			} else {
 				q.Title = deterministicText(q.Title, item.Title)
 			}
-			q.AnswerIDs = appendUnique(q.AnswerIDs, answerID)
+			if questionAnswerSets[questionRef] == nil {
+				questionAnswerSets[questionRef] = map[string]struct{}{}
+			}
+			questionAnswerSets[questionRef][answerID] = struct{}{}
 			if existing := answers[answerID]; existing == nil {
-				answers[answerID] = answerFromItem(item, answerID, questionRef)
+				answers[answerID] = answerFromItem(item, answerID, questionRef, conflictedAuthors[answerID])
 			} else {
-				mergeAnswer(existing, item)
+				mergeAnswer(existing, item, conflictedAuthors[answerID])
 			}
 			continue
 		}
@@ -138,31 +153,33 @@ func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]
 		}
 		if probeID, ok := parseAdmittedArticle(item); ok {
 			if existing := probes[probeID]; existing == nil {
-				probes[probeID] = articleFromItem(item, probeID)
+				probes[probeID] = articleFromItem(item, probeID, conflictedAuthors[probeID])
 			} else {
-				mergeArticle(existing, item)
+				mergeArticle(existing, item, conflictedAuthors[probeID])
 			}
 		}
 	}
 
+	starQuestionSets := make([]map[string]struct{}, len(stars))
+	starProbeSets := make([]map[string]struct{}, len(stars))
 	for i := range stars {
 		for _, itemIndex := range itemsByStarID[stars[i].ID] {
 			item := in.Items[itemIndex]
 			if answerID, questionID, _, ok := parseAdmittedAnswer(item); ok && !conflictedAnswers[answerID] {
-				stars[i].QuestionIDs = appendUnique(stars[i].QuestionIDs, "question:"+questionID)
+				addStringSet(&starQuestionSets[i], "question:"+questionID)
 			} else if questionID, _, ok := parseAdmittedQuestion(item); ok {
-				stars[i].QuestionIDs = appendUnique(stars[i].QuestionIDs, "question:"+questionID)
+				addStringSet(&starQuestionSets[i], "question:"+questionID)
 			} else if probeID, ok := parseAdmittedArticle(item); ok {
-				stars[i].ProbeIDs = appendUnique(stars[i].ProbeIDs, probeID)
+				addStringSet(&starProbeSets[i], probeID)
 			}
 		}
-		sort.Strings(stars[i].QuestionIDs)
-		sort.Strings(stars[i].ProbeIDs)
+		stars[i].QuestionIDs = sortedStringSet(starQuestionSets[i])
+		stars[i].ProbeIDs = sortedStringSet(starProbeSets[i])
 	}
 
 	questionList := make([]QuestionPlanet, 0, len(questions))
 	for _, question := range questions {
-		sort.Strings(question.AnswerIDs)
+		question.AnswerIDs = sortedStringSet(questionAnswerSets[question.ID])
 		questionList = append(questionList, *question)
 	}
 	answerList := make([]AnswerSatellite, 0, len(answers))
@@ -179,6 +196,25 @@ func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]
 	sort.Slice(answerList, func(i, j int) bool { return answerList[i].ID < answerList[j].ID })
 	sort.Slice(probeList, func(i, j int) bool { return probeList[i].ID < probeList[j].ID })
 	return questionList, answerList, probeList
+}
+
+func addStringSet(set *map[string]struct{}, value string) {
+	if *set == nil {
+		*set = map[string]struct{}{}
+	}
+	(*set)[value] = struct{}{}
+}
+
+func sortedStringSet(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(set))
+	for value := range set {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
 }
 
 func parseAdmittedAnswer(item zhihu.Item) (answerID, questionID, questionURL string, ok bool) {
@@ -221,48 +257,49 @@ func parseAdmittedArticle(item zhihu.Item) (string, bool) {
 		fromURL.Resolved && fromURL.ContentID == identity.ContentID && resolved.URL == identity.URL
 }
 
-func answerFromItem(item zhihu.Item, answerID, questionID string) *AnswerSatellite {
-	return &AnswerSatellite{
+func answerFromItem(item zhihu.Item, answerID, questionID string, authorConflict bool) *AnswerSatellite {
+	answer := &AnswerSatellite{
 		ID: answerID, QuestionID: questionID, Title: item.Title, Summary: item.Summary,
-		URL:      "https://www.zhihu.com/question/" + strings.TrimPrefix(questionID, "question:") + "/answer/" + strings.TrimPrefix(answerID, "answer:"),
-		AuthorID: item.AuthorID, AuthorName: item.Author, PublishedAt: item.PublishedAt, UpdatedAt: item.UpdatedAt,
+		URL:         "https://www.zhihu.com/question/" + strings.TrimPrefix(questionID, "question:") + "/answer/" + strings.TrimPrefix(answerID, "answer:"),
+		PublishedAt: item.PublishedAt, UpdatedAt: item.UpdatedAt,
 		ObservedAt: item.ObservedAt, LikeCount: item.LikeCount, CommentCount: item.CommentCount,
 		FavoriteCount: item.FavoriteCount, Bindings: cloneBindings(item.Bindings),
 		DiscoverySources: append([]zhihu.DiscoverySource(nil), item.DiscoverySources...),
 	}
+	mergeProjectedAuthor(&answer.AuthorID, &answer.AuthorName, item, authorConflict)
+	return answer
 }
 
-func articleFromItem(item zhihu.Item, probeID string) *ArticleProbe {
-	return &ArticleProbe{
+func articleFromItem(item zhihu.Item, probeID string, authorConflict bool) *ArticleProbe {
+	article := &ArticleProbe{
 		ID: probeID, Title: item.Title, Summary: item.Summary,
-		URL:      "https://zhuanlan.zhihu.com/p/" + strings.TrimPrefix(probeID, "article:"),
-		AuthorID: item.AuthorID, AuthorName: item.Author, PublishedAt: item.PublishedAt, UpdatedAt: item.UpdatedAt,
+		URL:         "https://zhuanlan.zhihu.com/p/" + strings.TrimPrefix(probeID, "article:"),
+		PublishedAt: item.PublishedAt, UpdatedAt: item.UpdatedAt,
 		ObservedAt: item.ObservedAt, LikeCount: item.LikeCount, CommentCount: item.CommentCount,
 		FavoriteCount: item.FavoriteCount, Bindings: cloneBindings(item.Bindings),
 		DiscoverySources: append([]zhihu.DiscoverySource(nil), item.DiscoverySources...),
 	}
+	mergeProjectedAuthor(&article.AuthorID, &article.AuthorName, item, authorConflict)
+	return article
 }
 
-func mergeAnswer(answer *AnswerSatellite, item zhihu.Item) {
+func mergeAnswer(answer *AnswerSatellite, item zhihu.Item, authorConflict bool) {
 	answer.Title = deterministicText(answer.Title, item.Title)
 	answer.Summary = richerText(answer.Summary, item.Summary)
 	mergePublicFields(&answer.AuthorID, &answer.AuthorName, &answer.PublishedAt, &answer.UpdatedAt, &answer.ObservedAt,
-		&answer.LikeCount, &answer.CommentCount, &answer.FavoriteCount, &answer.Bindings, &answer.DiscoverySources, item)
+		&answer.LikeCount, &answer.CommentCount, &answer.FavoriteCount, &answer.Bindings, &answer.DiscoverySources, item, authorConflict)
 }
 
-func mergeArticle(article *ArticleProbe, item zhihu.Item) {
+func mergeArticle(article *ArticleProbe, item zhihu.Item, authorConflict bool) {
 	article.Title = deterministicText(article.Title, item.Title)
 	article.Summary = richerText(article.Summary, item.Summary)
 	mergePublicFields(&article.AuthorID, &article.AuthorName, &article.PublishedAt, &article.UpdatedAt, &article.ObservedAt,
-		&article.LikeCount, &article.CommentCount, &article.FavoriteCount, &article.Bindings, &article.DiscoverySources, item)
+		&article.LikeCount, &article.CommentCount, &article.FavoriteCount, &article.Bindings, &article.DiscoverySources, item, authorConflict)
 }
 
 func mergePublicFields(authorID, authorName *string, publishedAt, updatedAt, observedAt, likeCount, commentCount, favoriteCount *int64,
-	bindings *[]zhihu.UserContentBinding, discoveries *[]zhihu.DiscoverySource, item zhihu.Item) {
-	if item.AuthorID != "" && (*authorID == "" || item.AuthorID < *authorID) {
-		*authorID = item.AuthorID
-	}
-	*authorName = deterministicText(*authorName, item.Author)
+	bindings *[]zhihu.UserContentBinding, discoveries *[]zhihu.DiscoverySource, item zhihu.Item, authorConflict bool) {
+	mergeProjectedAuthor(authorID, authorName, item, authorConflict)
 	*publishedAt = earliestTime(*publishedAt, item.PublishedAt)
 	if item.UpdatedAt > *updatedAt {
 		*updatedAt = item.UpdatedAt
@@ -284,6 +321,46 @@ func mergePublicFields(authorID, authorName *string, publishedAt, updatedAt, obs
 	}
 	for _, discovery := range item.DiscoverySources {
 		*discoveries = appendUniqueDiscovery(*discoveries, discovery)
+	}
+}
+
+func projectableArtifactID(item zhihu.Item) (string, bool) {
+	if answerID, _, _, ok := parseAdmittedAnswer(item); ok {
+		return answerID, true
+	}
+	return parseAdmittedArticle(item)
+}
+
+func validatedAuthor(item zhihu.Item) (id, name string, ok bool) {
+	if item.AuthorIdentity == nil || !item.AuthorIdentity.Valid() {
+		return "", "", false
+	}
+	return item.AuthorIdentity.ID, item.AuthorIdentity.Name, true
+}
+
+func mergeProjectedAuthor(authorID, authorName *string, item zhihu.Item, conflict bool) {
+	id, name, verified := validatedAuthor(item)
+	if conflict {
+		*authorID = ""
+		if verified {
+			*authorName = deterministicText(*authorName, name)
+		} else {
+			*authorName = deterministicText(*authorName, item.Author)
+		}
+		return
+	}
+	if verified {
+		if *authorID == "" {
+			*authorID, *authorName = id, name
+			return
+		}
+		if *authorID == id {
+			*authorName = deterministicText(*authorName, name)
+		}
+		return
+	}
+	if *authorID == "" {
+		*authorName = deterministicText(*authorName, item.Author)
 	}
 }
 

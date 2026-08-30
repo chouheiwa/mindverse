@@ -4,7 +4,11 @@
 // 概念抽取（②）不在本包，见 internal/extract。
 package engine
 
-import "github.com/chouheiwa/mindverse/internal/zhihu"
+import (
+	"fmt"
+
+	"github.com/chouheiwa/mindverse/internal/zhihu"
+)
 
 const (
 	CurrentSchemaVersion   = "universe.v1"
@@ -101,6 +105,16 @@ type Star struct {
 	First                string       `json:"fi"`
 	Last                 string       `json:"la"`
 	Evidence             []Evidence   `json:"ev"`
+}
+
+func (s Star) Validate() error {
+	if s.Scope != ScopePrivate && s.Scope != ScopePublic {
+		return fmt.Errorf("unsupported star scope %q", s.Scope)
+	}
+	if s.Scope == ScopePrivate && s.ExternalQueryAllowed {
+		return fmt.Errorf("private star %q cannot allow external queries", s.ID)
+	}
+	return nil
 }
 
 // QuestionPlanet is a globally deduplicated, real Zhihu question. ID uses the

@@ -149,6 +149,11 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	if err := assignStableStarIDs(u.Stars, StableStarID); err != nil {
 		return nil, err
 	}
+	for _, star := range u.Stars {
+		if err := star.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	itemsByStarID := make(map[string][]int, len(u.Stars))
 	for _, star := range u.Stars {
 		if conceptIndex, ok := b.index[star.Concept]; ok {

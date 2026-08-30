@@ -123,6 +123,17 @@ func TestExtractedConceptsArePrivateByDefault(t *testing.T) {
 	}
 }
 
+func TestStarValidationRejectsPrivateExternalQuery(t *testing.T) {
+	invalid := Star{Scope: ScopePrivate, ExternalQueryAllowed: true}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("private star with external query capability must be rejected")
+	}
+	valid := Star{Scope: ScopePublic, ExternalQueryAllowed: true}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("public queryable star rejected: %v", err)
+	}
+}
+
 func TestProjectKnowledgeObjectsDeduplicatesQuestions(t *testing.T) {
 	in := Input{
 		Items:    []zhihu.Item{admittedAnswer("8", "7", "Real question"), admittedAnswer("9", "7", "Real question")},
@@ -165,6 +176,7 @@ func TestAnswerSatellitesAreCompleteAndDeduplicated(t *testing.T) {
 	first.Summary = "summary"
 	first.Author = "Alice"
 	first.AuthorID = "author:alice"
+	first.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Alice", URLToken: "alice"})
 	first.PublishedAt, first.UpdatedAt, first.ObservedAt = 100, 120, 140
 	first.LikeCount = 42
 	first.CommentCount = 5
@@ -256,6 +268,56 @@ func TestUnknownAuthorCannotSatisfyAuthorThreshold(t *testing.T) {
 	}
 }
 
+func TestMalformedLegacyAuthorIDIsNeverProjected(t *testing.T) {
+	it := admittedAnswer("8", "7", "Question")
+	it.Author = "Display name"
+	it.AuthorID = "display-name"
+	u, err := Run(Input{Items: []zhihu.Item{it}, Concepts: [][]string{{"Concept"}}}, smallOptions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Answers) != 1 || u.Answers[0].AuthorID != "" || u.Answers[0].AuthorName != "Display name" {
+		t.Fatalf("malformed legacy author ID became stable identity: %+v", u.Answers)
+	}
+}
+
+func TestConflictingVerifiedAuthorsAreQuarantinedIndependentOfOrder(t *testing.T) {
+	alice := admittedAnswer("8", "7", "Question")
+	alice.Author, alice.AuthorID = "Alice", "author:alice"
+	alice.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Alice", URLToken: "alice"})
+	bob := alice
+	bob.Author, bob.AuthorID = "Bob", "author:bob"
+	bob.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Bob", URLToken: "bob"})
+	for i, items := range [][]zhihu.Item{{alice, bob}, {bob, alice}} {
+		u, err := Run(Input{Items: items, Concepts: [][]string{{"Concept"}, {"Concept"}}}, smallOptions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(u.Answers) != 1 || u.Answers[0].AuthorID != "" || u.Answers[0].AuthorName != "Alice" {
+			t.Fatalf("case %d: conflicting authors not quarantined deterministically: %+v", i, u.Answers)
+		}
+	}
+}
+
+func TestVerifiedAuthorNameNeverPairsWithUnverifiedObservation(t *testing.T) {
+	verified := admittedAnswer("8", "7", "Question")
+	verified.Author, verified.AuthorID = "Alice", "author:alice"
+	verified.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Alice", URLToken: "alice"})
+	unverified := verified
+	unverified.Author = "Aardvark"
+	unverified.AuthorID = "author:aardvark"
+	unverified.AuthorIdentity = nil
+	for i, items := range [][]zhihu.Item{{verified, unverified}, {unverified, verified}} {
+		u, err := Run(Input{Items: items, Concepts: [][]string{{"Concept"}, {"Concept"}}}, smallOptions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(u.Answers) != 1 || u.Answers[0].AuthorID != "author:alice" || u.Answers[0].AuthorName != "Alice" {
+			t.Fatalf("case %d: stable ID paired with an unverified name: %+v", i, u.Answers)
+		}
+	}
+}
+
 func TestArticleProbeIsSingleEntity(t *testing.T) {
 	a := admittedArticle("21", "Article")
 	a.CommentCount = 12
@@ -339,12 +401,53 @@ func TestDuplicatePublicURLsNormalizeIndependentOfInputOrder(t *testing.T) {
 }
 
 func TestUniverseContractGolden(t *testing.T) {
-	it := admittedAnswer("8", "7", "Question")
-	in := Input{Items: []zhihu.Item{it}, Concepts: [][]string{{"Concept"}}}
+	answer := admittedAnswer("8", "7", "Question")
+	answer.Summary = "Answer summary"
+	answer.Author, answer.AuthorID = "Alice", "author:alice"
+	answer.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Alice", URLToken: "alice"})
+	answer.PublishedAt, answer.UpdatedAt, answer.ObservedAt = 100, 120, 140
+	answer.LikeCount, answer.CommentCount, answer.FavoriteCount = 1, 2, 3
+	answer.Bindings = []zhihu.UserContentBinding{
+		{Relation: zhihu.RelationCreated, At: 100},
+		{Relation: zhihu.RelationCollected, At: 150, Folders: []string{"Answers"}},
+	}
+	answer.DiscoverySources = []zhihu.DiscoverySource{
+		zhihu.DiscoveryPublicSearch, zhihu.DiscoveryFavoriteList, zhihu.DiscoveryOwnContent,
+	}
+	article := admittedArticle("21", "Article")
+	article.Summary = "Article summary"
+	article.Author, article.AuthorID = "Bob", "author:bob"
+	article.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Bob", URL: "https://www.zhihu.com/people/bob"})
+	article.PublishedAt, article.UpdatedAt, article.ObservedAt = 200, 220, 240
+	article.LikeCount, article.CommentCount, article.FavoriteCount = 4, 5, 6
+	article.Bindings = []zhihu.UserContentBinding{
+		{Relation: zhihu.RelationCreated, At: 200},
+		{Relation: zhihu.RelationCollected, At: 250, Folders: []string{"Articles"}},
+	}
+	article.DiscoverySources = []zhihu.DiscoverySource{
+		zhihu.DiscoveryPublicSearch, zhihu.DiscoveryFavoriteList, zhihu.DiscoveryOwnContent,
+	}
+	in := Input{Items: []zhihu.Item{answer, article}, Concepts: [][]string{{"Concept"}, {"Concept"}}}
 	u, err := Run(in, smallOptions, func([]string, []string) string { return "Cluster" })
 	if err != nil {
 		t.Fatal(err)
 	}
+	publicID, err := StableStarID(ScopePublic, "Public Concept")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicStar := Star{
+		ID: publicID, Scope: ScopePublic, ExternalQueryAllowed: true,
+		QuestionIDs: []string{"question:7"}, ProbeIDs: []string{"article:21"},
+		Concept: "Public Concept", Cluster: 0, Pos: [3]float64{1, 2, 3}, N: 1,
+	}
+	if err := publicStar.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	u.Stars = append(u.Stars, publicStar)
+	u.Meta.Concepts = len(u.Stars)
+	u.Clusters[0].Members = append(u.Clusters[0].Members, publicStar.Concept)
+	u.Clusters[0].N++
 	got, err := json.MarshalIndent(u, "", "  ")
 	if err != nil {
 		t.Fatal(err)

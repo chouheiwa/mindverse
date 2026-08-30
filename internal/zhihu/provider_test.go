@@ -82,6 +82,53 @@ func TestCollectionAuthorIdentityRequiresStableSource(t *testing.T) {
 	}
 }
 
+func TestResolvedAuthorIdentityIsCoherentAndValidated(t *testing.T) {
+	token := ResolveAuthorIdentity(&ContentAuthor{Name: "Alice", URLToken: "alice-1"})
+	if token == nil || token.ID != "author:alice-1" || token.Name != "Alice" || token.Source != AuthorIdentityURLToken || !token.Valid() {
+		t.Fatalf("URLToken did not produce coherent identity: %+v", token)
+	}
+	profile := ResolveAuthorIdentity(&ContentAuthor{Name: "Bob", URL: "https://www.zhihu.com/people/bob-2"})
+	if profile == nil || profile.ID != "author:bob-2" || profile.Name != "Bob" || profile.Source != AuthorIdentityProfileURL || !profile.Valid() {
+		t.Fatalf("profile URL did not produce coherent identity: %+v", profile)
+	}
+	malformed := AuthorIdentity{ID: "display-name", Name: "Display Name", Source: AuthorIdentityURLToken}
+	if malformed.Valid() {
+		t.Fatalf("malformed ID passed validation: %+v", malformed)
+	}
+}
+
+func TestMergerQuarantinesConflictingAuthorIdentities(t *testing.T) {
+	alice := CollectionItem{ContentID: "8", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/7/answer/8", Title: "Question", Author: &ContentAuthor{Name: "Alice", URLToken: "alice"}}
+	bob := alice
+	bob.Author = &ContentAuthor{Name: "Bob", URLToken: "bob"}
+	for i, observations := range [][]CollectionItem{{alice, bob}, {bob, alice}} {
+		m := newMerger(999)
+		m.addCollections(observations, "")
+		got := m.result()
+		if len(got) != 1 || got[0].AuthorIdentity != nil || got[0].AuthorID != "" {
+			t.Fatalf("case %d: conflicting verified authors were not quarantined: %+v", i, got)
+		}
+		if got[0].Author != "Alice" {
+			t.Fatalf("case %d: conflict display must be deterministic, got %q", i, got[0].Author)
+		}
+	}
+}
+
+func TestMergerNeverPairsVerifiedIDWithUnverifiedName(t *testing.T) {
+	verified := CollectionItem{ContentID: "8", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/7/answer/8", Title: "Question", Author: &ContentAuthor{Name: "Alice", URLToken: "alice"}}
+	unverified := verified
+	unverified.Author = &ContentAuthor{Name: "Aardvark"}
+	for i, observations := range [][]CollectionItem{{verified, unverified}, {unverified, verified}} {
+		m := newMerger(999)
+		m.addCollections(observations, "")
+		got := m.result()
+		if len(got) != 1 || got[0].AuthorIdentity == nil || got[0].AuthorIdentity.ID != "author:alice" ||
+			got[0].AuthorIdentity.Name != "Alice" || got[0].Author != "Alice" {
+			t.Fatalf("case %d: verified ID paired with an unverified display: %+v", i, got)
+		}
+	}
+}
+
 func TestMockProviderLoadsRealSample(t *testing.T) {
 	p := &MockProvider{Path: "../../testdata/corpus_sample.json"}
 	c, err := p.Fetch(context.Background())

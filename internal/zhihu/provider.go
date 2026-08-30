@@ -9,8 +9,17 @@ import (
 )
 
 // Item 是喂给语义引擎的统一语料单元。
-// 收藏与创作在此合流，只用 Own 区分 —— 这个区分是「暗物质」判据的全部来源。
+// 内容身份、用户关系、发现来源和三类时间各自作为独立真相源。
 type Item struct {
+	Identity         ContentIdentity      `json:"identity"`
+	Bindings         []UserContentBinding `json:"bindings,omitempty"`
+	DiscoverySources []DiscoverySource    `json:"discoverySources,omitempty"`
+	PublishedAt      int64                `json:"publishedAt,omitempty"`
+	UpdatedAt        int64                `json:"updatedAt,omitempty"`
+	ObservedAt       int64                `json:"observedAt,omitempty"`
+
+	// Deprecated compatibility fields. New ingestion paths write the domain
+	// fields above; these remain readable for legacy snapshots and consumers.
 	URL       string      `json:"url"`
 	Title     string      `json:"title"`
 	Summary   string      `json:"summary"`
@@ -25,6 +34,14 @@ type Item struct {
 
 // At 返回该条目在时间轴上的位置：收藏用收藏时刻，创作用发表时刻。
 func (i Item) At() int64 {
+	for _, binding := range i.Bindings {
+		if binding.Relation == RelationCollected && binding.At > 0 {
+			return binding.At
+		}
+	}
+	if i.PublishedAt > 0 {
+		return i.PublishedAt
+	}
 	if i.FavTime > 0 {
 		return i.FavTime
 	}
@@ -44,13 +61,25 @@ type Corpus struct {
 // Stats 汇总语料规模，用于前端展示与冷启动判断。
 func (c *Corpus) Stats() (total, own, fav int) {
 	for _, it := range c.Items {
-		if it.Own {
+		created, collected := it.userRelations()
+		if created {
 			own++
-		} else {
+		} else if collected || len(it.Bindings) == 0 && len(it.DiscoverySources) == 0 && !it.Own {
 			fav++
 		}
 	}
 	return len(c.Items), own, fav
+}
+
+func (i Item) userRelations() (created, collected bool) {
+	for _, binding := range i.Bindings {
+		created = created || binding.Relation == RelationCreated
+		collected = collected || binding.Relation == RelationCollected
+	}
+	if len(i.Bindings) == 0 {
+		created = i.Own
+	}
+	return created, collected
 }
 
 // Provider 抽象语料来源。
@@ -168,19 +197,21 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 		}
 		it := m.get(c.URL)
 		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
-		it.CreatedAt, it.LikeCount = c.CreatedAt, c.LikeCount
-		if c.FavTime > 0 {
-			it.FavTime = c.FavTime
-		}
+		it.Identity = ResolveIdentity(c.ContentType, "", c.URL, c.Title)
+		it.PublishedAt, it.LikeCount = c.CreatedAt, c.LikeCount
+		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryFavoriteList)
+		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCollected, At: c.FavTime})
 		if c.Author != nil {
 			it.Author = c.Author.Name
 		}
 		if folder != "" {
 			it.Folders = appendUniq(it.Folders, folder)
+			it.Bindings = addBindingFolder(it.Bindings, RelationCollected, folder)
 		}
 		for _, f := range c.Favlists {
 			if f.Title != "" {
 				it.Folders = appendUniq(it.Folders, f.Title)
+				it.Bindings = addBindingFolder(it.Bindings, RelationCollected, f.Title)
 			}
 		}
 	}
@@ -193,9 +224,42 @@ func (m *merger) addContents(items []ContentItem) {
 		}
 		it := m.get(c.URL)
 		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
-		it.CreatedAt, it.LikeCount = c.CreatedAt, c.LikeCount
-		it.Own = true
+		it.Identity = ResolveIdentity(c.ContentType, "", c.URL, c.Title)
+		it.PublishedAt, it.LikeCount = c.CreatedAt, c.LikeCount
+		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCreated, At: c.CreatedAt})
+		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryOwnContent)
 	}
+}
+
+func upsertBinding(bindings []UserContentBinding, binding UserContentBinding) []UserContentBinding {
+	for i := range bindings {
+		if bindings[i].Relation == binding.Relation {
+			if binding.At > 0 {
+				bindings[i].At = binding.At
+			}
+			return bindings
+		}
+	}
+	return append(bindings, binding)
+}
+
+func addBindingFolder(bindings []UserContentBinding, relation UserContentRelation, folder string) []UserContentBinding {
+	bindings = upsertBinding(bindings, UserContentBinding{Relation: relation})
+	for i := range bindings {
+		if bindings[i].Relation == relation {
+			bindings[i].Folders = appendUniq(bindings[i].Folders, folder)
+		}
+	}
+	return bindings
+}
+
+func appendDiscovery(sources []DiscoverySource, source DiscoverySource) []DiscoverySource {
+	for _, existing := range sources {
+		if existing == source {
+			return sources
+		}
+	}
+	return append(sources, source)
 }
 
 func (m *merger) result() []Item {

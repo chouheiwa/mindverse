@@ -40,6 +40,33 @@ func TestMockProviderLoadsRealSample(t *testing.T) {
 	t.Logf("样本 %d 条（创作 %d / 收藏 %d），带收藏夹归属 %d 条", total, own, fav, withFolder)
 }
 
+func TestMergerWritesBindingsAndTimes(t *testing.T) {
+	m := newMerger()
+	m.addCollections([]CollectionItem{{
+		ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456",
+		Title: "标题", CreatedAt: 100, FavTime: 200,
+	}}, "收藏夹")
+	m.addContents([]ContentItem{{
+		ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456",
+		Title: "标题", CreatedAt: 100,
+	}})
+
+	got := m.result()
+	if len(got) != 1 {
+		t.Fatalf("合并后应有 1 条，实际 %d", len(got))
+	}
+	it := got[0]
+	if it.PublishedAt != 100 {
+		t.Fatalf("内容创建时间应写入 PublishedAt，实际 %d", it.PublishedAt)
+	}
+	if len(it.Bindings) != 2 || it.Bindings[0].Relation != RelationCollected || it.Bindings[1].Relation != RelationCreated {
+		t.Fatalf("用户关系应分别保留 collected/created，实际 %#v", it.Bindings)
+	}
+	if len(it.DiscoverySources) != 2 || it.DiscoverySources[0] != DiscoveryFavoriteList || it.DiscoverySources[1] != DiscoveryOwnContent {
+		t.Fatalf("发现来源应分别保留 favorite_list/own_content，实际 %#v", it.DiscoverySources)
+	}
+}
+
 // 服务端会在列表中间谎报 IsEnd=true（丢弃失效条目后用「实收 < 请求」反推）。
 // 这里复现该行为：第 2 页只回 1 条并置 IsEnd=true，但后面还有数据。
 // 信 IsEnd 会停在 51 条；正确实现必须硬翻到空页，拿满 3 页。

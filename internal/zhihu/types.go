@@ -20,6 +20,29 @@ const (
 	CodeInternal = 90001
 )
 
+// UserContentRelation is an actual relation between the current user and an
+// artifact. Public discovery is intentionally not representable here.
+type UserContentRelation string
+
+const (
+	RelationCreated   UserContentRelation = "created"
+	RelationCollected UserContentRelation = "collected"
+)
+
+type UserContentBinding struct {
+	Relation UserContentRelation `json:"relation"`
+	At       int64               `json:"at,omitempty"`
+	Folders  []string            `json:"folders,omitempty"`
+}
+
+type DiscoverySource string
+
+const (
+	DiscoveryPublicSearch DiscoverySource = "public_search"
+	DiscoveryFavoriteList DiscoverySource = "favorite_list"
+	DiscoveryOwnContent   DiscoverySource = "own_content"
+)
+
 // APIError 承载服务端返回的业务错误。上层据此决定降级还是中止。
 type APIError struct {
 	Code     int

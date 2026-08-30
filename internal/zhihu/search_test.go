@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // 无法在测试里使用真实凭证，因此对着假服务器验证请求形态与解析。
@@ -79,17 +80,50 @@ func TestSearchItemToItem(t *testing.T) {
 		Title: "标题", ContentText: "摘要", ContentType: "Article",
 		URL: "https://zhuanlan.zhihu.com/p/1", EditTime: 1700000000, VoteUpCount: 7,
 	}
-	it := s.ToItem("游戏与博弈")
+	it := s.ToItem("游戏与博弈", func() time.Time { return time.Unix(1800000000, 0) })
 	if it.Own {
 		t.Error("种子星是「你想看的」，不是「你写过的」—— Own 必须为 false，否则暗物质判据会失效")
 	}
 	if it.Type != TypeArticle {
 		t.Errorf("类型应归一化为小写 article，实际 %q", it.Type)
 	}
-	if it.FavTime == 0 {
-		t.Error("需要时间戳，否则时间刻画拿不到分布")
-	}
 	if len(it.Folders) != 1 || it.Folders[0] != "游戏与博弈" {
 		t.Error("方向名要作为收藏夹先验注入概念抽取")
+	}
+}
+
+func TestSearchResultHasDiscoveryWithoutUserBinding(t *testing.T) {
+	s := SearchItem{ContentType: "Answer", ContentID: "456", URL: "https://www.zhihu.com/question/123/answer/456", Title: "标题"}
+	it := s.ToItem("", func() time.Time { return time.Unix(1800000000, 0) })
+
+	if len(it.DiscoverySources) != 1 || it.DiscoverySources[0] != DiscoveryPublicSearch {
+		t.Fatalf("公共搜索应只记录 public_search 发现来源，实际 %#v", it.DiscoverySources)
+	}
+	if len(it.Bindings) != 0 {
+		t.Fatalf("公共搜索不是用户关系，实际 %#v", it.Bindings)
+	}
+	if it.FavTime != 0 {
+		t.Fatalf("公共搜索不得伪造收藏时间，实际 %d", it.FavTime)
+	}
+	_, own, fav := (&Corpus{Items: []Item{it}}).Stats()
+	if own != 0 || fav != 0 {
+		t.Fatalf("公共发现不得计入用户创作或收藏，实际 own=%d fav=%d", own, fav)
+	}
+}
+
+func TestSearchEditTimeIsNeverPublishedTime(t *testing.T) {
+	const edited = int64(1700000000)
+	const observed = int64(1800000000)
+	s := SearchItem{ContentType: "Article", ContentID: "1", URL: "https://zhuanlan.zhihu.com/p/1", Title: "标题", EditTime: edited}
+	it := s.ToItem("", func() time.Time { return time.Unix(observed, 0) })
+
+	if it.PublishedAt != 0 || it.CreatedAt != 0 {
+		t.Fatalf("EditTime 不得冒充发表时间：PublishedAt=%d CreatedAt=%d", it.PublishedAt, it.CreatedAt)
+	}
+	if it.UpdatedAt != edited {
+		t.Fatalf("EditTime 应只映射到 UpdatedAt，实际 %d", it.UpdatedAt)
+	}
+	if it.ObservedAt != observed {
+		t.Fatalf("观测时间应由注入时钟决定，实际 %d", it.ObservedAt)
 	}
 }

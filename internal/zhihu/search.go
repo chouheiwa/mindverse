@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 // searchMaxCount 是服务端硬上限：Count > 10 会被自动截断。
@@ -55,24 +56,29 @@ func (c *Client) SearchZhihu(ctx context.Context, query string, count int) ([]Se
 
 // ToItem 把搜索结果转成语料单元。
 //
-// 标成非本人创作（Own=false）：种子星是「你想看的」，不是「你写过的」。
-// 这也让暗物质判据在游客模式下依然成立。
-func (s SearchItem) ToItem(folder string) Item {
+// 公共搜索只写发现来源，不会伪造收藏或创作关系。
+func (s SearchItem) ToItem(folder string, clocks ...func() time.Time) Item {
+	now := time.Now
+	if len(clocks) > 0 && clocks[0] != nil {
+		now = clocks[0]
+	}
 	var folders []string
 	if folder != "" {
 		folders = []string{folder}
 	}
 	return Item{
-		URL:       s.URL,
-		Title:     s.Title,
-		Summary:   s.ContentText,
-		Type:      ContentType(normalizeType(s.ContentType)),
-		CreatedAt: s.EditTime,
-		FavTime:   s.EditTime,
-		Own:       false,
-		Folders:   folders,
-		Author:    s.AuthorName,
-		LikeCount: int64(s.VoteUpCount),
+		Identity:         ResolveIdentity(ContentType(normalizeType(s.ContentType)), s.ContentID, s.URL, s.Title),
+		DiscoverySources: []DiscoverySource{DiscoveryPublicSearch},
+		UpdatedAt:        s.EditTime,
+		ObservedAt:       now().Unix(),
+		URL:              s.URL,
+		Title:            s.Title,
+		Summary:          s.ContentText,
+		Type:             ContentType(normalizeType(s.ContentType)),
+		Own:              false,
+		Folders:          folders,
+		Author:           s.AuthorName,
+		LikeCount:        int64(s.VoteUpCount),
 	}
 }
 

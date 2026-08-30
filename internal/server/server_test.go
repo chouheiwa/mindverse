@@ -49,7 +49,7 @@ func doRequest(t *testing.T, h http.Handler, method, path string, body any, cook
 
 func startSession(t *testing.T, s *Server) *http.Cookie {
 	t.Helper()
-	rr := doRequest(t, s.Routes(), http.MethodGet, "/api/health", nil, nil)
+	rr := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil)
 	for _, cookie := range rr.Result().Cookies() {
 		if cookie.Name == cookieName {
 			return cookie
@@ -217,9 +217,9 @@ func TestSessionOwnershipCookieLastsThroughShareTTL(t *testing.T) {
 	if cookie.Domain != "" || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("ownership cookie lost host-only security attributes: %+v", cookie)
 	}
-	// Every recognized request rolls the ownership window forward, so a share
+	// Every recognized protected request rolls the ownership window forward, so a share
 	// created late in the session remains deletable for its full TTL.
-	refreshed := doRequest(t, s.Routes(), http.MethodGet, "/api/health", nil, cookie).Result().Cookies()
+	refreshed := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, cookie).Result().Cookies()
 	if len(refreshed) == 0 || refreshed[0].MaxAge < int(share.TTL/time.Second) || time.Until(refreshed[0].Expires) < share.TTL-time.Minute {
 		t.Fatalf("recognized ownership cookie was not refreshed: %+v", refreshed)
 	}
@@ -237,6 +237,36 @@ func TestSessionLookupEvictsIdleSessionsBeyondShareTTL(t *testing.T) {
 	s.mu.Unlock()
 	if exists {
 		t.Fatal("idle session beyond ownership TTL was not evicted")
+	}
+}
+
+func TestPublicRoutesDoNotCreateSessions(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	for _, path := range []string{"/api/health", "/api/share/missing", "/", "/s/missing"} {
+		_ = doRequest(t, s.Routes(), http.MethodGet, path, nil, nil)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.sess) != 0 {
+		t.Fatalf("public requests created %d sessions", len(s.sess))
+	}
+}
+
+func TestSessionCleanupIsThrottledAndCeilingBounded(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	s.maxSessions = 3
+	runs := 0
+	s.onSessionCleanup = func() { runs++ }
+	for i := 0; i < 10; i++ {
+		_ = doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if runs != 1 {
+		t.Fatalf("cleanup scanned %d times", runs)
+	}
+	if len(s.sess) > s.maxSessions {
+		t.Fatalf("session ceiling exceeded: %d", len(s.sess))
 	}
 }
 

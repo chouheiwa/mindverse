@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,21 +43,24 @@ type Record struct {
 }
 
 type Store struct {
-	dir         string
-	mu          sync.RWMutex
-	byOwner     map[string]map[string]struct{}
-	activeFiles int
-	maxFiles    int
-	readFile    func(string) ([]byte, error)
-	syncDir     func(string) error
-	newID       func() (string, error)
+	dir            string
+	mu             sync.RWMutex
+	byOwner        map[string]map[string]struct{}
+	activeFiles    int
+	maxFiles       int
+	readFile       func(string) ([]byte, error)
+	syncDir        func(string) error
+	newID          func() (string, error)
+	removeFile     func(string) error
+	quarantineFile func(string) error
+	warn           func(string, error)
 }
 
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create share directory: %w", err)
 	}
-	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}, maxFiles: MaxActiveShares, readFile: os.ReadFile, syncDir: syncDir, newID: newID}
+	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}, maxFiles: MaxActiveShares, readFile: os.ReadFile, syncDir: syncDir, newID: newID, removeFile: removeAndSync, quarantineFile: quarantine, warn: func(message string, err error) { log.Printf("%s: %v", message, err) }}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -113,7 +117,7 @@ func (s *Store) Create(ownerSession string, view ShareView) (*Record, error) {
 	key := ownerKey(ownerSession)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.pruneExpiredOwned(key, now); err != nil {
+	if err := s.pruneExpiredAll(now); err != nil {
 		return nil, err
 	}
 	if len(s.byOwner[key]) >= MaxActivePerOwner {
@@ -134,8 +138,13 @@ func (s *Store) Create(ownerSession string, view ShareView) (*Record, error) {
 		}
 		committed, err := atomicWrite(s.path(id), b, s.syncDir)
 		if committed {
+			// The identity is externally observable after the atomic link. Return
+			// success to avoid retry ambiguity, but report reduced crash durability.
 			s.addOwner(key, id)
 			s.activeFiles++
+			if err != nil {
+				s.warn("share committed but directory sync failed", err)
+			}
 			return record, nil
 		}
 		if errors.Is(err, os.ErrExist) {
@@ -159,13 +168,17 @@ func (s *Store) Load(id string) (*Record, error) {
 	}
 	record, _, err := decodeRecord(id, b, time.Now())
 	if errors.Is(err, errExpired) {
-		_ = removeAndSync(path)
+		if cleanupErr := s.removeFile(path); cleanupErr != nil {
+			return nil, fmt.Errorf("remove expired share: %w", cleanupErr)
+		}
 		s.removeIDFromOwners(id)
 		s.activeFiles--
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		_ = quarantine(path)
+		if cleanupErr := s.quarantineFile(path); cleanupErr != nil {
+			return nil, fmt.Errorf("quarantine corrupt share: %w", cleanupErr)
+		}
 		s.removeIDFromOwners(id)
 		s.activeFiles--
 		return nil, ErrNotFound
@@ -351,7 +364,7 @@ func (s *Store) pruneExpiredOwned(key string, now time.Time) error {
 		}
 		_, _, err = decodeRecord(id, b, now)
 		if errors.Is(err, errExpired) {
-			if err := removeAndSync(s.path(id)); err != nil && !os.IsNotExist(err) {
+			if err := s.removeFile(s.path(id)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 			s.removeOwner(key, id)
@@ -359,6 +372,20 @@ func (s *Store) pruneExpiredOwned(key string, now time.Time) error {
 			continue
 		}
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) pruneExpiredAll(now time.Time) error {
+	keys := make([]string, 0, len(s.byOwner))
+	for key := range s.byOwner {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := s.pruneExpiredOwned(key, now); err != nil {
 			return err
 		}
 	}

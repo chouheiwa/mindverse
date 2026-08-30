@@ -25,6 +25,8 @@ import (
 )
 
 const cookieName = "mindverse_session"
+const maxSessionCount = 10000
+const sessionCleanupInterval = time.Minute
 
 // genState 是一次星图生成的状态。生成要跑模型，必然慢，所以异步 + 轮询。
 type genState string
@@ -82,8 +84,11 @@ type Server struct {
 	ext   extract.Extractor
 	seed  *seed.Builder
 
-	mu   sync.Mutex
-	sess map[string]*session
+	mu                 sync.Mutex
+	sess               map[string]*session
+	lastSessionCleanup time.Time
+	maxSessions        int
+	onSessionCleanup   func()
 }
 
 // New 构造服务。
@@ -94,9 +99,10 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 	}
 	return &Server{
 		cfg: cfg, store: store, ext: ext,
-		seed:  seed.NewBuilder(zhihu.NewClient(cfg.AccessSecret, "")),
-		oauth: &zhihu.OAuth{AppID: cfg.AppID, AppKey: cfg.AppKey, RedirectURI: cfg.RedirectURI},
-		sess:  map[string]*session{},
+		seed:        seed.NewBuilder(zhihu.NewClient(cfg.AccessSecret, "")),
+		oauth:       &zhihu.OAuth{AppID: cfg.AppID, AppKey: cfg.AppKey, RedirectURI: cfg.RedirectURI},
+		sess:        map[string]*session{},
+		maxSessions: maxSessionCount,
 	}, nil
 }
 
@@ -104,25 +110,26 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
-	mux.HandleFunc("GET /api/oauth/status", s.oauthStatus)
-	mux.HandleFunc("GET /auth/start", s.authStart)
-	mux.HandleFunc("GET /auth/callback", s.authCallback)
-	mux.HandleFunc("POST /auth/logout", s.authLogout)
-	mux.HandleFunc("GET /api/seed/topics", s.seedTopics)
-	mux.HandleFunc("POST /api/seed", s.seedStart)
-	mux.HandleFunc("POST /api/universe", s.universeStart)
-	mux.HandleFunc("GET /api/universe", s.universeGet)
-	mux.HandleFunc("POST /api/share", s.shareCreate)
-	mux.HandleFunc("POST /api/share/preview", s.sharePreview)
+	private := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, s.withSession(handler)) }
+	private("GET /api/oauth/status", s.oauthStatus)
+	private("GET /auth/start", s.authStart)
+	private("GET /auth/callback", s.authCallback)
+	private("POST /auth/logout", s.authLogout)
+	private("GET /api/seed/topics", s.seedTopics)
+	private("POST /api/seed", s.seedStart)
+	private("POST /api/universe", s.universeStart)
+	private("GET /api/universe", s.universeGet)
+	private("POST /api/share", s.shareCreate)
+	private("POST /api/share/preview", s.sharePreview)
 	mux.HandleFunc("GET /api/share/{id}", s.shareGet)
-	mux.HandleFunc("DELETE /api/share/{id}", s.shareDelete)
-	mux.HandleFunc("DELETE /api/session/data", s.wipe)
+	private("DELETE /api/share/{id}", s.shareDelete)
+	private("DELETE /api/session/data", s.wipe)
 	// 分享页复用同一张星图，数据由 /api/share/{id} 提供
 	mux.HandleFunc("GET /s/{id}", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(s.cfg.WebDir, "universe.html"))
 	})
 	mux.Handle("/", http.FileServer(http.Dir(s.cfg.WebDir)))
-	return s.withSession(mux)
+	return mux
 }
 
 // ── 会话 ──
@@ -150,6 +157,7 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
 		if !ok && validSessionID(c.Value) {
+			s.ensureSessionCapacityLocked()
 			sess = &session{id: c.Value, lastSeen: time.Now()}
 			s.sess[c.Value] = sess
 			ok = true
@@ -166,6 +174,7 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 	}
 	sess := &session{id: id, lastSeen: time.Now()}
 	s.mu.Lock()
+	s.ensureSessionCapacityLocked()
 	s.sess[id] = sess
 	s.mu.Unlock()
 	s.setSessionCookie(w, id)
@@ -174,7 +183,11 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 
 func (s *Server) evictIdleSessions(now time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if !s.lastSessionCleanup.IsZero() && now.Sub(s.lastSessionCleanup) < sessionCleanupInterval {
+		s.mu.Unlock()
+		return
+	}
+	s.lastSessionCleanup = now
 	for id, sess := range s.sess {
 		sess.mu.Lock()
 		idle := now.Sub(sess.lastSeen) > share.TTL
@@ -183,6 +196,28 @@ func (s *Server) evictIdleSessions(now time.Time) {
 			delete(s.sess, id)
 		}
 	}
+	hook := s.onSessionCleanup
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+func (s *Server) ensureSessionCapacityLocked() {
+	if s.maxSessions <= 0 || len(s.sess) < s.maxSessions {
+		return
+	}
+	var oldestID string
+	var oldest time.Time
+	for id, sess := range s.sess {
+		sess.mu.Lock()
+		seen := sess.lastSeen
+		sess.mu.Unlock()
+		if oldestID == "" || seen.Before(oldest) || seen.Equal(oldest) && id < oldestID {
+			oldestID, oldest = id, seen
+		}
+	}
+	delete(s.sess, oldestID)
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {

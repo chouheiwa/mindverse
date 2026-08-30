@@ -3,6 +3,7 @@ package share
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -354,6 +355,8 @@ func TestPruneParseFailurePreservesOwnerIndex(t *testing.T) {
 func TestCreateReturnsCommittedRecordWhenDirectorySyncFails(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
 	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	warned := false
+	store.warn = func(string, error) { warned = true }
 	store.syncDir = func(string) error { return errors.New("sync failed") }
 	record, err := store.Create("owner", view)
 	if err != nil || record == nil {
@@ -361,6 +364,75 @@ func TestCreateReturnsCommittedRecordWhenDirectorySyncFails(t *testing.T) {
 	}
 	if _, exists := store.byOwner[ownerKey("owner")][record.ID]; !exists {
 		t.Fatal("committed record missing owner index")
+	}
+	if !warned {
+		t.Fatal("committed directory sync failure was silent")
+	}
+}
+
+func TestLoadCleanupFailurePreservesAccounting(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt=%v", corrupt), func(t *testing.T) {
+			store, _ := NewStore(t.TempDir())
+			view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+			record, _ := store.Create("owner", view)
+			if corrupt {
+				_ = os.WriteFile(store.path(record.ID), []byte("{"), 0o600)
+				store.quarantineFile = func(string) error { return errors.New("quarantine failed") }
+			} else {
+				record.CreatedAt = time.Now().Add(-TTL)
+				record.ExpiresAt = time.Now().Add(-time.Second)
+				b, _ := json.Marshal(record)
+				_ = os.WriteFile(store.path(record.ID), b, 0o600)
+				store.removeFile = func(string) error { return errors.New("remove failed") }
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := store.Load(record.ID); err == nil || errors.Is(err, ErrNotFound) {
+					t.Fatalf("cleanup failure hidden: %v", err)
+				}
+			}
+			if store.activeFiles != 1 {
+				t.Fatalf("active count changed to %d", store.activeFiles)
+			}
+			if _, ok := store.byOwner[ownerKey("owner")][record.ID]; !ok {
+				t.Fatal("owner index removed on cleanup failure")
+			}
+		})
+	}
+}
+
+func TestGlobalQuotaPrunesExpiredOtherOwner(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.maxFiles = 1
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	old, _ := store.Create("old-owner", view)
+	old.CreatedAt = time.Now().Add(-TTL)
+	old.ExpiresAt = time.Now().Add(-time.Second)
+	b, _ := json.Marshal(old)
+	_ = os.WriteFile(store.path(old.ID), b, 0o600)
+	if _, err := store.Create("new-owner", view); err != nil {
+		t.Fatalf("expired other owner blocked capacity: %v", err)
+	}
+}
+
+func TestGlobalQuotaCleanupFailurePreservesAccounting(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.maxFiles = 1
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	old, _ := store.Create("old-owner", view)
+	old.CreatedAt = time.Now().Add(-TTL)
+	old.ExpiresAt = time.Now().Add(-time.Second)
+	b, _ := json.Marshal(old)
+	_ = os.WriteFile(store.path(old.ID), b, 0o600)
+	store.removeFile = func(string) error { return errors.New("remove failed") }
+	if _, err := store.Create("new-owner", view); err == nil {
+		t.Fatal("cleanup failure was hidden as quota or success")
+	}
+	if store.activeFiles != 1 {
+		t.Fatalf("cleanup failure changed active count: %d", store.activeFiles)
+	}
+	if _, ok := store.byOwner[ownerKey("old-owner")][old.ID]; !ok {
+		t.Fatal("cleanup failure removed owner index")
 	}
 }
 

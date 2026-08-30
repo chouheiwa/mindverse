@@ -281,6 +281,8 @@ func TestSaveDoesNotMutateCaller(t *testing.T) {
 
 func TestSaveReturnsCommittedSnapshotWhenDirectorySyncFails(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
+	warned := false
+	store.warn = func(string, error) { warned = true }
 	store.syncDir = func(string) error { return os.ErrInvalid }
 	snap, err := store.Save(sample())
 	if err != nil || snap == nil || snap.ID == "" {
@@ -288,6 +290,9 @@ func TestSaveReturnsCommittedSnapshotWhenDirectorySyncFails(t *testing.T) {
 	}
 	if _, statErr := os.Stat(store.path(snap.ID)); statErr != nil {
 		t.Fatalf("committed snapshot missing: %v", statErr)
+	}
+	if !warned {
+		t.Fatal("committed directory sync failure was silent")
 	}
 }
 

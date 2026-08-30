@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,13 +37,14 @@ type Store struct {
 	dir     string
 	mu      sync.RWMutex
 	syncDir func(string) error
+	warn    func(string, error)
 }
 
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建快照目录失败: %w", err)
 	}
-	return &Store{dir: dir, syncDir: syncDir}, nil
+	return &Store{dir: dir, syncDir: syncDir, warn: func(message string, err error) { log.Printf("%s: %v", message, err) }}, nil
 }
 
 func newID() (string, error) {
@@ -100,6 +102,11 @@ func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
 	committed, err := atomicWrite(s.path(id), b, s.syncDir)
 	if err != nil && !committed {
 		return nil, fmt.Errorf("写入快照失败: %w", err)
+	}
+	// A renamed snapshot already has a stable identity. Do not invite duplicate
+	// retries when only the directory durability sync failed; warn explicitly.
+	if err != nil {
+		s.warn("snapshot committed but directory sync failed", err)
 	}
 	return snap, nil
 }

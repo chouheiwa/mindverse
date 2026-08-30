@@ -72,14 +72,14 @@ export function InfoPanel({ universe, mode, wormIdx, onWorm, onClose, shared }: 
           {u.dark.map((d) => (
             <div key={d.c} style={{ marginBottom: 22 }}>
               <div style={{ fontFamily: 'var(--f-d)', fontSize: 18, fontWeight: 600, marginBottom: 4 }}>{d.c}</div>
-              <div className="mono" style={{ fontSize: 11, color: 'var(--mute)', marginBottom: 8 }}>
+              <div className="mono" style={{ fontSize: 11, color: 'var(--dim)', marginBottom: 8 }}>
                 {d.n} 条 · {d.first} → {d.last} · <em style={{ fontStyle: 'normal', color: 'var(--amber)' }}>已停 {d.gap} 个月</em>
               </div>
               {d.ev.map((e, i) => (
                 <a className="ev" key={i} href={e.u} target="_blank" rel="noopener noreferrer">
                   <div className="ev-t">{e.t || (shared ? '在知乎上打开这条内容' : '')}</div>
                   <div className="ev-m"><span className="pill fav">我收藏的</span>
-                    <span className="mono" style={{ fontSize: 10, color: 'var(--mute)' }}>{e.y}</span></div>
+                    <span className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>{e.y}</span></div>
                 </a>
               ))}
             </div>
@@ -99,7 +99,7 @@ export function InfoPanel({ universe, mode, wormIdx, onWorm, onClose, shared }: 
           {u.nebula.map((n) => (
             <div key={n.c} style={{ marginBottom: 18 }}>
               <div style={{ fontFamily: 'var(--f-d)', fontSize: 18, fontWeight: 600 }}>{n.c}</div>
-              <div className="mono" style={{ fontSize: 11, color: 'var(--mute)', margin: '4px 0 0' }}>
+              <div className="mono" style={{ fontSize: 11, color: 'var(--dim)', margin: '4px 0 0' }}>
                 {n.n} 条 · 集中度 {Math.round(n.burst * 100)}% · {n.first} → {n.last}
               </div>
             </div>
@@ -122,7 +122,7 @@ export function InfoPanel({ universe, mode, wormIdx, onWorm, onClose, shared }: 
               <div className="ev-t">{s.t || (shared ? '在知乎上打开这条内容' : '')}</div>
               <div className="ev-m">
                 <span className="pill fav">{s.c} ×{s.n}</span>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--mute)' }}>挂在「{s.g.join('、')}」上</span>
+                <span className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>挂在「{s.g.join('、')}」上</span>
               </div>
             </a>
           ))}

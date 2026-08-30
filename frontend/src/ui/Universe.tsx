@@ -187,6 +187,16 @@ export function UniverseView() {
     })
   }, [])
 
+  const closeStarPanel = useCallback(() => {
+    setStar(null)
+    setPlanet(null)
+    setQuestionEntry(null)
+    focusReturnRef.current = null
+    focusCardFromLaneRef.current = false
+    rendererRef.current?.resetView()
+    restorePanelFocus()
+  }, [restorePanelFocus])
+
   const onMode = useCallback((m: Mode, trigger: HTMLButtonElement) => {
     if (m !== 'all') panelFocusReturnRef.current = trigger
     setStar(null)
@@ -318,7 +328,7 @@ export function UniverseView() {
         <div className="uv-bar-in">
           {star ? (
             <nav className="uv-lad" aria-label="所在层级">
-              <button onClick={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView() }}>
+              <button onClick={closeStarPanel}>
                 全景
               </button>
               <span aria-hidden="true">›</span>
@@ -355,7 +365,7 @@ export function UniverseView() {
           getReturnFocus={getQuestionReturnFocus} />
       )}
       <Panel universe={universe} index={universeIndex} star={star} shared={shared}
-        onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView(); restorePanelFocus() }}
+        onClose={closeStarPanel}
         highlight={undefined}
         onEnterQuestion={enterQuestionFromPanel}
         onPickConcept={pickConcept} />

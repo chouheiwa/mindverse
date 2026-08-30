@@ -129,6 +129,21 @@ describe('Universe question keyboard integration', () => {
     expect(document.activeElement).not.toBe(document.body)
   })
 
+  test('restores focus after the star breadcrumb closes its own panel', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    const canvas = screen.getByLabelText('认知宇宙三维星图')
+    canvas.focus()
+    act(() => testState.callbacks?.onPick?.(star))
+
+    const breadcrumb = await screen.findByRole('navigation', { name: '所在层级' })
+    await user.click(within(breadcrumb).getByRole('button', { name: '全景' }))
+
+    await waitFor(() => expect(canvas).toHaveFocus())
+    expect(document.activeElement).not.toBe(document.body)
+  })
+
   test('enters directly from the panel and restores focus to its trigger', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)

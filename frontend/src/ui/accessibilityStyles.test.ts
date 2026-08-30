@@ -31,4 +31,9 @@ describe('question navigation accessibility styles', () => {
   test('uses the AA text token for panel empty and note copy', () => {
     expect(css('./Panel.css')).toMatch(/\.entry-empty, \.entry-note\s*\{[^}]*color:\s*var\(--dim\)/s)
   })
+
+  test('does not use the low-contrast mute token for small InfoPanel metadata', () => {
+    const infoPanel = readFileSync(new URL('./InfoPanel.tsx', import.meta.url), 'utf8')
+    expect(infoPanel).not.toMatch(/fontSize:\s*(?:10|11),\s*color:\s*'var\(--mute\)'/)
+  })
 })

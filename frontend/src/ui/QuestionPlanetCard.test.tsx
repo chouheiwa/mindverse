@@ -19,6 +19,8 @@ const planet = (relations: Partial<Pick<PlanetDatum, 'created' | 'collected'>> =
   created: false,
   collected: false,
   latestPublicAt: 35,
+  answers: [],
+  orbitIndex: 1,
   star: {} as PlanetDatum['star'],
   index: 0,
   u: [1, 0, 0],
@@ -60,6 +62,7 @@ describe('QuestionPlanetCard', () => {
     const user = userEvent.setup()
     const { container } = render(<QuestionPlanetCard planet={planet()} onClose={onClose} onEnter={onEnter} />)
     const enter = screen.getByRole('button', { name: '进入问题行星' })
+    const close = screen.getByRole('button', { name: '关闭问题行星入口' })
 
     await user.click(enter)
     enter.focus()
@@ -67,8 +70,14 @@ describe('QuestionPlanetCard', () => {
     await user.keyboard(' ')
     expect(onEnter).toHaveBeenCalledTimes(3)
 
-    await user.click(screen.getByRole('button', { name: '关闭问题行星入口' }))
+    await user.click(close)
     expect(onClose).toHaveBeenCalledOnce()
     expect(container.querySelector('button a, a button')).toBeNull()
+  })
+
+  test('announces a star-local orbit instead of the global WebGL instance index', () => {
+    render(<QuestionPlanetCard planet={{ ...planet(), index: 87, orbitIndex: 1 }} onClose={() => {}} onEnter={() => {}} />)
+    expect(screen.getByLabelText('轨道 1，2 个回答')).toBeInTheDocument()
+    expect(screen.getByText('QUESTION ORBIT 01')).toBeVisible()
   })
 })

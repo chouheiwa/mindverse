@@ -4,6 +4,7 @@ import { selectPlanetData, type QuestionPlanetDatum, type UniverseIndex } from '
 import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
 import { starData, type StarDatum } from './starData'
 import { renderDim } from './stars'
+import { PLANET_CONVERGENCE_START, PLANET_STAR_LOD_END_PX, PLANET_STAR_LOD_START_PX, indexPlanetsByStar } from '../planetVisibility'
 
 // 有体积的天体：恒星球体、行星、行星轨道。
 //
@@ -201,7 +202,7 @@ void main() {
   // LOD 挂在**恒星**的屏幕大小上，不是行星自己的 —— 否则一颗大行星会
   // 在恒星还是个点的时候先冒出来
   float starPx = iMeta.z * uProjScale / max(1.0, -mvS.z);
-  float lod = smoothstep(13.0, 40.0, starPx);
+  float lod = smoothstep(${PLANET_STAR_LOD_START_PX.toFixed(1)}, ${PLANET_STAR_LOD_END_PX.toFixed(1)}, starPx);
 
   vN = normalize(normalMatrix * nrm);
   vL = mvS.xyz - mv.xyz;
@@ -211,7 +212,7 @@ void main() {
   vSeed = iOrb.y;
   vSel = iSel;
   vColor = iColor;
-  vAlpha = iDim * lod * smoothstep(0.90, 1.0, uConverge)
+  vAlpha = iDim * lod * smoothstep(${PLANET_CONVERGENCE_START.toFixed(2)}, 1.0, uConverge)
          * depthFade(max(1.0, -mvC.z), uNear, uFar);
 }
 `
@@ -242,9 +243,8 @@ void main() {
   vec3 col;
   // 每颗行星都由自己的恒星照亮 —— 这是物理，对谁都成立。
   //
-  // 这里携带的数据是「新旧」：近期还在收的内容反照率高、带一层大气轮缘，
-  // 久远的暗而粗糙。曾经这里是「我写过的自己发光 / 只收藏的全黑」，
-  // 但绝大多数用户从不创作，那套规则会让他们的每一颗行星都是黑的。
+  // 这里携带的是问题回答的最近公开发布时间／更新时间：近期仍有公开活动的
+  // 问题反照率高、带一层大气轮缘，久远或无公开时间的更暗、更粗糙。
   float d = max(0.0, dot(N, L));
   float term = smoothstep(-0.06, 0.28, dot(N, L));
   float albedo = mix(0.30, 1.0, vFresh);
@@ -252,7 +252,7 @@ void main() {
   float atmo = pow(1.0 - max(0.0, dot(N, V)), 3.0) * vFresh * 0.55;
   col += vec3(0.42, 0.58, 0.95) * atmo * (0.25 + 0.75 * d);
 
-  // 我写过的：夜面也透出一点自己的光。是叠加，不再是有无光的分界。
+  // 存在真实 created binding：夜面透出一点暖光。
   if (vOwn > 0.5) {
     float rim = pow(1.0 - max(0.0, dot(N, V)), 2.2);
     vec3 glow = vec3(1.0, 0.80, 0.48);
@@ -338,6 +338,8 @@ export interface PlanetDatum {
   created: boolean
   collected: boolean
   latestPublicAt?: number
+  answers: QuestionPlanetDatum['answers']
+  orbitIndex: number
   /** 实例下标，用于置选中态 */
   index: number
   u: [number, number, number]
@@ -356,6 +358,8 @@ export interface BodyLayer {
   data: StarDatum[]
   /** 全部行星，顺序即实例顺序 */
   planets: PlanetDatum[]
+  /** 当前恒星系的预索引行星，避免拾取扫描整个宇宙。 */
+  planetsForStar(star: StarDatum): readonly PlanetDatum[]
   /** 置选中；传 -1 清空 */
   setSelected(index: number): void
   dispose(): void
@@ -503,6 +507,8 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
       created: p.datum.created,
       collected: p.datum.collected,
       latestPublicAt: p.datum.latestPublicAt,
+      answers: p.datum.answers,
+      orbitIndex: p.datum.orbitIndex,
       index: i,
       u: uu, v: vv, orbitR: r, phase, period, radius: rad,
     })
@@ -563,11 +569,13 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
   const pSelAttr = planetGeo.getAttribute('iSel') as THREE.InstancedBufferAttribute
   const rSelAttr = ringGeo.getAttribute('iSel') as THREE.InstancedBufferAttribute
   let selected = -1
+  const planetsByStar = indexPlanetsByStar(planetData)
 
   return {
     group,
     data,
     planets: planetData,
+    planetsForStar: (star) => planetsByStar.get(star) ?? [],
     setSelected(index) {
       if (index === selected) return
       if (selected >= 0) pSel[selected] = 0

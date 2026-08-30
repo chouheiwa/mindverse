@@ -13,6 +13,10 @@ type ObjectValue = Record<string, unknown>
 /** Above realistic personal-corpus sizes; rejects hostile payloads before traversal. */
 export const UNIVERSE_COLLECTION_LIMIT = 10_000
 const UNIVERSE_NODE_LIMIT = 100_000
+const UNIVERSE_EDGE_LIMIT = 250_000
+const UNIVERSE_PRIMITIVE_LIMIT = 250_000
+/** Rendering cap: one star system must remain navigable and GPU-safe. */
+export const UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT = 512
 const validatedWires = new WeakSet<object>()
 const normalizedByWire = new WeakMap<object, Universe>()
 const sanitizedArrays = new WeakSet<object>()
@@ -29,12 +33,25 @@ export interface UniverseIndex {
 /** Star-local rendering model for one globally indexed public question. */
 export interface QuestionPlanetDatum {
   readonly starId: string
+  readonly orbitIndex: number
   readonly question: QuestionPlanet
+  readonly aggregate: QuestionPlanetAggregate
+  readonly answers: readonly AnswerSatellite[]
   readonly answerCount: number
   readonly created: boolean
   readonly collected: boolean
   readonly latestPublicAt?: number
 }
+
+export interface QuestionPlanetAggregate {
+  readonly answers: readonly AnswerSatellite[]
+  readonly answerCount: number
+  readonly created: boolean
+  readonly collected: boolean
+  readonly latestPublicAt?: number
+}
+
+const aggregateByIndex = new WeakMap<UniverseIndex, ReadonlyMap<string, QuestionPlanetAggregate>>()
 
 const fail = (path: string, message: string): never => {
   throw new Error('invalid universe at ' + path + ': ' + message)
@@ -103,9 +120,15 @@ const list = (value: unknown, path: string): unknown[] => value === null ? [] : 
 
 function sanitizeInput(value: unknown): unknown {
   let nodes = 0
+  let edges = 0
+  let primitives = 0
   const active = new WeakSet<object>()
   const visit = (entry: unknown, path: string): unknown => {
-    if (typeof entry !== 'object' || entry === null) return entry
+    if (typeof entry !== 'object' || entry === null) {
+      primitives += 1
+      if (primitives > UNIVERSE_PRIMITIVE_LIMIT) fail(path, 'primitive budget exceeded')
+      return entry
+    }
     nodes += 1
     if (nodes > UNIVERSE_NODE_LIMIT) fail(path, 'object graph limit exceeded')
     if (active.has(entry)) fail(path, 'cyclic value is not JSON')
@@ -113,6 +136,8 @@ function sanitizeInput(value: unknown): unknown {
 
     if (Array.isArray(entry)) {
       const source = ownArrayValues(entry, path)
+      edges += source.length
+      if (edges > UNIVERSE_EDGE_LIMIT) fail(path, 'edge budget exceeded')
       const result = source.map((item, index) => visit(item, path + '[' + index + ']'))
       sanitizedArrays.add(result)
       active.delete(entry)
@@ -120,7 +145,10 @@ function sanitizeInput(value: unknown): unknown {
     }
 
     const result = Object.create(null) as ObjectValue
-    for (const key of Reflect.ownKeys(entry)) {
+    const keys = Reflect.ownKeys(entry)
+    edges += keys.length
+    if (edges > UNIVERSE_EDGE_LIMIT) fail(path, 'edge budget exceeded')
+    for (const key of keys) {
       const stringKey = typeof key === 'string' ? key : fail(path, 'unknown key ' + String(key))
       const descriptor = Object.getOwnPropertyDescriptor(entry, stringKey) ?? fail(path + '.' + stringKey, 'expected JSON data property')
       if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
@@ -404,6 +432,9 @@ function validateCurrent(universe: NormalizedCurrentUniverse): void {
     }
   })
   universe.stars.forEach((item, index) => {
+    if (item.questionIds.length > UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT) {
+      fail('stars[' + index + '].questionIds', 'rendering limit exceeded')
+    }
     validateRefs(item.questionIds, questions, 'stars[' + index + '].questionIds')
     validateRefs(item.probeIds, probes, 'stars[' + index + '].probeIds')
   })
@@ -518,31 +549,51 @@ export function selectPlanetData(
   star: Star | WireCurrentStar | WireLegacyStar,
 ): readonly QuestionPlanetDatum[] {
   if (!('id' in star) || !('questionIds' in star) || !star.questionIds?.length) return EMPTY_RESULT
-  const result: QuestionPlanetDatum[] = []
-  for (const questionId of star.questionIds) {
-    const question = index.questionsById.get(questionId)
-    if (!question) continue
-    let created = false
-    let collected = false
-    let latestPublicAt: number | undefined
-    for (const answerId of question.answerIds) {
-      const answer = index.answersById.get(answerId)
-      if (!answer) continue
-      for (const binding of answer.bindings) {
-        if (binding.relation === 'created') created = true
-        if (binding.relation === 'collected') collected = true
+  let aggregates = aggregateByIndex.get(index)
+  if (!aggregates) {
+    const built = new Map<string, QuestionPlanetAggregate>()
+    for (const question of index.questionsById.values()) {
+      const answers = Object.freeze(question.answerIds
+        .map((answerId) => index.answersById.get(answerId))
+        .filter((answer): answer is AnswerSatellite => answer !== undefined))
+      let created = false
+      let collected = false
+      let latestPublicAt: number | undefined
+      for (const answer of answers) {
+        for (const binding of answer.bindings) {
+          if (binding.relation === 'created') created = true
+          if (binding.relation === 'collected') collected = true
+        }
+        for (const at of [answer.publishedAt, answer.updatedAt]) {
+          if (at !== undefined && (latestPublicAt === undefined || at > latestPublicAt)) latestPublicAt = at
+        }
       }
-      for (const at of [answer.publishedAt, answer.updatedAt]) {
-        if (at !== undefined && (latestPublicAt === undefined || at > latestPublicAt)) latestPublicAt = at
-      }
+      built.set(question.id, Object.freeze({
+        answers,
+        answerCount: question.answerIds.length,
+        created,
+        collected,
+        ...(latestPublicAt === undefined ? {} : { latestPublicAt }),
+      }))
     }
+    aggregates = readonlyMap(built)
+    aggregateByIndex.set(index, aggregates)
+  }
+  const result: QuestionPlanetDatum[] = []
+  for (const [localIndex, questionId] of star.questionIds.entries()) {
+    const question = index.questionsById.get(questionId)
+    const aggregate = aggregates.get(questionId)
+    if (!question || !aggregate) continue
     const datum: QuestionPlanetDatum = {
       starId: star.id,
+      orbitIndex: localIndex + 1,
       question,
-      answerCount: question.answerIds.length,
-      created,
-      collected,
-      ...(latestPublicAt === undefined ? {} : { latestPublicAt }),
+      aggregate,
+      answers: aggregate.answers,
+      answerCount: aggregate.answerCount,
+      created: aggregate.created,
+      collected: aggregate.collected,
+      ...(aggregate.latestPublicAt === undefined ? {} : { latestPublicAt: aggregate.latestPublicAt }),
     }
     result.push(Object.freeze(datum))
   }

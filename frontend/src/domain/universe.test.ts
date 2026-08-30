@@ -10,6 +10,7 @@ import {
   publicStarsForShare,
   questionsForStar,
   selectPlanetData,
+  UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT,
 } from './universe'
 
 const evidence = { t: 'private evidence', u: 'https://example.test/private', o: 1, y: '26.08' }
@@ -61,7 +62,26 @@ describe('current universe indexes', () => {
 
     expect(alpha).not.toBe(beta)
     expect(alpha.question).toBe(beta.question)
+    expect(alpha.aggregate).toBe(beta.aggregate)
+    expect(alpha.answers).toBe(beta.answers)
     expect(alpha.starId).not.toBe(beta.starId)
+    expect(alpha.orbitIndex).toBe(1)
+    expect(beta.orbitIndex).toBe(1)
+  })
+
+  test('rejects a star question-reference fanout above the rendering budget', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    changed.stars![0].questionIds = Array.from(
+      { length: UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT + 1 },
+      (_, index) => `question:${index + 1}`,
+    )
+    expect(() => parseUniverse(changed)).toThrow(/stars\[0\]\.questionIds.*rendering limit/)
+  })
+
+  test('rejects a million primitive edges before allocating a complete normalized copy', () => {
+    const changed = clone(fixture) as unknown as Record<string, unknown>
+    changed.bomb = Array.from({ length: 101 }, () => Array<unknown>(10_000).fill(0))
+    expect(() => parseUniverse(changed)).toThrow(/bomb.*edge budget exceeded/)
   })
 
   test('derives answer aggregates only from referenced answer public timestamps and bindings', () => {

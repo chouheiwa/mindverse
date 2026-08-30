@@ -13,6 +13,7 @@ import { makeOverlay3D, type Overlay3D } from './gl/overlay3d'
 import { Labels } from './gl/labels'
 import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
+import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
 
 /**
  * 星图渲染器。
@@ -132,6 +133,9 @@ export class Renderer {
   /** 目标刚换过，下一帧重新量一次偏移 */
   private retarget = true
   private selected: PlanetDatum | null = null
+  private convergence: number
+  private depthNear = 1
+  private depthFar = 4000
 
   private dragging = false
   private lx = 0
@@ -139,6 +143,7 @@ export class Renderer {
   private moved = 0
 
   private tmp = new THREE.Vector3()
+  private tmp2 = new THREE.Vector3()
   private lost = false
 
   private canvas: HTMLCanvasElement
@@ -160,6 +165,7 @@ export class Renderer {
     this.reduceMotion = reduceMotion
     this.cb = cb
     this.genesisDone = reduceMotion
+    this.convergence = reduceMotion ? 1 : 0
     this.quality = quality
 
     this.R = sceneRadius(u)
@@ -294,6 +300,13 @@ export class Renderer {
     if (this.focusStar) this.targetDist = SYSTEM_DIST
   }
 
+  /** Semantic-list equivalent of pointer picking. */
+  selectQuestionPlanet(starId: string, questionId: string): PlanetDatum | null {
+    const planet = findQuestionPlanet(this.bodies.planets, starId, questionId)
+    if (planet) this.selectPlanet(planet)
+    return planet
+  }
+
   skipGenesis() {
     if (this.skipAt === null) this.skipAt = performance.now()
   }
@@ -331,6 +344,7 @@ export class Renderer {
     const skipK = this.skipAt === null ? 0 : clamp((now - this.skipAt) / SKIP_MS, 0, 1)
     const natural = this.reduceMotion ? 1 : clamp((A - CONVERGE_FROM) / CONVERGE_MS, 0, 1)
     const conv = Math.max(1 - Math.pow(1 - natural, 3), skipK)
+    this.convergence = conv
     const litFloor = this.reduceMotion ? 1 : skipK
 
     if (!this.reduceMotion && now - this.lastTouch > 3500 && conv > 0.95) {
@@ -382,6 +396,8 @@ export class Renderer {
     const originDist = this.camera.position.length()
     const near = Math.max(1, originDist - this.R * 1.15)
     const far = originDist + this.R * 1.75
+    this.depthNear = near
+    this.depthFar = far
     const projScale = (this.h * this.dpr * 0.5) / Math.tan((FOV * Math.PI) / 360)
 
     for (const l of [this.stars, this.dust, this.overlay, this.bodies]) {
@@ -531,13 +547,7 @@ export class Renderer {
     // 恒星还在点精灵阶段时行星根本没画出来，这里也就不会误中。
     const planet = this.hitPlanet(x, y)
     if (planet) {
-      this.selected = planet
-      this.bodies.setSelected(planet.index)
-      // 记住它的恒星：取消选中时好退回恒星系视角
-      this.focusStar = planet.star
-      this.targetDist = planetDist(planet.orbitR)
-      this.retarget = true
-      this.cb.onPickPlanet?.(planet)
+      this.selectPlanet(planet)
       return
     }
     this.clearPlanet()
@@ -555,25 +565,44 @@ export class Renderer {
     this.cb.onPick?.(star?.s ?? null)
   }
 
+  private selectPlanet(planet: PlanetDatum) {
+    this.selected = planet
+    this.bodies.setSelected(planet.index)
+    this.focusStar = planet.star
+    this.targetDist = planetDist(planet.orbitR)
+    this.retarget = true
+    this.cb.onPickPlanet?.(planet)
+  }
+
   /** 光标下最近的行星，没有就返回 null。 */
   private hitPlanet(x: number, y: number): PlanetDatum | null {
+    if (!this.focusStar) return null
     const A = this.reduceMotion ? 0 : this.lastNow - (this.t0 ?? this.lastNow)
     const projScale = (this.h * this.dpr * 0.5) / Math.tan((FOV * Math.PI) / 360)
 
     let best: PlanetDatum | null = null
     let bestD = Infinity
 
-    for (const p of this.bodies.planets) {
-      if (modeDim(p.star.s, this.mode, this.u, this.wormIdx) < 0.4) continue
+    for (const p of this.bodies.planetsForStar(this.focusStar)) {
+      const dim = modeDim(p.star.s, this.mode, this.u, this.wormIdx)
       this.planetWorld(p, A, this.tmp)
-      const viewZ = Math.max(1, this.tmp.distanceTo(this.camera.position))
+      this.tmp2.copy(this.tmp).applyMatrix4(this.camera.matrixWorldInverse)
+      const planetViewZ = Math.max(1, -this.tmp2.z)
+      this.starWorld(p.star, A, this.tmp2).applyMatrix4(this.camera.matrixWorldInverse)
+      const starViewZ = Math.max(1, -this.tmp2.z)
+      const starPx = p.star.bodyR * projScale / starViewZ
 
-      // 屏幕上不到 3px 的东西不该能点中 —— 那是 LOD 还没把它交出来
-      const pxRadius = (p.radius * (projScale / viewZ)) / this.dpr
-      if (pxRadius < 3) continue
-
+      const pxRadius = (p.radius * (projScale / planetViewZ)) / this.dpr
       this.tmp.project(this.camera)
-      if (this.tmp.z < -1 || this.tmp.z > 1) continue
+      if (!planetPickVisible({
+        starPx,
+        convergence: this.convergence,
+        modeDim: dim,
+        viewZ: planetViewZ,
+        near: this.depthNear,
+        far: this.depthFar,
+        clipZ: this.tmp.z,
+      })) continue
       const sx = (this.tmp.x * 0.5 + 0.5) * this.w
       const sy = (-this.tmp.y * 0.5 + 0.5) * this.h
       const d = Math.hypot(sx - x, sy - y)

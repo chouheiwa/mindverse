@@ -1,0 +1,17 @@
+.ql { position: fixed; z-index: 8; left: 30px; bottom: calc(var(--bar-h) + 22px); width: min(350px, calc(100vw - 60px));
+  color: var(--ink); background: rgba(7, 11, 24, .94); border: 1px solid var(--rule); border-radius: 2px }
+.ql summary { min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 8px 13px; cursor: pointer;
+  color: var(--readout, #AEB8D2); font-family: var(--f-m); font-size: 10px; letter-spacing: .15em; list-style: none }
+.ql summary::-webkit-details-marker { display: none }
+.ql summary::before { content: '⌄'; color: var(--star) }
+.ql details:not([open]) summary::before { content: '›' }
+.ql summary span { margin-left: auto; font-variant-numeric: tabular-nums }
+.ql ol { max-height: min(34vh, 300px); overflow: auto; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule) }
+.ql li + li { border-top: 1px solid var(--rule-soft) }
+.ql li button { width: 100%; min-height: 48px; display: grid; grid-template-columns: 25px minmax(0, 1fr) auto; align-items: center;
+  gap: 8px; padding: 7px 12px; border: 0; border-radius: 0; background: transparent; text-align: left }
+.ql li button:hover, .ql li button.is-selected { background: rgba(70, 91, 153, .16) }
+.ql li span, .ql li i { color: var(--readout, #AEB8D2); font-family: var(--f-m); font-size: 9px; font-style: normal }
+.ql li b { overflow: hidden; color: var(--ink); font-family: var(--f-b); font-size: 11.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap }
+.ql > details > p { margin: 0; padding: 14px; color: var(--readout, #AEB8D2); font-size: 11px }
+@media (max-width: 760px) { .ql { left: 18px; bottom: 226px; width: calc(100vw - 36px) } }

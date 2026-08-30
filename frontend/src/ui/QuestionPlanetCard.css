@@ -15,11 +15,11 @@
   border-right: 1px solid rgba(155, 176, 255, .18); border-bottom: 1px solid rgba(155, 176, 255, .18);
 }
 .qpc.below::after { top: -5px; bottom: auto; border: 0; border-left: 1px solid rgba(155, 176, 255, .18); border-top: 1px solid rgba(155, 176, 255, .18) }
-.qpc-close { position: absolute; right: 7px; top: 6px; padding: 4px 6px; border: 0; background: none;
-  color: var(--mute); font-family: var(--f-m); font-size: 16px; line-height: 1; cursor: pointer }
+.qpc-close { position: absolute; right: 0; top: 0; width: 44px; height: 44px; padding: 0; border: 0; background: none;
+  color: var(--readout); font-family: var(--f-m); font-size: 16px; line-height: 1; cursor: pointer }
 .qpc-close:hover { color: var(--ink) }
 .qpc-readout { display: flex; align-items: center; gap: 8px; padding-right: 22px;
-  color: var(--mute); font-family: var(--f-m); font-size: 9px; letter-spacing: .13em }
+  color: var(--readout); font-family: var(--f-m); font-size: 9px; letter-spacing: .13em }
 .qpc-count { margin-left: auto; color: var(--dim); letter-spacing: .04em; white-space: nowrap }
 .qpc-orbit { position: relative; width: 18px; height: 8px; flex: none; border: 1px solid rgba(155, 176, 255, .34); border-radius: 50% }
 .qpc-orbit i { position: absolute; right: 1px; top: -2px; width: 4px; height: 4px; border-radius: 50%; background: var(--star) }
@@ -29,10 +29,10 @@
 .qpc-relation { margin: 8px 0 0; color: var(--dim); font-size: 11px }
 .qpc-relation.is-created { color: #D8B77D }
 .qpc-actions { display: flex; align-items: center; gap: 15px; margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--rule-soft) }
-.qpc-enter { min-height: 34px; padding: 8px 13px; border: 1px solid rgba(155, 176, 255, .38); border-radius: 2px;
+.qpc-enter { min-height: 44px; padding: 8px 13px; border: 1px solid rgba(155, 176, 255, .38); border-radius: 2px;
   background: rgba(70, 91, 153, .18); color: var(--ink); font-family: var(--f-m); font-size: 10.5px; letter-spacing: .05em }
 .qpc-enter:hover { border-color: var(--star); background: rgba(70, 91, 153, .28) }
-.qpc-actions a { color: var(--dim); font-family: var(--f-m); font-size: 10px; white-space: nowrap }
+.qpc-actions a { min-height: 44px; display: inline-flex; align-items: center; color: var(--readout); font-family: var(--f-m); font-size: 10px; white-space: nowrap }
 .qpc-actions a:hover { color: var(--ink) }
 .qpc :is(button, a):focus-visible { outline: 2px solid var(--amber); outline-offset: 3px }
 

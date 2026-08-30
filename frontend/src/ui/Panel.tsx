@@ -64,7 +64,7 @@ function EvidenceList({ items, shared, highlight, fresh }: {
       {items.map((e, i) => (
         <a className={`evp${highlight && e.u === highlight ? ' on' : ''}`} key={i}
           href={e.u} target="_blank" rel="noopener noreferrer">
-          {/* 明暗 = 新旧，暖色圈 = 我写过的 —— 与 3D 里那颗行星逐项对应 */}
+          {/* 个人内容档案的旧关系标记，不映射为 3D 问题行星。 */}
           <span className={`pdot${e.o ? ' own' : ''}`}
             style={{ opacity: 0.34 + 0.66 * fresh(e.y) }} />
           {/* 分享快照不含原文标题 —— 只存结构与公开链接 */}
@@ -96,7 +96,7 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
           <div>
             <h2>{star.c}</h2>
             <div className="pnl-strip">
-              {star.n} 颗行星<u>·</u>{star.o} 创作<u>·</u>{star.f} 收藏<u>·</u>属于「{cluster?.name}」星群
+              {star.n} 条内容<u>·</u>{star.o} 创作<u>·</u>{star.f} 收藏<u>·</u>属于「{cluster?.name}」星群
             </div>
           </div>
 
@@ -117,7 +117,7 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
           </div>
 
           <div>
-            <h3>构成它的内容 · 每一条就是一颗行星</h3>
+            <h3>构成它的个人内容档案</h3>
             <div className="lgd">
               <span>点越亮 = 收得越近</span>
               {star.o > 0 && <span><i className="pdot own" />暖色圈 = 我写过的</span>}

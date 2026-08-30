@@ -7,6 +7,7 @@
   --ink: #DDE4F2;
   --dim: #9AA4BE;
   --mute: #697291;
+  --readout: #AEB8D2;
   --rule: #161D33;
   --rule-soft: rgba(155, 176, 255, .10);
   --panel: rgba(8, 12, 26, .90);
@@ -85,10 +86,8 @@ button.primary {
 }
 button.primary:hover:not(:disabled) { filter: brightness(1.08) }
 
-/* 行星点。明暗 = 内容的新旧（由内联 opacity 给），暖色圈 = 我写过的。
-   与 3D 里那颗行星的着色规则一一对应，右侧列表和行星卡共用，所以放在 token 层。
-   曾经是「实心=自己发光 / 半明半暗=只反射」—— 那套规则假设用户是创作者，
-   对只收藏的人每一颗都是暗的，等于没有信息。 */
+/* 旧内容档案点：只用于 Evidence 列表，不能冒充问题行星。
+   明暗 = 内容的新旧（由内联 opacity 给），暖色圈 = 我写过的。 */
 .pdot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
   background: linear-gradient(115deg, #C6D0EC 0%, #7C88AE 42%, #232B44 68%) }
 .pdot.own { box-shadow: 0 0 0 1.5px rgba(255, 196, 107, .55), 0 0 7px 1px rgba(255, 180, 90, .35) }

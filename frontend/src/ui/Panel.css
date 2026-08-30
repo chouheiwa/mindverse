@@ -39,10 +39,7 @@
 .metrics div { background: rgba(7, 11, 24, .9); padding: 13px 15px }
 .metrics b { font-family: var(--f-m); font-size: 21px; font-weight: 500; font-variant-numeric: tabular-nums }
 
-/* 行星图例与列表。
-   实心点 = 自己发光（我写过的），半明半暗 = 只反射恒星的光（我只收藏的）——
-   与 3D 里两种行星的着色一致。旧版是「我写的 / 我收藏的」两个文字标签，
-   和画面里看到的东西没有任何对应关系。 */
+/* 旧 Evidence 内容档案的关系图例；不映射为 3D 问题行星。 */
 .lgd { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 11.5px; color: var(--mute);
   margin: -2px 0 12px }
 .lgd span { display: flex; align-items: center; gap: 7px }
@@ -55,7 +52,7 @@
   transition: color var(--t-instant) var(--e-enter) }
 .evp:hover .evp-t { color: var(--star) }
 .evp-y { font-family: var(--f-m); font-size: 10px; color: var(--mute); flex: none }
-/* 与 3D 里被选中的那颗行星对应 */
+/* 保留给未来回答／探测器内容选中态；问题行星不使用 Evidence URL 高亮。 */
 .evp.on { background: rgba(155, 176, 255, .07); box-shadow: inset 2px 0 0 var(--star);
   margin: 0 -12px; padding: 11px 12px }
 .evp.on .evp-t { color: var(--star-hi) }

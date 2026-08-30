@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chouheiwa/mindverse/internal/engine"
 	"github.com/chouheiwa/mindverse/internal/zhihu"
@@ -25,7 +26,7 @@ func shareUniverse() *engine.Universe {
 			{ID: "question:9", QuestionID: "9", Title: "Other question", URL: "https://www.zhihu.com/question/9", AnswerIDs: []string{"answer:10"}},
 		},
 		Answers: []engine.AnswerSatellite{
-			{ID: "answer:8", QuestionID: "question:7", Title: "Public answer", Summary: "private-ish summary", URL: "https://www.zhihu.com/question/7/answer/8", AuthorID: "alice", AuthorName: "Alice", PublishedAt: 10, UpdatedAt: 20, ObservedAt: 30, LikeCount: 4, CommentCount: 5, FavoriteCount: 6, Bindings: []zhihu.UserContentBinding{{Relation: zhihu.RelationCreated}}, DiscoverySources: []zhihu.DiscoverySource{zhihu.DiscoveryOwnContent}},
+			{ID: "answer:8", QuestionID: "question:7", Title: "Public answer", Summary: "private-ish summary", URL: "https://www.zhihu.com/question/7/answer/8", AuthorID: "author:alice", AuthorName: "Alice", PublishedAt: 10, UpdatedAt: 20, ObservedAt: 30, LikeCount: 4, CommentCount: 5, FavoriteCount: 6, Bindings: []zhihu.UserContentBinding{{Relation: zhihu.RelationCreated}}, DiscoverySources: []zhihu.DiscoverySource{zhihu.DiscoveryOwnContent}},
 			{ID: "answer:10", QuestionID: "question:9", Title: "Other answer", URL: "https://www.zhihu.com/question/9/answer/10"},
 		},
 		Probes: []engine.ArticleProbe{{ID: "article:1", Title: "unselected article", URL: "https://zhuanlan.zhihu.com/p/1"}},
@@ -72,6 +73,47 @@ func TestBuildShareViewRejectsUnknownIDsDeterministically(t *testing.T) {
 	_, err2 := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:a", "question:z"}})
 	if err1 == nil || err2 == nil || err1.Error() != err2.Error() || !strings.Contains(err1.Error(), "question:a, question:z") {
 		t.Fatalf("unknown ID errors are not deterministic: %v / %v", err1, err2)
+	}
+}
+
+func TestBuildShareViewRejectsDuplicateSelection(t *testing.T) {
+	_, err := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7", "question:7"}})
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate explicit selection should be rejected: %v", err)
+	}
+}
+
+func TestBuildShareViewRejectsDuplicateUniverseQuestionIDs(t *testing.T) {
+	u := shareUniverse()
+	u.Questions = append(u.Questions, u.Questions[0])
+	if _, err := BuildView(u, ShareSelection{QuestionIDs: []string{"question:7"}}); err == nil {
+		t.Fatal("duplicate universe question IDs should not be silently overwritten")
+	}
+}
+
+func TestShareViewValidateRejectsMalformedPublicData(t *testing.T) {
+	valid, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	tests := []struct {
+		name   string
+		mutate func(*ShareView)
+	}{
+		{"schema", func(v *ShareView) { v.SchemaVersion = "share.v2" }},
+		{"question URL", func(v *ShareView) { v.Questions[0].URL = "https://example.com/7" }},
+		{"answer ref", func(v *ShareView) { v.Questions[0].AnswerIDs = []string{"answer:9"} }},
+		{"negative count", func(v *ShareView) { v.Answers[0].LikeCount = -1 }},
+		{"unverified author display", func(v *ShareView) { v.Answers[0].AuthorID = "" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			view := valid
+			view.Questions = append([]Question(nil), valid.Questions...)
+			view.Answers = append([]Answer(nil), valid.Answers...)
+			view.Questions[0].AnswerIDs = append([]string(nil), valid.Questions[0].AnswerIDs...)
+			tc.mutate(&view)
+			if err := view.Validate(); err == nil {
+				t.Fatalf("malformed %s passed validation", tc.name)
+			}
+		})
 	}
 }
 
@@ -143,7 +185,7 @@ func TestDeleteAllOwnedLeavesOtherOwnersShares(t *testing.T) {
 
 func TestLegacyOwnerlessShareIsReadableButNotDeletable(t *testing.T) {
 	dir := t.TempDir()
-	legacy := map[string]any{"id": "legacy", "expiresAt": "2099-01-01T00:00:00Z", "universe": map[string]any{}}
+	legacy := map[string]any{"id": "legacy", "createdAt": "2098-12-02T00:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "universe": map[string]any{}}
 	b, _ := json.Marshal(legacy)
 	_ = os.WriteFile(filepath.Join(dir, "legacy.json"), b, 0o600)
 	store, _ := NewStore(dir)
@@ -169,5 +211,61 @@ func TestStoredViewEqualsPreview(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.View, view) {
 		t.Fatalf("persisted view differs from preview:\nwant %+v\ngot  %+v", view, loaded.View)
+	}
+}
+
+func TestNewStoreQuarantinesCorruptCurrentRecords(t *testing.T) {
+	dir := t.TempDir()
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	now := time.Now()
+	validOwner := strings.Repeat("a", 64)
+	cases := []struct {
+		fileID string
+		record Record
+	}{
+		{"missing_owner", Record{ID: "missing_owner", CreatedAt: now, ExpiresAt: now.Add(TTL), View: view}},
+		{"mismatch", Record{ID: "different", CreatedAt: now, ExpiresAt: now.Add(TTL), OwnerKey: validOwner, View: view}},
+		{"invalid_view", Record{ID: "invalid_view", CreatedAt: now, ExpiresAt: now.Add(TTL), OwnerKey: validOwner, View: ShareView{SchemaVersion: "share.v2"}}},
+	}
+	for _, tc := range cases {
+		b, _ := json.Marshal(tc.record)
+		if err := os.WriteFile(filepath.Join(dir, tc.fileID+".json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		if _, err := store.Load(tc.fileID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("corrupt record %s remains loadable: %v", tc.fileID, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, tc.fileID+".json")); !os.IsNotExist(err) {
+			t.Fatalf("corrupt record %s remains in public namespace", tc.fileID)
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	quarantined := 0
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".corrupt") {
+			quarantined++
+		}
+	}
+	if quarantined != len(cases) {
+		t.Fatalf("quarantined %d records, want %d", quarantined, len(cases))
+	}
+}
+
+func TestShareStoreEnforcesPerOwnerQuota(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	for i := 0; i < MaxActivePerOwner; i++ {
+		if _, err := store.Create("owner", view); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	if _, err := store.Create("owner", view); !errors.Is(err, ErrQuota) {
+		t.Fatalf("over-quota create should return ErrQuota: %v", err)
 	}
 }

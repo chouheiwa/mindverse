@@ -6,11 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,8 +49,11 @@ type generation struct {
 
 // session 只驻留内存。OAuth token 绝不落盘。
 type session struct {
+	opMu         sync.Mutex
 	mu           sync.Mutex
 	id           string
+	epoch        uint64
+	genCancel    context.CancelFunc
 	state        string
 	token        *zhihu.Token
 	stateChecked bool
@@ -60,11 +65,18 @@ type session struct {
 	lastSeen     time.Time
 }
 
+type shareStore interface {
+	Create(string, share.ShareView) (*share.Record, error)
+	Load(string) (*share.Record, error)
+	DeleteOwned(string, string) error
+	DeleteAllOwned(string) error
+}
+
 // Server 是应用主体。
 type Server struct {
 	cfg   *config.Config
 	oauth *zhihu.OAuth
-	store *share.Store
+	store shareStore
 	ext   extract.Extractor
 	seed  *seed.Builder
 
@@ -141,27 +153,44 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 		}
 		s.mu.Unlock()
 		if ok {
+			s.setSessionCookie(w, sess.id)
 			return sess
 		}
 	}
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	id := base64.RawURLEncoding.EncodeToString(b)
+	id, err := randomToken()
+	if err != nil {
+		panic("generate session identifier: " + err.Error())
+	}
 	sess := &session{id: id, lastSeen: time.Now()}
 	s.mu.Lock()
 	s.sess[id] = sess
 	s.mu.Unlock()
+	s.setSessionCookie(w, id)
+	return sess
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {
+	now := time.Now()
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: id, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 8 * 3600,
+		// This bearer cookie is host-only and high entropy. OAuth credentials
+		// still expire independently; ownership deletion lasts as long as shares.
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(share.TTL / time.Second), Expires: now.Add(share.TTL),
 		Secure: !s.cfg.LocalOnly(),
 	})
-	return sess
 }
 
 func validSessionID(id string) bool {
 	b, err := base64.RawURLEncoding.DecodeString(id)
-	return err == nil && len(b) == 24
+	return err == nil && len(id) == 32 && len(b) == 24 && base64.RawURLEncoding.EncodeToString(b) == id
+}
+
+func randomToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // ── 处理器 ──
@@ -212,9 +241,11 @@ func (s *Server) authStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := fromCtx(r)
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	st := base64.RawURLEncoding.EncodeToString(b)
+	st, err := randomToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "无法创建安全登录状态")
+		return
+	}
 	sess.mu.Lock()
 	sess.state = st
 	sess.mu.Unlock()
@@ -264,7 +295,14 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
+	sess.opMu.Lock()
+	defer sess.opMu.Unlock()
 	sess.mu.Lock()
+	sess.epoch++
+	if sess.genCancel != nil {
+		sess.genCancel()
+		sess.genCancel = nil
+	}
 	sess.token, sess.profile, sess.state, sess.stateChecked = nil, nil, "", false
 	sess.gen = generation{}
 	sess.mu.Unlock()
@@ -318,16 +356,31 @@ func (s *Server) seedStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "请求格式不对")
 		return
 	}
+	sess := fromCtx(r)
+	sess.mu.Lock()
+	sess.epoch++
+	if sess.genCancel != nil {
+		sess.genCancel()
+	}
+	epoch := sess.epoch
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	sess.genCancel = cancel
+	sess.mu.Unlock()
 	defer cancel()
 
 	corpus, err := s.seed.Build(ctx, body.Picks)
 	if err != nil {
+		updateGeneration(sess, epoch, func() { sess.genCancel = nil })
 		writeErr(w, 400, err.Error())
 		return
 	}
-	sess := fromCtx(r)
 	sess.mu.Lock()
+	if sess.epoch != epoch {
+		sess.mu.Unlock()
+		writeErr(w, http.StatusConflict, "会话数据已被删除")
+		return
+	}
+	sess.genCancel = nil
 	sess.seedCorpus = corpus
 	sess.gen = generation{}
 	sess.mu.Unlock()
@@ -353,35 +406,45 @@ func (s *Server) universeStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.genToday++
+	sess.epoch++
+	if sess.genCancel != nil {
+		sess.genCancel()
+	}
 	sess.gen = generation{State: genRunning, Stage: "正在读取你的知乎足迹", Progress: 5}
+	epoch := sess.epoch
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	sess.genCancel = cancel
 	sess.mu.Unlock()
 
 	prov, err := s.provider(sess)
 	if err != nil {
-		sess.mu.Lock()
-		sess.gen = generation{State: genFailed, Error: err.Error()}
-		sess.mu.Unlock()
+		cancel()
+		updateGeneration(sess, epoch, func() { sess.gen = generation{State: genFailed, Error: err.Error()} })
 		writeErr(w, 401, err.Error())
 		return
 	}
-	go s.generate(sess, prov)
+	go s.generateAt(sess, prov, epoch, ctx, cancel)
 	writeJSON(w, 202, map[string]string{"state": string(genRunning)})
 }
 
 func (s *Server) generate(sess *session, prov zhihu.Provider) {
+	sess.mu.Lock()
+	epoch := sess.epoch
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	sess.genCancel = cancel
+	sess.mu.Unlock()
+	s.generateAt(sess, prov, epoch, ctx, cancel)
+}
+
+func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
 
-	setStage := func(stage string, pct int) {
-		sess.mu.Lock()
-		sess.gen.Stage, sess.gen.Progress = stage, pct
-		sess.mu.Unlock()
+	setStage := func(stage string, pct int) bool {
+		return updateGeneration(sess, epoch, func() { sess.gen.Stage, sess.gen.Progress = stage, pct })
 	}
 	fail := func(err error) {
 		log.Printf("生成失败: %v", err)
-		sess.mu.Lock()
-		sess.gen = generation{State: genFailed, Error: err.Error()}
-		sess.mu.Unlock()
+		updateGeneration(sess, epoch, func() { sess.gen = generation{State: genFailed, Error: err.Error()} })
 	}
 
 	corpus, err := prov.Fetch(ctx)
@@ -396,14 +459,18 @@ func (s *Server) generate(sess *session, prov zhihu.Provider) {
 	}
 	filtered := extract.CountSensitiveItems(corpus.Items)
 
-	setStage(fmt.Sprintf("读到 %d 条，正在理解它们讲的是什么", total), 30)
+	if !setStage(fmt.Sprintf("读到 %d 条，正在理解它们讲的是什么", total), 30) {
+		return
+	}
 	concepts, err := s.ext.Extract(ctx, corpus.Items)
 	if err != nil {
 		fail(fmt.Errorf("概念抽取失败: %w", err))
 		return
 	}
 
-	setStage("正在让它们坍缩成星群", 70)
+	if !setStage("正在让它们坍缩成星群", 70) {
+		return
+	}
 	namer := func(members, samples []string) string {
 		n, err := s.ext.NameCluster(ctx, members, samples)
 		if err != nil || n == "" {
@@ -427,12 +494,23 @@ func (s *Server) generate(sess *session, prov zhihu.Provider) {
 	}
 	u.Meta.Source = corpus.Source
 
+	updateGeneration(sess, epoch, func() {
+		sess.gen = generation{
+			State: genDone, Stage: "完成", Progress: 100,
+			Universe: u, Filtered: filtered, Source: corpus.Source, Calls: corpus.Calls,
+		}
+		sess.genCancel = nil
+	})
+}
+
+func updateGeneration(sess *session, epoch uint64, update func()) bool {
 	sess.mu.Lock()
-	sess.gen = generation{
-		State: genDone, Stage: "完成", Progress: 100,
-		Universe: u, Filtered: filtered, Source: corpus.Source, Calls: corpus.Calls,
+	defer sess.mu.Unlock()
+	if sess.epoch != epoch {
+		return false
 	}
-	sess.mu.Unlock()
+	update()
+	return true
 }
 
 func (s *Server) universeGet(w http.ResponseWriter, r *http.Request) {
@@ -447,19 +525,23 @@ func (s *Server) universeGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
-	selection, ok := readShareSelection(w, r)
+	request, ok := readShareRequest(w, r)
 	if !ok {
 		return
 	}
 	sess := fromCtx(r)
+	sess.opMu.Lock()
+	defer sess.opMu.Unlock()
 	sess.mu.Lock()
 	u := sess.gen.Universe
-	sess.mu.Unlock()
+	epoch := sess.epoch
 	if u == nil {
+		sess.mu.Unlock()
 		writeErr(w, 409, "还没有可分享的星图")
 		return
 	}
-	view, err := share.BuildView(u, selection)
+	view, err := share.BuildView(u, request.Selection)
+	sess.mu.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -468,8 +550,16 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请至少选择一个问题")
 		return
 	}
+	if request.Digest == "" || !share.VerifyPreviewDigest(request.Digest, previewOwnerContext(sess.id, epoch), request.Selection, view) {
+		writeErr(w, http.StatusConflict, "分享预览已过期，请重新预览")
+		return
+	}
 	record, err := s.store.Create(sess.id, view)
 	if err != nil {
+		if errors.Is(err, share.ErrQuota) {
+			writeErr(w, http.StatusTooManyRequests, "有效分享数已达上限")
+			return
+		}
 		writeErr(w, 500, "保存分享快照失败")
 		return
 	}
@@ -479,39 +569,91 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sharePreview(w http.ResponseWriter, r *http.Request) {
-	selection, ok := readShareSelection(w, r)
+	request, ok := readShareRequest(w, r)
 	if !ok {
 		return
 	}
 	sess := fromCtx(r)
 	sess.mu.Lock()
 	u := sess.gen.Universe
-	sess.mu.Unlock()
+	epoch := sess.epoch
 	if u == nil {
+		sess.mu.Unlock()
 		writeErr(w, http.StatusConflict, "还没有可分享的星图")
 		return
 	}
-	view, err := share.BuildView(u, selection)
+	view, err := share.BuildView(u, request.Selection)
+	sess.mu.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, struct {
+		share.ShareView
+		Digest string `json:"digest"`
+	}{ShareView: view, Digest: share.PreviewDigest(previewOwnerContext(sess.id, epoch), request.Selection, view)})
 }
 
-func readShareSelection(w http.ResponseWriter, r *http.Request) (share.ShareSelection, bool) {
-	var selection share.ShareSelection
+func previewOwnerContext(sessionID string, epoch uint64) string {
+	return sessionID + ":" + strconv.FormatUint(epoch, 10)
+}
+
+type shareRequest struct {
+	Selection share.ShareSelection
+	Digest    string
+}
+
+func readShareRequest(w http.ResponseWriter, r *http.Request) (shareRequest, bool) {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&selection); err != nil {
-		writeErr(w, http.StatusBadRequest, "分享选择无效")
-		return share.ShareSelection{}, false
+	token, err := decoder.Token()
+	if err != nil {
+		return shareRequestError(w, err)
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		writeErr(w, http.StatusBadRequest, "分享选择无效")
-		return share.ShareSelection{}, false
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return shareRequestError(w, fmt.Errorf("request must be object"))
 	}
-	return selection, true
+	var request shareRequest
+	seen := map[string]bool{}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return shareRequestError(w, err)
+		}
+		key, ok := keyToken.(string)
+		if !ok || seen[key] {
+			return shareRequestError(w, fmt.Errorf("duplicate or invalid key"))
+		}
+		seen[key] = true
+		switch key {
+		case "questionIds":
+			if err := decoder.Decode(&request.Selection.QuestionIDs); err != nil {
+				return shareRequestError(w, err)
+			}
+		case "digest":
+			if err := decoder.Decode(&request.Digest); err != nil {
+				return shareRequestError(w, err)
+			}
+		default:
+			return shareRequestError(w, fmt.Errorf("unknown key %q", key))
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return shareRequestError(w, err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return shareRequestError(w, fmt.Errorf("trailing JSON"))
+	}
+	return request, true
+}
+
+func shareRequestError(w http.ResponseWriter, err error) (shareRequest, bool) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge, "分享请求过大")
+	} else {
+		writeErr(w, http.StatusBadRequest, "分享选择无效")
+	}
+	return shareRequest{}, false
 }
 
 func (s *Server) shareGet(w http.ResponseWriter, r *http.Request) {
@@ -535,11 +677,18 @@ func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {
 // wipe 实现界面上的「立即删除我的宇宙」：清空会话内的一切，即时生效。
 func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
+	sess.opMu.Lock()
+	defer sess.opMu.Unlock()
 	if err := s.store.DeleteAllOwned(sess.id); err != nil {
 		writeErr(w, http.StatusInternalServerError, "删除分享失败")
 		return
 	}
 	sess.mu.Lock()
+	sess.epoch++
+	if sess.genCancel != nil {
+		sess.genCancel()
+		sess.genCancel = nil
+	}
 	sess.gen = generation{}
 	sess.token, sess.profile, sess.seedCorpus = nil, nil, nil
 	sess.mu.Unlock()

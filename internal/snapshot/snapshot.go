@@ -1,7 +1,7 @@
 // Package snapshot stores private universe snapshots with read compatibility.
 //
 // 核心约束：只存派生结构与公开链接，绝不存 Title、Summary 或任何正文。
-// 打开分享页时星图由快照重建；证据条目只显示链接，标题需访问者自行点开。
+// 重建时证据条目只保留公开链接，标题需用户自行点开。
 package snapshot
 
 import (
@@ -72,14 +72,12 @@ func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
 		return nil, fmt.Errorf("invalid snapshot universe: nil")
 	}
 	normalized := *u
-	if normalized.SchemaVersion != "" && normalized.SchemaVersion != engine.CurrentSchemaVersion {
+	if normalized.SchemaVersion != engine.CurrentSchemaVersion {
 		return nil, fmt.Errorf("invalid snapshot universe version")
 	}
-	if normalized.AnalysisVersion != "" && normalized.AnalysisVersion != engine.CurrentAnalysisVersion {
+	if normalized.AnalysisVersion != engine.CurrentAnalysisVersion {
 		return nil, fmt.Errorf("invalid snapshot analysis version")
 	}
-	normalized.SchemaVersion = engine.CurrentSchemaVersion
-	normalized.AnalysisVersion = engine.CurrentAnalysisVersion
 	if err := normalized.ValidateCurrent(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot universe: %w", err)
 	}
@@ -125,7 +123,10 @@ func atomicWrite(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }
 
 // Load 读取快照；过期即视为不存在。
@@ -147,23 +148,27 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 		return nil, fmt.Errorf("快照已损坏")
 	}
 	var serialized struct {
-		Universe struct {
-			SchemaVersion   *string `json:"schemaVersion"`
-			AnalysisVersion *string `json:"analysisVersion"`
-		} `json:"universe"`
+		Universe map[string]json.RawMessage `json:"universe"`
 	}
 	if err := json.Unmarshal(b, &serialized); err != nil {
 		return nil, fmt.Errorf("快照已损坏")
 	}
-	isCurrentEnvelope := serialized.Universe.SchemaVersion != nil && *serialized.Universe.SchemaVersion != "" &&
-		serialized.Universe.AnalysisVersion != nil && *serialized.Universe.AnalysisVersion != ""
-	snap.Legacy = !isCurrentEnvelope
-	if !isCurrentEnvelope {
+	_, hasSchema := serialized.Universe["schemaVersion"]
+	_, hasAnalysis := serialized.Universe["analysisVersion"]
+	if hasSchema != hasAnalysis {
+		return nil, fmt.Errorf("快照已损坏")
+	}
+	snap.Legacy = !hasSchema && !hasAnalysis
+	if snap.Legacy {
 		// Compatibility is deliberately one-way: old evidence is never inferred
 		// to be a public question, answer, or article probe.
 		snap.Universe.Questions = []engine.QuestionPlanet{}
 		snap.Universe.Answers = []engine.AnswerSatellite{}
 		snap.Universe.Probes = []engine.ArticleProbe{}
+		for i := range snap.Universe.Stars {
+			snap.Universe.Stars[i].QuestionIDs = nil
+			snap.Universe.Stars[i].ProbeIDs = nil
+		}
 	} else {
 		if snap.Universe.SchemaVersion != engine.CurrentSchemaVersion || snap.Universe.AnalysisVersion != engine.CurrentAnalysisVersion {
 			return nil, fmt.Errorf("invalid snapshot universe version")
@@ -182,7 +187,9 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 		}
 	}
 	if time.Now().After(snap.ExpiresAt) {
-		_ = s.Delete(id)
+		if err := s.Delete(id); err != nil {
+			return nil, fmt.Errorf("删除过期快照失败: %w", err)
+		}
 		return nil, fmt.Errorf("快照不存在或已过期")
 	}
 	return &snap, nil
@@ -198,13 +205,22 @@ func (s *Store) Delete(id string) error {
 	if err := os.Remove(s.path(id)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return nil
+	return syncDir(s.dir)
+}
+
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // strip 移除一切原文，只留结构与公开链接。
 //
 // 这是「不存原文也能再次打开」的全部实现：标题一律清空，
-// 分享页只显示链接，访问者要看内容必须点回知乎。
+// 访问原内容必须点回知乎。
 //
 // 必须逐层复制，不能就地改。
 //
@@ -225,6 +241,8 @@ func strip(u engine.Universe) engine.Universe {
 	copy(stars, u.Stars)
 	for i := range stars {
 		stars[i].Evidence = cleanEv(u.Stars[i].Evidence)
+		stars[i].QuestionIDs = nil
+		stars[i].ProbeIDs = nil
 	}
 	u.Stars = stars
 
@@ -253,13 +271,22 @@ func strip(u engine.Universe) engine.Universe {
 		solo[i].Title = ""
 	}
 	u.Solo = solo
+	u.Questions = []engine.QuestionPlanet{}
+	u.Answers = []engine.AnswerSatellite{}
+	u.Probes = []engine.ArticleProbe{}
 
 	return u
 }
 
 // ContainsProse 报告快照里是否残留了正文，用于测试与发布前自检。
 func ContainsProse(u *engine.Universe) bool {
+	if len(u.Questions) > 0 || len(u.Answers) > 0 || len(u.Probes) > 0 {
+		return true
+	}
 	for _, s := range u.Stars {
+		if len(s.QuestionIDs) > 0 || len(s.ProbeIDs) > 0 {
+			return true
+		}
 		for _, e := range s.Evidence {
 			if strings.TrimSpace(e.Title) != "" {
 				return true
@@ -282,6 +309,21 @@ func ContainsProse(u *engine.Universe) bool {
 	}
 	for _, s := range u.Solo {
 		if strings.TrimSpace(s.Title) != "" {
+			return true
+		}
+	}
+	for _, q := range u.Questions {
+		if strings.TrimSpace(q.Title) != "" {
+			return true
+		}
+	}
+	for _, a := range u.Answers {
+		if strings.TrimSpace(a.Title) != "" || strings.TrimSpace(a.Summary) != "" || strings.TrimSpace(a.AuthorName) != "" {
+			return true
+		}
+	}
+	for _, p := range u.Probes {
+		if strings.TrimSpace(p.Title) != "" || strings.TrimSpace(p.Summary) != "" || strings.TrimSpace(p.AuthorName) != "" {
 			return true
 		}
 	}

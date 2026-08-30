@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -315,7 +317,7 @@ func (e *blockingExtractor) Extract(ctx context.Context, items []zhihu.Item) ([]
 	case <-e.release:
 		out := make([][]string, len(items))
 		for i := range out {
-			out[i] = []string{"Concept"}
+			out[i] = []string{"Concept A", "Concept B", "Concept C"}
 		}
 		return out, nil
 	case <-ctx.Done():
@@ -361,6 +363,42 @@ func TestWipeInvalidatesRunningGeneration(t *testing.T) {
 	defer sess.mu.Unlock()
 	if sess.gen.Universe != nil || sess.gen.State != "" {
 		t.Fatalf("stale generation restored state after wipe: %+v", sess.gen)
+	}
+}
+
+func TestBackgroundGenerationLeasePreventsEvictionUntilResultVisible(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	s.maxSessions = 1
+	owner := startSession(t, s)
+	extractor := &blockingExtractor{entered: make(chan struct{}), release: make(chan struct{})}
+	s.ext = extractor
+	items := make([]zhihu.Item, 30)
+	for i := range items {
+		items[i] = zhihu.Item{Title: fmt.Sprintf("Item %d", i), URL: fmt.Sprintf("https://example.com/%d", i)}
+	}
+	s.mu.Lock()
+	sess := s.sess[owner.Value]
+	s.mu.Unlock()
+	sess.mu.Lock()
+	sess.gen = generation{State: genRunning}
+	sess.mu.Unlock()
+	done := make(chan struct{})
+	go func() { s.generate(sess, blockingProvider{corpus: &zhihu.Corpus{Items: items}}); close(done) }()
+	<-extractor.entered
+	pressure := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil)
+	if pressure.Code != http.StatusServiceUnavailable {
+		close(extractor.release)
+		<-done
+		t.Fatalf("background generation session was evicted: status=%d", pressure.Code)
+	}
+	close(extractor.release)
+	<-done
+	visible := doRequest(t, s.Routes(), http.MethodGet, "/api/universe", nil, owner)
+	if visible.Code != http.StatusOK || !strings.Contains(visible.Body.String(), `"state":"done"`) {
+		t.Fatalf("completed result not visible: status=%d body=%s", visible.Code, visible.Body.String())
+	}
+	if next := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil); next.Code != http.StatusOK {
+		t.Fatalf("completed generation lease was not released: status=%d", next.Code)
 	}
 }
 
@@ -619,6 +657,25 @@ func TestShareDeleteTraversalReturnsNotFoundAndPreservesOutsideFile(t *testing.T
 	}
 	if got, err := os.ReadFile(outside); err != nil || string(got) != "private" {
 		t.Fatalf("outside file changed: %q err=%v", got, err)
+	}
+}
+
+type loadErrorStore struct{ err error }
+
+func (l loadErrorStore) Create(string, share.ShareView) (*share.Record, error) { return nil, l.err }
+func (l loadErrorStore) Load(string) (*share.Record, error)                    { return nil, l.err }
+func (l loadErrorStore) DeleteOwned(string, string) error                      { return l.err }
+func (l loadErrorStore) DeleteAllOwned(string) error                           { return l.err }
+
+func TestPublicShareGetHidesInternalLoadErrors(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	s.store = loadErrorStore{err: errors.New("read /secret/path: permission denied")}
+	rr := doRequest(t, s.Routes(), http.MethodGet, "/api/share/public_id", nil, nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "permission") {
+		t.Fatalf("internal load error leaked: %s", rr.Body.String())
 	}
 }
 

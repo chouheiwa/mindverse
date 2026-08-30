@@ -46,6 +46,7 @@ type Store struct {
 	dir            string
 	mu             sync.RWMutex
 	byOwner        map[string]map[string]struct{}
+	legacyIDs      map[string]struct{}
 	activeFiles    int
 	maxFiles       int
 	readFile       func(string) ([]byte, error)
@@ -60,7 +61,7 @@ func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create share directory: %w", err)
 	}
-	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}, maxFiles: MaxActiveShares, readFile: os.ReadFile, syncDir: syncDir, newID: newID, removeFile: removeAndSync, quarantineFile: quarantine, warn: func(message string, err error) { log.Printf("%s: %v", message, err) }}
+	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}, legacyIDs: map[string]struct{}{}, maxFiles: MaxActiveShares, readFile: os.ReadFile, syncDir: syncDir, newID: newID, removeFile: removeAndSync, quarantineFile: quarantine, warn: func(message string, err error) { log.Printf("%s: %v", message, err) }}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -91,6 +92,7 @@ func NewStore(dir string) (*Store, error) {
 			continue
 		}
 		if legacy && decodeErr == nil {
+			s.legacyIDs[fileID] = struct{}{}
 			s.activeFiles++
 			continue
 		}
@@ -172,6 +174,7 @@ func (s *Store) Load(id string) (*Record, error) {
 			return nil, fmt.Errorf("remove expired share: %w", cleanupErr)
 		}
 		s.removeIDFromOwners(id)
+		delete(s.legacyIDs, id)
 		s.activeFiles--
 		return nil, ErrNotFound
 	}
@@ -180,6 +183,7 @@ func (s *Store) Load(id string) (*Record, error) {
 			return nil, fmt.Errorf("quarantine corrupt share: %w", cleanupErr)
 		}
 		s.removeIDFromOwners(id)
+		delete(s.legacyIDs, id)
 		s.activeFiles--
 		return nil, ErrNotFound
 	}
@@ -372,13 +376,20 @@ func (s *Store) pruneExpiredOwned(key string, now time.Time) error {
 			continue
 		}
 		if err != nil {
-			return err
+			if quarantineErr := s.quarantineFile(s.path(id)); quarantineErr != nil {
+				return quarantineErr
+			}
+			s.removeOwner(key, id)
+			s.activeFiles--
 		}
 	}
 	return nil
 }
 
 func (s *Store) pruneExpiredAll(now time.Time) error {
+	if err := s.pruneLegacy(now); err != nil {
+		return err
+	}
 	keys := make([]string, 0, len(s.byOwner))
 	for key := range s.byOwner {
 		keys = append(keys, key)
@@ -387,6 +398,47 @@ func (s *Store) pruneExpiredAll(now time.Time) error {
 	for _, key := range keys {
 		if err := s.pruneExpiredOwned(key, now); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) pruneLegacy(now time.Time) error {
+	ids := make([]string, 0, len(s.legacyIDs))
+	for id := range s.legacyIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		b, err := s.readFile(s.path(id))
+		if err != nil {
+			if os.IsNotExist(err) {
+				delete(s.legacyIDs, id)
+				s.activeFiles--
+				continue
+			}
+			return err
+		}
+		record, legacy, decodeErr := decodeRecord(id, b, now)
+		if errors.Is(decodeErr, errExpired) {
+			if err := s.removeFile(s.path(id)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			delete(s.legacyIDs, id)
+			s.activeFiles--
+			continue
+		}
+		if decodeErr != nil {
+			if err := s.quarantineFile(s.path(id)); err != nil {
+				return err
+			}
+			delete(s.legacyIDs, id)
+			s.activeFiles--
+			continue
+		}
+		if !legacy {
+			delete(s.legacyIDs, id)
+			s.addOwner(record.OwnerKey, id)
 		}
 	}
 	return nil

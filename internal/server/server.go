@@ -566,11 +566,19 @@ func (s *Server) universeStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, err.Error())
 		return
 	}
+	if !s.retainSession(sess) {
+		cancel()
+		writeErr(w, http.StatusConflict, "会话已重置")
+		return
+	}
 	go s.generateAt(sess, prov, epoch, ctx, cancel)
 	writeJSON(w, 202, map[string]string{"state": string(genRunning)})
 }
 
 func (s *Server) generate(sess *session, prov zhihu.Provider) {
+	if !s.retainSession(sess) {
+		return
+	}
 	sess.mu.Lock()
 	epoch := sess.epoch
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -580,6 +588,7 @@ func (s *Server) generate(sess *session, prov zhihu.Provider) {
 }
 
 func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ctx context.Context, cancel context.CancelFunc) {
+	defer s.releaseSession(sess)
 	defer cancel()
 
 	setStage := func(stage string, pct int) bool {
@@ -802,10 +811,21 @@ func shareRequestError(w http.ResponseWriter, err error) (shareRequest, bool) {
 func (s *Server) shareGet(w http.ResponseWriter, r *http.Request) {
 	record, err := s.store.Load(r.PathValue("id"))
 	if err != nil {
-		writeErr(w, 404, err.Error())
+		log.Printf("public share load failed for %q: %v", r.PathValue("id"), err)
+		writeErr(w, http.StatusNotFound, "分享不存在或已过期")
 		return
 	}
 	writeJSON(w, 200, record.View)
+}
+
+func (s *Server) retainSession(sess *session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sess[sess.id] != sess {
+		return false
+	}
+	sess.active++
+	return true
 }
 
 func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {

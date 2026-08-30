@@ -339,19 +339,6 @@ func TestPruneReadFailurePreservesOwnerIndex(t *testing.T) {
 	}
 }
 
-func TestPruneParseFailurePreservesOwnerIndex(t *testing.T) {
-	store, _ := NewStore(t.TempDir())
-	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
-	first, _ := store.Create("owner", view)
-	store.readFile = func(string) ([]byte, error) { return []byte("{"), nil }
-	if _, err := store.Create("owner", view); err == nil {
-		t.Fatal("create ignored transient prune parse failure")
-	}
-	if _, exists := store.byOwner[ownerKey("owner")][first.ID]; !exists {
-		t.Fatal("transient parse failure orphaned owner index")
-	}
-}
-
 func TestCreateReturnsCommittedRecordWhenDirectorySyncFails(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
 	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
@@ -433,6 +420,57 @@ func TestGlobalQuotaCleanupFailurePreservesAccounting(t *testing.T) {
 	}
 	if _, ok := store.byOwner[ownerKey("old-owner")][old.ID]; !ok {
 		t.Fatal("cleanup failure removed owner index")
+	}
+}
+
+func TestGlobalPruneExpiresOwnerlessLegacyShare(t *testing.T) {
+	dir := t.TempDir()
+	created := time.Now().Add(-time.Hour)
+	legacy := map[string]any{"id": "legacy_slot", "createdAt": created, "expiresAt": created.Add(TTL), "universe": map[string]any{}}
+	b, _ := json.Marshal(legacy)
+	path := filepath.Join(dir, "legacy_slot.json")
+	_ = os.WriteFile(path, b, 0o600)
+	store, _ := NewStore(dir)
+	store.maxFiles = 1
+	legacy["createdAt"] = time.Now().Add(-TTL)
+	legacy["expiresAt"] = time.Now().Add(-time.Second)
+	b, _ = json.Marshal(legacy)
+	_ = os.WriteFile(path, b, 0o600)
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	if _, err := store.Create("owner", view); err != nil {
+		t.Fatalf("expired legacy blocked capacity: %v", err)
+	}
+}
+
+func TestGlobalPruneQuarantinesMalformedRuntimeRecord(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.maxFiles = 1
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	old, _ := store.Create("old-owner", view)
+	_ = os.WriteFile(store.path(old.ID), []byte("{"), 0o600)
+	if _, err := store.Create("new-owner", view); err != nil {
+		t.Fatalf("quarantinable malformed record blocked create: %v", err)
+	}
+	if _, err := os.Stat(store.path(old.ID)); !os.IsNotExist(err) {
+		t.Fatal("malformed record stayed public")
+	}
+}
+
+func TestGlobalPruneQuarantineFailurePreservesAccounting(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.maxFiles = 1
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	old, _ := store.Create("old-owner", view)
+	_ = os.WriteFile(store.path(old.ID), []byte("{"), 0o600)
+	store.quarantineFile = func(string) error { return errors.New("quarantine failed") }
+	if _, err := store.Create("new-owner", view); err == nil {
+		t.Fatal("quarantine failure did not fail closed")
+	}
+	if store.activeFiles != 1 {
+		t.Fatalf("accounting changed: %d", store.activeFiles)
+	}
+	if _, ok := store.byOwner[ownerKey("old-owner")][old.ID]; !ok {
+		t.Fatal("index removed on quarantine failure")
 	}
 }
 

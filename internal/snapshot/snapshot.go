@@ -80,7 +80,7 @@ func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
 	}
 	normalized.SchemaVersion = engine.CurrentSchemaVersion
 	normalized.AnalysisVersion = engine.CurrentAnalysisVersion
-	if err := normalized.Validate(); err != nil {
+	if err := normalized.ValidateCurrent(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot universe: %w", err)
 	}
 	id, err := newID()
@@ -143,8 +143,22 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, fmt.Errorf("快照已损坏")
 	}
-	if snap.Universe.SchemaVersion == "" && snap.Universe.AnalysisVersion == "" {
-		snap.Legacy = true
+	if snap.ID == "" || snap.ID != id {
+		return nil, fmt.Errorf("快照已损坏")
+	}
+	var serialized struct {
+		Universe struct {
+			SchemaVersion   *string `json:"schemaVersion"`
+			AnalysisVersion *string `json:"analysisVersion"`
+		} `json:"universe"`
+	}
+	if err := json.Unmarshal(b, &serialized); err != nil {
+		return nil, fmt.Errorf("快照已损坏")
+	}
+	isCurrentEnvelope := serialized.Universe.SchemaVersion != nil && *serialized.Universe.SchemaVersion != "" &&
+		serialized.Universe.AnalysisVersion != nil && *serialized.Universe.AnalysisVersion != ""
+	snap.Legacy = !isCurrentEnvelope
+	if !isCurrentEnvelope {
 		// Compatibility is deliberately one-way: old evidence is never inferred
 		// to be a public question, answer, or article probe.
 		snap.Universe.Questions = []engine.QuestionPlanet{}
@@ -163,7 +177,7 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 		if snap.Universe.Probes == nil {
 			snap.Universe.Probes = []engine.ArticleProbe{}
 		}
-		if err := snap.Universe.Validate(); err != nil {
+		if err := snap.Universe.ValidateCurrent(); err != nil {
 			return nil, fmt.Errorf("invalid snapshot universe: %w", err)
 		}
 	}

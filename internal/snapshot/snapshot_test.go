@@ -13,11 +13,12 @@ import (
 
 func sample() *engine.Universe {
 	ev := []engine.Evidence{{Title: "一条真实标题", URL: "https://www.zhihu.com/answer/1", Own: 1, When: "26.08"}}
+	starID, _ := engine.StableStarID(engine.ScopePrivate, "并发")
 	return &engine.Universe{
 		SchemaVersion: engine.CurrentSchemaVersion, AnalysisVersion: engine.CurrentAnalysisVersion,
 		Meta:     engine.Meta{Items: 1, Clusters: 1},
 		Clusters: []engine.Cluster{{ID: 0, Name: "把底层讲明白"}},
-		Stars:    []engine.Star{{ID: "star:v1:private:test", Scope: engine.ScopePrivate, Concept: "并发", Evidence: ev}},
+		Stars:    []engine.Star{{ID: starID, Scope: engine.ScopePrivate, Concept: "并发", Evidence: ev}},
 		Dark:     []engine.Dark{{Concept: "网文写作", Fav: 11, Evidence: ev}},
 		Solo:     []engine.Solo{{Concept: "分布式系统", Title: "为什么你总是抓不到狼", URL: "https://zhuanlan.zhihu.com/p/2"}},
 		Wormholes: []engine.Wormhole{{NameA: "A", NameB: "B",
@@ -40,27 +41,49 @@ func TestNewSnapshotCarriesVersions(t *testing.T) {
 }
 
 func TestLegacySnapshotRemainsReadableWithoutUpgradingEvidence(t *testing.T) {
-	dir := t.TempDir()
-	legacy := map[string]any{
-		"id": "legacy_1", "createdAt": "2026-08-01T00:00:00Z", "expiresAt": "2099-08-01T00:00:00Z",
-		"universe": map[string]any{
-			"stars": []any{map[string]any{"c": "legacy", "ev": []any{map[string]any{"t": "old", "u": "https://www.zhihu.com/question/7"}}}},
-		},
-	}
-	b, _ := json.Marshal(legacy)
-	if err := os.WriteFile(filepath.Join(dir, "legacy_1.json"), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := NewStore(dir)
-	got, err := s.Load("legacy_1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Legacy {
-		t.Fatal("snapshot missing versions must be explicitly marked legacy")
-	}
-	if len(got.Universe.Questions) != 0 || len(got.Universe.Answers) != 0 || len(got.Universe.Probes) != 0 {
-		t.Fatalf("legacy evidence was auto-upgraded: %+v", got.Universe)
+	for _, tc := range []struct {
+		name     string
+		schema   string
+		analysis string
+	}{
+		{name: "both missing"},
+		{name: "schema missing", analysis: engine.CurrentAnalysisVersion},
+		{name: "analysis missing", schema: engine.CurrentSchemaVersion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			universe := map[string]any{
+				"stars":     []any{map[string]any{"c": "legacy", "ev": []any{map[string]any{"t": "old", "u": "https://www.zhihu.com/question/7"}}}},
+				"questions": []any{map[string]any{"id": "question:7"}},
+				"answers":   []any{map[string]any{"id": "answer:8"}},
+				"probes":    []any{map[string]any{"id": "article:9"}},
+			}
+			if tc.schema != "" {
+				universe["schemaVersion"] = tc.schema
+			}
+			if tc.analysis != "" {
+				universe["analysisVersion"] = tc.analysis
+			}
+			legacy := map[string]any{
+				"id": "legacy_1", "createdAt": "2026-08-01T00:00:00Z", "expiresAt": "2099-08-01T00:00:00Z",
+				"universe": universe,
+			}
+			b, _ := json.Marshal(legacy)
+			if err := os.WriteFile(filepath.Join(dir, "legacy_1.json"), b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s, _ := NewStore(dir)
+			got, err := s.Load("legacy_1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Legacy {
+				t.Fatal("snapshot missing either version must be explicitly marked legacy")
+			}
+			if len(got.Universe.Questions) != 0 || len(got.Universe.Answers) != 0 || len(got.Universe.Probes) != 0 {
+				t.Fatalf("legacy evidence or new fields were auto-upgraded: %+v", got.Universe)
+			}
+		})
 	}
 }
 
@@ -76,6 +99,34 @@ func TestNewSchemaInvalidUniverseIsRejected(t *testing.T) {
 	s, _ := NewStore(dir)
 	if _, err := s.Load("invalid_1"); err == nil || !strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("new-schema invalid universe should be rejected, got %v", err)
+	}
+}
+
+func TestCurrentSnapshotMissingStableStarIDIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	u := sample()
+	u.Stars[0].ID = ""
+	snap := Snapshot{ID: "invalid_id", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), Universe: *u}
+	b, _ := json.Marshal(snap)
+	if err := os.WriteFile(filepath.Join(dir, "invalid_id.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := NewStore(dir)
+	if _, err := s.Load("invalid_id"); err == nil || !strings.Contains(err.Error(), "star") {
+		t.Fatalf("current snapshot missing stable star ID should be rejected: %v", err)
+	}
+}
+
+func TestSnapshotRejectsMismatchedEnvelopeID(t *testing.T) {
+	dir := t.TempDir()
+	snap := Snapshot{ID: "different_id", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), Universe: *sample()}
+	b, _ := json.Marshal(snap)
+	if err := os.WriteFile(filepath.Join(dir, "requested_id.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := NewStore(dir)
+	if _, err := s.Load("requested_id"); err == nil {
+		t.Fatal("snapshot with mismatched envelope ID should be rejected as corrupted")
 	}
 }
 

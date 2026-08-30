@@ -286,3 +286,104 @@ func (u Universe) Validate() error {
 	}
 	return nil
 }
+
+// ValidateCurrent enforces the complete persisted contract for the current
+// schema. Validate remains usable while Run is still assembling references.
+func (u Universe) ValidateCurrent() error {
+	if u.SchemaVersion != CurrentSchemaVersion || u.AnalysisVersion != CurrentAnalysisVersion {
+		return fmt.Errorf("unsupported universe versions %q/%q", u.SchemaVersion, u.AnalysisVersion)
+	}
+	if err := u.Validate(); err != nil {
+		return err
+	}
+
+	questions := make(map[string]QuestionPlanet, len(u.Questions))
+	for i, question := range u.Questions {
+		if question.ID == "" {
+			return fmt.Errorf("question %d: empty ID", i)
+		}
+		if _, exists := questions[question.ID]; exists {
+			return fmt.Errorf("question %d: duplicate ID %q", i, question.ID)
+		}
+		questions[question.ID] = question
+	}
+	answers := make(map[string]AnswerSatellite, len(u.Answers))
+	for i, answer := range u.Answers {
+		if answer.ID == "" {
+			return fmt.Errorf("answer %d: empty ID", i)
+		}
+		if _, exists := answers[answer.ID]; exists {
+			return fmt.Errorf("answer %d: duplicate ID %q", i, answer.ID)
+		}
+		if _, exists := questions[answer.QuestionID]; !exists {
+			return fmt.Errorf("answer %q: unknown question %q", answer.ID, answer.QuestionID)
+		}
+		answers[answer.ID] = answer
+	}
+	probes := make(map[string]struct{}, len(u.Probes))
+	for i, probe := range u.Probes {
+		if probe.ID == "" {
+			return fmt.Errorf("probe %d: empty ID", i)
+		}
+		if _, exists := probes[probe.ID]; exists {
+			return fmt.Errorf("probe %d: duplicate ID %q", i, probe.ID)
+		}
+		probes[probe.ID] = struct{}{}
+	}
+
+	for i, star := range u.Stars {
+		if star.ID == "" {
+			return fmt.Errorf("star %d: empty stable ID", i)
+		}
+		expected, err := StableStarID(star.Scope, star.Concept)
+		if err != nil || star.ID != expected {
+			return fmt.Errorf("star %d: invalid stable ID %q", i, star.ID)
+		}
+		if err := validateRefs("question", star.ID, star.QuestionIDs, func(id string) bool {
+			_, ok := questions[id]
+			return ok
+		}); err != nil {
+			return err
+		}
+		if err := validateRefs("probe", star.ID, star.ProbeIDs, func(id string) bool {
+			_, ok := probes[id]
+			return ok
+		}); err != nil {
+			return err
+		}
+	}
+
+	referencedAnswers := make(map[string]struct{}, len(answers))
+	for _, question := range u.Questions {
+		if err := validateRefs("answer", question.ID, question.AnswerIDs, func(id string) bool {
+			answer, ok := answers[id]
+			if ok && answer.QuestionID == question.ID {
+				referencedAnswers[id] = struct{}{}
+				return true
+			}
+			return false
+		}); err != nil {
+			return err
+		}
+	}
+	for id := range answers {
+		if _, exists := referencedAnswers[id]; !exists {
+			return fmt.Errorf("answer %q: not referenced by its question", id)
+		}
+	}
+	return nil
+}
+
+func validateRefs(kind, owner string, refs []string, exists func(string) bool) error {
+	seen := make(map[string]struct{}, len(refs))
+	for _, id := range refs {
+		if id == "" || !exists(id) {
+			return fmt.Errorf("%s %q: unknown %s reference %q", kind, owner, kind, id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("%s %q: duplicate %s reference %q", kind, owner, kind, id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}

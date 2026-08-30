@@ -36,4 +36,12 @@ describe('question navigation accessibility styles', () => {
     const infoPanel = readFileSync(new URL('./InfoPanel.tsx', import.meta.url), 'utf8')
     expect(infoPanel).not.toMatch(/fontSize:\s*(?:10|11),\s*color:\s*'var\(--mute\)'/)
   })
+
+  test('keeps the sharing dialog actions visible at 320px and its targets at least 44px', () => {
+    const share = css('./SharePreview.css')
+    expect(share).toMatch(/\.sp-dialog\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s)
+    expect(share).toMatch(/\.sp-grid\s*\{[^}]*min-height:\s*0/s)
+    expect(share).toMatch(/\.sp-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s)
+    expect(share).toMatch(/\.sp-created button, \.sp-created a\s*\{[^}]*min-height:\s*44px/s)
+  })
 })

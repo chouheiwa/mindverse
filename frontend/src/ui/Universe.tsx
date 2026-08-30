@@ -6,19 +6,25 @@ import { Loading } from './Loading'
 import { Panel } from './Panel'
 import { InfoPanel } from './InfoPanel'
 import { ModeBar } from './ModeBar'
-import { Card } from './Card'
 import { indexUniverse, selectPlanetData, type QuestionPlanetDatum } from '../domain/universe'
 import { QuestionPlanetCard } from './QuestionPlanetCard'
 import { QuestionLane } from './QuestionLane'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import { Seed } from './Seed'
 import { QuestionWorkspaceGate } from './QuestionWorkspaceGate'
+import { SharedView } from './SharedView'
+import { SharePreview } from './SharePreview'
 import './Universe.css'
 
 const reduceMotion = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export function UniverseView() {
+  const shareId = shareIdFromPath()
+  return shareId ? <SharedView shareId={shareId} /> : <PrivateUniverseView />
+}
+
+function PrivateUniverseView() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // 标签单独一层 2D 画布：文字该用文字渲染器画，也不该被 bloom 糊掉
   const labelRef = useRef<HTMLCanvasElement>(null)
@@ -29,7 +35,6 @@ export function UniverseView() {
   })
   const [universe, setUniverse] = useState<U | null>(null)
   const [filtered, setFiltered] = useState(0)
-  const [shared, setShared] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [star, setStar] = useState<Star | null>(null)
   const [planet, setPlanet] = useState<PlanetDatum | null>(null)
@@ -43,7 +48,8 @@ export function UniverseView() {
   const [wormIdx, setWormIdx] = useState(0)
   const [genesisDone, setGenesisDone] = useState(reduceMotion())
   const [hint, setHint] = useState(false)
-  const [card, setCard] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const shareReturnFocusRef = useRef<HTMLButtonElement | null>(null)
   // 显式进入游客模式，或生成失败后由用户选择改走种子星
   const [seeding, setSeeding] = useState(
     () => new URLSearchParams(location.search).get('seed') === '1',
@@ -59,14 +65,8 @@ export function UniverseView() {
   useEffect(() => {
     if (seeding) return
     const ac = new AbortController()
-    const id = shareIdFromPath()
     ;(async () => {
       try {
-        if (id) {
-          setShared(true)
-          setError('这是新版逐项分享链接，当前加载器尚不支持读取该公开快照，也不会将它误当成私有星图打开。')
-          return
-        }
         const g = await pollUntilDone((p) => setGen({ stage: p.stage, progress: p.progress }), ac.signal)
         setUniverse(g.universe!)
         setFiltered(g.filtered)
@@ -293,7 +293,7 @@ export function UniverseView() {
 
       <header className="uv-head">
         <div className="lbl">
-          知乎精神宇宙{shared ? ' · 他人分享' : ''}
+          知乎精神宇宙
           {m.source === 'seed' && ' · 游客模式'}
           {m.source === 'mock' && ' · 示例数据'}
         </div>
@@ -351,26 +351,26 @@ export function UniverseView() {
             </div>
           )}
           <div className="uv-segw"><ModeBar mode={mode} onMode={onMode} /></div>
-          <button className="uv-act" onClick={() => setCard(true)}>宇宙身份证</button>
+          <button className="uv-act" onClick={(event) => { shareReturnFocusRef.current = event.currentTarget; setSharing(true) }}>选择分享</button>
         </div>
       </div>
-      {card && <Card universe={universe} onClose={() => setCard(false)} />}
+      {sharing && <SharePreview universe={universe} onClose={() => setSharing(false)} getReturnFocus={() => shareReturnFocusRef.current} />}
       {star && <QuestionLane planets={questionPlanets} selectedId={planet?.question.id ?? null} onSelect={selectQuestionFromLane} />}
       <QuestionPlanetCard ref={cardRef} planet={planet} onEnter={onEnterQuestion}
         onClose={closePlanet} />
       {questionEntry && (
         <QuestionWorkspaceGate index={universeIndex} questionId={questionEntry.question.id}
-          orbitIndex={questionEntry.orbitIndex} shared={shared} readOnly={shared}
+          orbitIndex={questionEntry.orbitIndex} shared={false} readOnly={false}
           onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
           getReturnFocus={getQuestionReturnFocus} />
       )}
-      <Panel universe={universe} index={universeIndex} star={star} shared={shared}
+      <Panel universe={universe} index={universeIndex} star={star} shared={false}
         onClose={closeStarPanel}
         highlight={undefined}
         onEnterQuestion={enterQuestionFromPanel}
         onPickConcept={pickConcept} />
       <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
-        shared={shared}
+        shared={false}
         onWorm={(index) => { setQuestionEntry(null); setPlanet(null); setWormIdx(index) }}
         onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />
     </>

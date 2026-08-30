@@ -16,10 +16,12 @@ const testState = vi.hoisted(() => ({
   resumeCalls: 0,
 }))
 
-vi.mock('../api', () => ({
-  pollUntilDone: vi.fn(async () => ({ universe: fixture, filtered: 0 })),
-  shareIdFromPath: vi.fn(() => null),
+const apiState = vi.hoisted(() => ({
+  pollUntilDone: vi.fn(), shareIdFromPath: vi.fn(), getShare: vi.fn(),
+  previewShare: vi.fn(), createShare: vi.fn(), deleteShare: vi.fn(),
 }))
+
+vi.mock('../api', () => apiState)
 
 vi.mock('../starmap/Renderer', () => ({
   Renderer: class MockRenderer {
@@ -86,6 +88,9 @@ beforeEach(() => {
   testState.workspaceCalls = []
   testState.suspendCalls = 0
   testState.resumeCalls = 0
+  apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
+  apiState.shareIdFromPath.mockReturnValue(null)
+  apiState.getShare.mockResolvedValue({ schemaVersion: 'share.v1', questions: [], answers: [] })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
     matches: true,
     addEventListener: vi.fn(),
@@ -105,6 +110,31 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
+  test('uses a dedicated public route without polling or mounting a private renderer', async () => {
+    apiState.shareIdFromPath.mockReturnValue('public_1')
+    apiState.getShare.mockResolvedValue({
+      schemaVersion: 'share.v1', questions: [{ id: 'question:7', questionId: '7', title: '公开问题', url: 'https://www.zhihu.com/question/7', answerIds: [] }], answers: [],
+    })
+    render(<UniverseView />)
+    expect(await screen.findByRole('heading', { name: '公开问题' })).toBeVisible()
+    expect(apiState.getShare).toHaveBeenCalledWith('public_1', expect.any(AbortSignal))
+    expect(apiState.pollUntilDone).not.toHaveBeenCalled()
+    expect(testState.callbacks).toBeNull()
+    expect(screen.queryByLabelText('认知宇宙三维星图')).not.toBeInTheDocument()
+  })
+
+  test('opens the only public sharing action and restores focus after close', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    const opener = screen.getByRole('button', { name: '选择分享' })
+    expect(screen.queryByRole('button', { name: '宇宙身份证' })).not.toBeInTheDocument()
+    await user.click(opener)
+    expect(screen.getByRole('dialog', { name: '选择分享' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '关闭分享选择' }))
+    await waitFor(() => expect(opener).toHaveFocus())
+  })
+
   test('restores focus to the mode button after its panel closes', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)

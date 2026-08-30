@@ -141,4 +141,32 @@ export interface OAuthStatus {
   stateVerified: boolean; csrfClaimAllowed: boolean; source: string
   warnings: { code: string; message: string }[]
 }
+export interface ShareQuestion {
+  id: string
+  questionId: string
+  title: string
+  url: string
+  answerIds: string[]
+}
+export interface ShareAnswer {
+  id: string
+  questionId: string
+  title: string
+  url: string
+  authorId?: string
+  authorName?: string
+  publishedAt?: number
+  updatedAt?: number
+  likeCount?: number
+  commentCount?: number
+  favoriteCount?: number
+}
+export interface ShareView {
+  schemaVersion: 'share.v1'
+  legacy?: true
+  questions: ShareQuestion[]
+  answers: ShareAnswer[]
+}
+export interface SharePreview extends ShareView { digest: string }
+export interface CreatedShare { id: string; url: string; expiresAt: string }
 export type Mode = 'all' | 'worm' | 'dark' | 'nebula' | 'solo' | 'me'

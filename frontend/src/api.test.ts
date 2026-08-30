@@ -2,7 +2,8 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { getGeneration } from './api'
+import { createShare, deleteShare, getGeneration, getShare, previewShare, shareIdFromPath } from './api'
+import { shareFixture } from './domain/share.test'
 
 const goldenPath = new URL('../../internal/engine/testdata/universe_contract.json', import.meta.url)
 const golden: unknown = JSON.parse(readFileSync(goldenPath, 'utf8'))
@@ -39,5 +40,55 @@ describe('/api/universe boundary', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(malformed)))
 
     await expect(getGeneration()).rejects.toThrow(/unknown key renamedQuestions/)
+  })
+})
+
+describe('share API boundary', () => {
+  test('previews, creates, reads, and deletes with exact payloads', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...shareFixture, digest: 'd'.repeat(64) }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'public_1', url: '/s/public_1', expiresAt: '2026-09-07T00:00:00Z' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(shareFixture), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await previewShare(['question:7'])
+    await createShare(['question:7'], 'd'.repeat(64))
+    await getShare('public_1')
+    await deleteShare('public_1')
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/share/preview', '/api/share', '/api/share/public_1', '/api/share/public_1',
+    ])
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ questionIds: ['question:7'] })
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ questionIds: ['question:7'], digest: 'd'.repeat(64) })
+    expect(fetchMock.mock.calls[3][1].method).toBe('DELETE')
+  })
+
+  test('passes AbortSignal and rejects a malformed preview envelope', async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...shareFixture, digest: 'short', stars: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(previewShare(['question:7'], controller.signal)).rejects.toThrow(/invalid share/)
+    expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal)
+  })
+
+  test('rejects malformed create metadata instead of exposing an unsafe URL', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 'public_1', url: 'https://evil.test/s/public_1', expiresAt: 'not-a-time', owner: 'private',
+    }), { status: 200 })))
+    await expect(createShare(['question:7'], 'd'.repeat(64))).rejects.toThrow(/invalid created share/)
+  })
+
+  test.each([
+    ['/s/abc_123-Z', 'abc_123-Z'],
+    ['/s/abc/', null],
+    ['/s/abc/trailing', null],
+    ['/s/%61bc', null],
+    ['/prefix/s/abc', null],
+    ['/s/', null],
+  ])('parses an anchored public route %s', (path, expected) => {
+    vi.stubGlobal('location', { pathname: path })
+    expect(shareIdFromPath()).toBe(expected)
   })
 })

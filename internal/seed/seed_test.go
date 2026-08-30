@@ -52,7 +52,7 @@ func TestBuildExpandsPicksIntoCorpus(t *testing.T) {
 		t.Errorf("每个方向一次搜索，应调用 %d 次，实际 %d", len(picks), hits)
 	}
 	for _, it := range c.Items {
-		if it.Own {
+		if it.IsCreated() {
 			t.Fatal("种子星语料不能标成本人创作")
 		}
 	}

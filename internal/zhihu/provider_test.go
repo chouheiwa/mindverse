@@ -7,9 +7,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestItemTruthHelpersPreferBindingsAndNewTimes(t *testing.T) {
+	it := Item{
+		Bindings:    []UserContentBinding{{Relation: RelationCreated, At: 100}, {Relation: RelationCollected, At: 200}},
+		PublishedAt: 110,
+		Own:         false, CreatedAt: 10, FavTime: 20,
+	}
+	if !it.IsCreated() || !it.IsCollected() {
+		t.Fatalf("新用户关系应优先于 legacy Own：%+v", it)
+	}
+	if it.EffectivePublishedAt() != 110 || it.EffectiveCollectedAt() != 200 || it.EffectiveTime() != 200 {
+		t.Fatalf("新时间字段应优先于 legacy 时间：published=%d collected=%d effective=%d",
+			it.EffectivePublishedAt(), it.EffectiveCollectedAt(), it.EffectiveTime())
+	}
+	public := Item{Identity: ContentIdentity{ContentID: "answer:1"}, DiscoverySources: []DiscoverySource{DiscoveryPublicSearch}, Own: false}
+	if public.IsCreated() || public.IsCollected() {
+		t.Fatal("公共发现不得通过 legacy Own=false 回退成收藏")
+	}
+}
 
 func TestMockProviderLoadsRealSample(t *testing.T) {
 	p := &MockProvider{Path: "../../testdata/corpus_sample.json"}
@@ -64,6 +86,120 @@ func TestMergerWritesBindingsAndTimes(t *testing.T) {
 	}
 	if len(it.DiscoverySources) != 2 || it.DiscoverySources[0] != DiscoveryFavoriteList || it.DiscoverySources[1] != DiscoveryOwnContent {
 		t.Fatalf("发现来源应分别保留 favorite_list/own_content，实际 %#v", it.DiscoverySources)
+	}
+	if it.Own || it.CreatedAt != 0 || it.FavTime != 0 {
+		t.Fatalf("新采集路径不得双写 legacy 关系/时间：%+v", it)
+	}
+}
+
+func TestMergerDedupesCanonicalHostnameCaseAndSortsBindingFolders(t *testing.T) {
+	m := newMerger()
+	m.addCollections([]CollectionItem{{
+		ContentType: TypeAnswer, URL: "https://WWW.ZHIHU.COM/question/123/answer/456", Title: "标题", FavTime: 200,
+		Favlists: []ContentFavlistItem{{Title: "Zeta"}, {Title: "Alpha"}},
+	}}, "Middle")
+	m.addContents([]ContentItem{{
+		ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456", Title: "标题", CreatedAt: 100,
+	}})
+
+	got := m.result()
+	if len(got) != 1 {
+		t.Fatalf("同一稳定 ContentID 的主机名大小写变体应合并，实际 %d 条", len(got))
+	}
+	if !got[0].IsCreated() || !got[0].IsCollected() {
+		t.Fatalf("合并后应保留创作和收藏关系：%#v", got[0].Bindings)
+	}
+	if len(got[0].Folders) != 0 {
+		t.Fatal("新 merger 不得双写 legacy 收藏夹")
+	}
+	want := []string{"Alpha", "Middle", "Zeta"}
+	if folders := got[0].EffectiveFolders(); fmt.Sprint(folders) != fmt.Sprint(want) {
+		t.Fatalf("绑定收藏夹应确定性排序：got=%v want=%v", folders, want)
+	}
+}
+
+func TestMergerKeepsDistinctEmptyURLFallbackIdentities(t *testing.T) {
+	m := newMerger()
+	m.addContents([]ContentItem{
+		{ContentType: TypeAnswer, Title: "相同标题", CreatedAt: 100},
+		{ContentType: TypeAnswer, Title: "相同标题", CreatedAt: 101},
+	})
+	got := m.result()
+	if len(got) != 2 {
+		t.Fatalf("空 URL 但稳定内容不同时不得折叠，实际 %d 条", len(got))
+	}
+	for _, it := range got {
+		parts := strings.Split(it.Identity.ContentID, ":")
+		if len(parts) != 3 || parts[1] != "fallback" || len(parts[2]) != 64 {
+			t.Fatalf("fallback 必须使用完整 SHA-256：%q", it.Identity.ContentID)
+		}
+	}
+	if got[0].Identity.ContentID == got[1].Identity.ContentID {
+		t.Fatal("不同稳定内容的 fallback ID 不得相同")
+	}
+}
+
+func TestMergerPreservesIncompatibleIdentityConflicts(t *testing.T) {
+	items := []CollectionItem{
+		{ContentID: "456", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456", Title: "A"},
+		{ContentID: "456", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/999/answer/456", Title: "B"},
+	}
+	m := newMerger()
+	m.addCollections(items, "")
+	got := m.result()
+	if len(got) != 2 {
+		t.Fatalf("同 ID 但不兼容的不可变身份必须分开保留，实际 %d 条", len(got))
+	}
+	if got[0].Identity.ContentID == got[1].Identity.ContentID || !strings.Contains(got[0].Identity.ContentID, "#conflict:") || !strings.Contains(got[1].Identity.ContentID, "#conflict:") {
+		t.Fatalf("冲突必须以确定性后缀可观测：%q %q", got[0].Identity.ContentID, got[1].Identity.ContentID)
+	}
+	mReverse := newMerger()
+	mReverse.addCollections([]CollectionItem{items[1], items[0]}, "")
+	reversed := mReverse.result()
+	gotIDs := []string{got[0].Identity.ContentID, got[1].Identity.ContentID}
+	reversedIDs := []string{reversed[0].Identity.ContentID, reversed[1].Identity.ContentID}
+	sort.Strings(gotIDs)
+	sort.Strings(reversedIDs)
+	if fmt.Sprint(gotIDs) != fmt.Sprint(reversedIDs) {
+		t.Fatalf("冲突 ID 不得受输入顺序影响：got=%v reversed=%v", gotIDs, reversedIDs)
+	}
+}
+
+func TestLiveProviderUsesSingleInjectedObservationTime(t *testing.T) {
+	const observed = int64(1800000000)
+	var clockCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		items := []map[string]any{}
+		switch r.URL.Path {
+		case "/api/v1/user/collections":
+			items = append(items, map[string]any{"ContentType": "answer", "ContentID": "456", "Url": "https://www.zhihu.com/question/123/answer/456", "Title": "收藏"})
+		case "/api/v1/user/contents":
+			items = append(items, map[string]any{"ContentType": "answer", "ContentID": "457", "Url": "https://www.zhihu.com/question/123/answer/457", "Title": "创作"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Code": 0, "Data": map[string]any{"Items": items}})
+	}))
+	defer srv.Close()
+	c := NewClient("secret", "")
+	c.BaseURL, c.HTTP = srv.URL, srv.Client()
+	p := &LiveProvider{Client: c, Plan: FetchPlan{ContentPages: 1, FolloweePages: 1}, Now: func() time.Time {
+		clockCalls++
+		return time.Unix(observed, 0)
+	}}
+	corpus, err := p.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("采集失败: %v", err)
+	}
+	if clockCalls != 1 {
+		t.Fatalf("每次采集应只读一次时钟，实际 %d", clockCalls)
+	}
+	if len(corpus.Items) != 2 {
+		t.Fatalf("应采集 2 条，实际 %d", len(corpus.Items))
+	}
+	for _, it := range corpus.Items {
+		if it.ObservedAt != observed {
+			t.Fatalf("同次采集必须共享 ObservedAt，实际 %d", it.ObservedAt)
+		}
 	}
 }
 

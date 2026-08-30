@@ -84,6 +84,7 @@ type Paging struct {
 type ContentType string
 
 const (
+	TypeUnknown  ContentType = "unknown"
 	TypeAnswer   ContentType = "answer"
 	TypeArticle  ContentType = "article"
 	TypeZvideo   ContentType = "zvideo"
@@ -94,6 +95,7 @@ const (
 
 // ContentItem 用户创作内容。
 type ContentItem struct {
+	ContentID     string      `json:"ContentID"`
 	ContentType   ContentType `json:"ContentType"`
 	URL           string      `json:"Url"`
 	CreatedAt     int64       `json:"CreatedAt"`
@@ -122,6 +124,7 @@ type ContentFavlistItem struct {
 // CollectionItem 收藏内容。比 ContentItem 多出收藏时刻与作者，
 // 是语义引擎最有价值的语料来源。
 type CollectionItem struct {
+	ContentID     string               `json:"ContentID"`
 	ContentType   ContentType          `json:"ContentType"`
 	URL           string               `json:"Url"`
 	CreatedAt     int64                `json:"CreatedAt"`

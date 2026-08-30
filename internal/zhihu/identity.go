@@ -28,7 +28,7 @@ type ContentIdentity struct {
 // It never invents a question ID. An unparseable artifact still receives a
 // deterministic content identity so it can remain evidence without becoming a
 // question planet.
-func ResolveIdentity(contentType ContentType, rawID, rawURL, title string) ContentIdentity {
+func ResolveIdentity(contentType ContentType, rawID, rawURL, title string, stableFields ...string) ContentIdentity {
 	identity := ContentIdentity{Type: contentType, URL: rawURL}
 	rawID = strings.TrimSpace(rawID)
 	hasRawID := decimalID.MatchString(rawID)
@@ -44,8 +44,10 @@ func ResolveIdentity(contentType ContentType, rawID, rawURL, title string) Conte
 		identity.ContentID = string(contentType) + ":" + parsedID
 	}
 	if identity.ContentID == "" {
-		sum := sha256.Sum256([]byte(string(contentType) + "\x00" + rawURL))
-		identity.ContentID = fmt.Sprintf("%s:url:%x", contentType, sum[:8])
+		fallbackParts := []string{string(contentType), rawID, rawURL, strings.TrimSpace(title)}
+		fallbackParts = append(fallbackParts, stableFields...)
+		sum := sha256.Sum256([]byte(strings.Join(fallbackParts, "\x00")))
+		identity.ContentID = fmt.Sprintf("%s:fallback:%x", contentType, sum[:])
 	}
 
 	if questionID != "" && strings.TrimSpace(title) != "" {

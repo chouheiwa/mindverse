@@ -265,7 +265,11 @@ func (c *Client) Followees(ctx context.Context, maxPages int) ([]Followee, error
 //
 // /user 没有正式 schema，失败一律降级为 nil，绝不阻断主流程。
 func (c *Client) Profile(ctx context.Context) *Profile {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openBase+"/user", nil)
+	base := openBase
+	if c.BaseURL != "" {
+		base = c.BaseURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/user", nil)
 	if err != nil {
 		return nil
 	}

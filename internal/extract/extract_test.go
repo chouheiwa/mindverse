@@ -95,6 +95,24 @@ func TestExtractAlignsAndCanonicalizes(t *testing.T) {
 	t.Logf("模型调用 %d 次，覆盖 %d 条", f.calls, annotated)
 }
 
+func TestRenderBatchSeparatesBindingsFromPublicHints(t *testing.T) {
+	items := []zhihu.Item{
+		{Title: "收藏", Bindings: []zhihu.UserContentBinding{{Relation: zhihu.RelationCollected, Folders: []string{"Beta", "Alpha"}}}},
+		{Title: "搜索", Identity: zhihu.ContentIdentity{ContentID: "answer:1"}, DiscoverySources: []zhihu.DiscoverySource{zhihu.DiscoveryPublicSearch}, ConceptHints: []string{"游戏与博弈"}},
+	}
+	got := renderBatch(items, 0, nil)
+	if !strings.Contains(got, "作者把它收进了收藏夹：Alpha、Beta") {
+		t.Fatalf("真实绑定收藏夹应排序后注入：%s", got)
+	}
+	if !strings.Contains(got, "公共搜索方向：游戏与博弈") {
+		t.Fatalf("公共探索先验应保留：%s", got)
+	}
+	lines := strings.Split(got, "\n")
+	if len(lines) > 2 && strings.Contains(lines[2], "收进了收藏夹") {
+		t.Fatalf("公共搜索不得伪装成收藏：%s", lines[2])
+	}
+}
+
 // TestVocabularyIsFedBack 检验词表回灌：并发批次必须看得到首批建立的词表，
 // 否则概念会碎成一地，聚类质量崩掉。
 func TestVocabularyIsFedBack(t *testing.T) {

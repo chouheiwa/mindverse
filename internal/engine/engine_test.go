@@ -146,6 +146,26 @@ func TestDeterministic(t *testing.T) {
 	}
 }
 
+func TestRunPreservesBindingBasedAuthorship(t *testing.T) {
+	in := Input{
+		Items: []zhihu.Item{{
+			Title: "创作内容", URL: "https://www.zhihu.com/question/1/answer/2",
+			Bindings: []zhihu.UserContentBinding{{Relation: zhihu.RelationCreated}}, PublishedAt: 1700000000,
+		}},
+		Concepts: [][]string{{"测试概念"}},
+	}
+	u, err := Run(in, Options{MinSupport: 1, MinCluster: 1, Shuffles: 1}, nil)
+	if err != nil {
+		t.Fatalf("引擎失败: %v", err)
+	}
+	if u.Meta.Own != 1 || u.Meta.Fav != 0 {
+		t.Fatalf("绑定式创作在引擎统计中应保持 authored：%+v", u.Meta)
+	}
+	if len(u.Stars) != 1 || len(u.Stars[0].Evidence) != 1 || u.Stars[0].Evidence[0].Own != 1 {
+		t.Fatalf("绑定式创作在证据中应保持 authored：%+v", u.Stars)
+	}
+}
+
 func BenchmarkRun(b *testing.B) {
 	p := &zhihu.MockProvider{Path: "../../testdata/corpus_sample.json"}
 	c, _ := p.Fetch(context.Background())

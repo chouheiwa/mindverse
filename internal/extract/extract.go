@@ -114,10 +114,13 @@ func renderBatch(items []zhihu.Item, offset int, vocab []string) string {
 		if s := strings.TrimSpace(it.Summary); s != "" {
 			fmt.Fprintf(&b, "｜摘要：%s", truncate(s, 80))
 		}
-		if len(it.Folders) > 0 {
-			fmt.Fprintf(&b, "｜作者把它收进了收藏夹：%s", strings.Join(it.Folders, "、"))
+		if folders := it.EffectiveFolders(); len(folders) > 0 {
+			fmt.Fprintf(&b, "｜作者把它收进了收藏夹：%s", strings.Join(folders, "、"))
 		}
-		if it.Own {
+		if len(it.ConceptHints) > 0 {
+			fmt.Fprintf(&b, "｜公共搜索方向：%s", strings.Join(it.ConceptHints, "、"))
+		}
+		if it.IsCreated() {
 			b.WriteString("｜这是作者本人写的")
 		}
 		b.WriteByte('\n')

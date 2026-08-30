@@ -87,8 +87,11 @@ func TestSearchItemToItem(t *testing.T) {
 	if it.Type != TypeArticle {
 		t.Errorf("类型应归一化为小写 article，实际 %q", it.Type)
 	}
-	if len(it.Folders) != 1 || it.Folders[0] != "游戏与博弈" {
-		t.Error("方向名要作为收藏夹先验注入概念抽取")
+	if len(it.ConceptHints) != 1 || it.ConceptHints[0] != "游戏与博弈" {
+		t.Error("方向名要作为公共搜索先验注入概念抽取")
+	}
+	if len(it.Folders) != 0 {
+		t.Fatal("公共搜索方向不得写入 legacy 收藏夹")
 	}
 }
 
@@ -125,5 +128,16 @@ func TestSearchEditTimeIsNeverPublishedTime(t *testing.T) {
 	}
 	if it.ObservedAt != observed {
 		t.Fatalf("观测时间应由注入时钟决定，实际 %d", it.ObservedAt)
+	}
+}
+
+func TestSearchUnknownTypeIsNeverTreatedAsAnswer(t *testing.T) {
+	s := SearchItem{ContentType: "Mystery", ContentID: "456", URL: "https://www.zhihu.com/question/123/answer/456", Title: "标题"}
+	it := s.ToItem("", func() time.Time { return time.Unix(1800000000, 0) })
+	if it.Type != TypeUnknown || it.Identity.Type != TypeUnknown {
+		t.Fatalf("未知搜索类型必须保留为 unknown：Item=%q Identity=%q", it.Type, it.Identity.Type)
+	}
+	if it.Identity.Admitted || it.Identity.QuestionID != "" {
+		t.Fatalf("未知类型不得因 answer 形状 URL 而准入：%+v", it.Identity)
 	}
 }

@@ -101,12 +101,12 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		own, fav := 0, 0
 		for _, k := range itemsOf[c] {
 			it := in.Items[k]
-			if t := it.At(); t > 0 {
+			if t := it.EffectiveTime(); t > 0 {
 				ts = append(ts, t)
 			}
-			if it.Own {
+			if it.IsCreated() {
 				own++
-			} else {
+			} else if it.IsCollected() {
 				fav++
 			}
 		}
@@ -205,7 +205,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		}
 		p := lay.starPos[best]
 		own := 0.0
-		if in.Items[k].Own {
+		if in.Items[k].IsCreated() {
 			own = 1
 		}
 		u.Particles = append(u.Particles, [5]float64{
@@ -406,12 +406,12 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	own, fav := 0, 0
 	var lo, hi int64
 	for _, it := range in.Items {
-		if it.Own {
+		if it.IsCreated() {
 			own++
-		} else {
+		} else if it.IsCollected() {
 			fav++
 		}
-		if t := it.At(); t > 0 {
+		if t := it.EffectiveTime(); t > 0 {
 			if lo == 0 || t < lo {
 				lo = t
 			}
@@ -431,7 +431,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 
 func evidenceFor(items []zhihu.Item, idx []int, n int) []Evidence {
 	s := append([]int(nil), idx...)
-	sort.Slice(s, func(i, j int) bool { return items[s[i]].At() > items[s[j]].At() })
+	sort.Slice(s, func(i, j int) bool { return items[s[i]].EffectiveTime() > items[s[j]].EffectiveTime() })
 	if len(s) > n {
 		s = s[:n]
 	}
@@ -439,10 +439,10 @@ func evidenceFor(items []zhihu.Item, idx []int, n int) []Evidence {
 	for _, k := range s {
 		it := items[k]
 		e := Evidence{Title: trimRunes(it.Title, 52), URL: it.URL}
-		if it.Own {
+		if it.IsCreated() {
 			e.Own = 1
 		}
-		if t := it.At(); t > 0 {
+		if t := it.EffectiveTime(); t > 0 {
 			e.When = time.Unix(t, 0).Format("06.01")
 		}
 		out = append(out, e)

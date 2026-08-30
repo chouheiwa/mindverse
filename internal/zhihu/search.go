@@ -62,9 +62,9 @@ func (s SearchItem) ToItem(folder string, clocks ...func() time.Time) Item {
 	if len(clocks) > 0 && clocks[0] != nil {
 		now = clocks[0]
 	}
-	var folders []string
+	var hints []string
 	if folder != "" {
-		folders = []string{folder}
+		hints = []string{folder}
 	}
 	return Item{
 		Identity:         ResolveIdentity(ContentType(normalizeType(s.ContentType)), s.ContentID, s.URL, s.Title),
@@ -75,8 +75,7 @@ func (s SearchItem) ToItem(folder string, clocks ...func() time.Time) Item {
 		Title:            s.Title,
 		Summary:          s.ContentText,
 		Type:             ContentType(normalizeType(s.ContentType)),
-		Own:              false,
-		Folders:          folders,
+		ConceptHints:     hints,
 		Author:           s.AuthorName,
 		LikeCount:        int64(s.VoteUpCount),
 	}
@@ -96,6 +95,6 @@ func normalizeType(t string) string {
 	case "Question", "question":
 		return "question"
 	default:
-		return "answer"
+		return "unknown"
 	}
 }

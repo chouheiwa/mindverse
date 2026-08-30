@@ -2,10 +2,15 @@ package zhihu
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // Item 是喂给语义引擎的统一语料单元。
@@ -17,6 +22,7 @@ type Item struct {
 	PublishedAt      int64                `json:"publishedAt,omitempty"`
 	UpdatedAt        int64                `json:"updatedAt,omitempty"`
 	ObservedAt       int64                `json:"observedAt,omitempty"`
+	ConceptHints     []string             `json:"conceptHints,omitempty"`
 
 	// Deprecated compatibility fields. New ingestion paths write the domain
 	// fields above; these remain readable for legacy snapshots and consumers.
@@ -32,21 +38,83 @@ type Item struct {
 	LikeCount int64       `json:"likeCount"`
 }
 
-// At 返回该条目在时间轴上的位置：收藏用收藏时刻，创作用发表时刻。
-func (i Item) At() int64 {
+func (i Item) hasDomainTruth() bool {
+	return i.Identity.ContentID != "" || len(i.Bindings) > 0 || len(i.DiscoverySources) > 0 || len(i.ConceptHints) > 0 || i.PublishedAt > 0 || i.UpdatedAt > 0 || i.ObservedAt > 0
+}
+
+// IsCreated reports a real authored binding, falling back to legacy Own only
+// for records that predate the split domain contract.
+func (i Item) IsCreated() bool {
+	for _, binding := range i.Bindings {
+		if binding.Relation == RelationCreated {
+			return true
+		}
+	}
+	return !i.hasDomainTruth() && i.Own
+}
+
+// IsCollected reports a real collected binding, falling back to the historic
+// Own=false representation only for legacy records.
+func (i Item) IsCollected() bool {
+	for _, binding := range i.Bindings {
+		if binding.Relation == RelationCollected {
+			return true
+		}
+	}
+	return !i.hasDomainTruth() && !i.Own
+}
+
+func (i Item) EffectivePublishedAt() int64 {
+	if i.PublishedAt > 0 {
+		return i.PublishedAt
+	}
+	if !i.hasDomainTruth() {
+		return i.CreatedAt
+	}
+	return 0
+}
+
+func (i Item) EffectiveCollectedAt() int64 {
 	for _, binding := range i.Bindings {
 		if binding.Relation == RelationCollected && binding.At > 0 {
 			return binding.At
 		}
 	}
-	if i.PublishedAt > 0 {
-		return i.PublishedAt
-	}
-	if i.FavTime > 0 {
+	if !i.hasDomainTruth() {
 		return i.FavTime
 	}
-	return i.CreatedAt
+	return 0
 }
+
+// EffectiveFolders returns a sorted copy of binding folders, with a legacy
+// fallback for old snapshots.
+func (i Item) EffectiveFolders() []string {
+	var folders []string
+	for _, binding := range i.Bindings {
+		if binding.Relation == RelationCollected {
+			for _, folder := range binding.Folders {
+				folders = appendUniq(folders, folder)
+			}
+		}
+	}
+	if len(folders) == 0 && !i.hasDomainTruth() {
+		folders = append(folders, i.Folders...)
+	}
+	sort.Strings(folders)
+	return folders
+}
+
+// EffectiveTime is the user's relationship time when one exists, otherwise
+// the artifact's publication time. Public discovery does not invent either.
+func (i Item) EffectiveTime() int64 {
+	if collectedAt := i.EffectiveCollectedAt(); collectedAt > 0 {
+		return collectedAt
+	}
+	return i.EffectivePublishedAt()
+}
+
+// At is retained as a source-compatible alias for existing callers.
+func (i Item) At() int64 { return i.EffectiveTime() }
 
 // Corpus 是一次采集的完整结果。
 type Corpus struct {
@@ -61,25 +129,13 @@ type Corpus struct {
 // Stats 汇总语料规模，用于前端展示与冷启动判断。
 func (c *Corpus) Stats() (total, own, fav int) {
 	for _, it := range c.Items {
-		created, collected := it.userRelations()
-		if created {
+		if it.IsCreated() {
 			own++
-		} else if collected || len(it.Bindings) == 0 && len(it.DiscoverySources) == 0 && !it.Own {
+		} else if it.IsCollected() {
 			fav++
 		}
 	}
 	return len(c.Items), own, fav
-}
-
-func (i Item) userRelations() (created, collected bool) {
-	for _, binding := range i.Bindings {
-		created = created || binding.Relation == RelationCreated
-		collected = collected || binding.Relation == RelationCollected
-	}
-	if len(i.Bindings) == 0 {
-		created = i.Own
-	}
-	return created, collected
 }
 
 // Provider 抽象语料来源。
@@ -106,6 +162,7 @@ func DefaultPlan() FetchPlan { return FetchPlan{FavlistPages: 4, ContentPages: 6
 type LiveProvider struct {
 	Client *Client
 	Plan   FetchPlan
+	Now    func() time.Time
 }
 
 func (p *LiveProvider) Kind() string { return "live" }
@@ -116,7 +173,11 @@ func (p *LiveProvider) Fetch(ctx context.Context) (*Corpus, error) {
 		plan = DefaultPlan()
 	}
 	out := &Corpus{Source: "live"}
-	merge := newMerger()
+	now := time.Now
+	if p.Now != nil {
+		now = p.Now
+	}
+	merge := newMerger(now().Unix())
 
 	favlists, err := p.Client.Favlists(ctx)
 	if err != nil {
@@ -172,32 +233,58 @@ func softFail(err error) bool {
 	return false
 }
 
-// merger 按 URL 去重，并合并同一条内容在多个收藏夹中的归属。
+// merger 按稳定内容身份去重，并合并同一条内容的用户关系。
+// 同一 ContentID 若出现不兼容的原始身份，result 会给所有
+// 冲突项加上由完整 SHA-256 得到的确定性 #conflict 后缀。
 type merger struct {
-	byURL map[string]*Item
-	order []string
+	byKey      map[string]*Item
+	baseKeys   map[string][]string
+	order      []string
+	observedAt int64
 }
 
-func newMerger() *merger { return &merger{byURL: map[string]*Item{}} }
+func newMerger(observedAt ...int64) *merger {
+	m := &merger{byKey: map[string]*Item{}, baseKeys: map[string][]string{}}
+	if len(observedAt) > 0 {
+		m.observedAt = observedAt[0]
+	}
+	return m
+}
 
-func (m *merger) get(url string) *Item {
-	if it, ok := m.byURL[url]; ok {
+func (m *merger) get(identity ContentIdentity) *Item {
+	fingerprint := identityFingerprint(identity)
+	key := identity.ContentID + "\x00" + fingerprint
+	if it, ok := m.byKey[key]; ok {
 		return it
 	}
-	it := &Item{URL: url}
-	m.byURL[url] = it
-	m.order = append(m.order, url)
+	it := &Item{Identity: identity, URL: identity.URL, ObservedAt: m.observedAt}
+	m.byKey[key] = it
+	m.baseKeys[identity.ContentID] = append(m.baseKeys[identity.ContentID], key)
+	m.order = append(m.order, key)
 	return it
+}
+
+func identityFingerprint(identity ContentIdentity) string {
+	normalizedURL := identity.URL
+	if u, err := url.Parse(identity.URL); err == nil {
+		u.Host = strings.ToLower(u.Host)
+		normalizedURL = u.String()
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		string(identity.Type), identity.ContentID, normalizedURL, identity.QuestionID,
+	}, "\x00")))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func (m *merger) addCollections(items []CollectionItem, folder string) {
 	for _, c := range items {
-		if c.URL == "" {
-			continue
+		stableFields := []string{strconv.FormatInt(c.CreatedAt, 10)}
+		if c.Author != nil {
+			stableFields = append(stableFields, c.Author.URLToken, c.Author.URL)
 		}
-		it := m.get(c.URL)
+		identity := ResolveIdentity(c.ContentType, c.ContentID, c.URL, c.Title, stableFields...)
+		it := m.get(identity)
 		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
-		it.Identity = ResolveIdentity(c.ContentType, "", c.URL, c.Title)
 		it.PublishedAt, it.LikeCount = c.CreatedAt, c.LikeCount
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryFavoriteList)
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCollected, At: c.FavTime})
@@ -205,12 +292,10 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 			it.Author = c.Author.Name
 		}
 		if folder != "" {
-			it.Folders = appendUniq(it.Folders, folder)
 			it.Bindings = addBindingFolder(it.Bindings, RelationCollected, folder)
 		}
 		for _, f := range c.Favlists {
 			if f.Title != "" {
-				it.Folders = appendUniq(it.Folders, f.Title)
 				it.Bindings = addBindingFolder(it.Bindings, RelationCollected, f.Title)
 			}
 		}
@@ -219,12 +304,9 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 
 func (m *merger) addContents(items []ContentItem) {
 	for _, c := range items {
-		if c.URL == "" {
-			continue
-		}
-		it := m.get(c.URL)
+		identity := ResolveIdentity(c.ContentType, c.ContentID, c.URL, c.Title, strconv.FormatInt(c.CreatedAt, 10))
+		it := m.get(identity)
 		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
-		it.Identity = ResolveIdentity(c.ContentType, "", c.URL, c.Title)
 		it.PublishedAt, it.LikeCount = c.CreatedAt, c.LikeCount
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCreated, At: c.CreatedAt})
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryOwnContent)
@@ -264,13 +346,23 @@ func appendDiscovery(sources []DiscoverySource, source DiscoverySource) []Discov
 
 func (m *merger) result() []Item {
 	out := make([]Item, 0, len(m.order))
-	for _, u := range m.order {
-		it := m.byURL[u]
+	for _, key := range m.order {
+		it := m.byKey[key]
 		if it.Title == "" {
 			continue
 		}
-		sort.Strings(it.Folders)
-		out = append(out, *it)
+		for i := range it.Bindings {
+			sort.Strings(it.Bindings[i].Folders)
+		}
+		sort.SliceStable(it.Bindings, func(i, j int) bool { return it.Bindings[i].Relation < it.Bindings[j].Relation })
+		sort.SliceStable(it.DiscoverySources, func(i, j int) bool { return it.DiscoverySources[i] < it.DiscoverySources[j] })
+		item := *it
+		baseID := item.Identity.ContentID
+		if len(m.baseKeys[baseID]) > 1 {
+			_, fingerprint, _ := strings.Cut(key, "\x00")
+			item.Identity.ContentID = baseID + "#conflict:" + fingerprint
+		}
+		out = append(out, item)
 	}
 	return out
 }

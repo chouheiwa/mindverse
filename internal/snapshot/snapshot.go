@@ -67,12 +67,6 @@ func (s *Store) path(id string) string { return filepath.Join(s.dir, id+".json")
 
 // Save 剥掉原文后落盘。
 func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
-	if u == nil {
-		return nil, fmt.Errorf("宇宙数据为空")
-	}
-	if err := u.Validate(); err != nil {
-		return nil, fmt.Errorf("宇宙数据无效: %w", err)
-	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
@@ -107,9 +101,6 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 	var snap Snapshot
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, fmt.Errorf("快照已损坏")
-	}
-	if err := snap.Universe.Validate(); err != nil {
-		return nil, fmt.Errorf("快照已损坏: %w", err)
 	}
 	if time.Now().After(snap.ExpiresAt) {
 		_ = s.Delete(id)

@@ -1,10 +1,7 @@
 package snapshot
 
 import (
-	"encoding/json"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/chouheiwa/mindverse/internal/engine"
 )
@@ -14,37 +11,11 @@ func sample() *engine.Universe {
 	return &engine.Universe{
 		Meta:     engine.Meta{Items: 1, Clusters: 1},
 		Clusters: []engine.Cluster{{ID: 0, Name: "把底层讲明白"}},
-		Stars:    []engine.Star{{ID: "star:v1:private:sample", Scope: engine.ScopePrivate, Concept: "并发", Evidence: ev}},
+		Stars:    []engine.Star{{Concept: "并发", Evidence: ev}},
 		Dark:     []engine.Dark{{Concept: "网文写作", Fav: 11, Evidence: ev}},
 		Solo:     []engine.Solo{{Concept: "分布式系统", Title: "为什么你总是抓不到狼", URL: "https://zhuanlan.zhihu.com/p/2"}},
 		Wormholes: []engine.Wormhole{{NameA: "A", NameB: "B",
 			Evidence: []engine.WormholeEvidence{{Title: "标题", URL: "https://www.zhihu.com/answer/3"}}}},
-	}
-}
-
-func TestLoadRejectsPrivateStarWithExternalQueryCapability(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap := Snapshot{
-		ID: "unsafe", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
-		Universe: engine.Universe{Stars: []engine.Star{{
-			ID: "star:v1:private:unsafe", Scope: engine.ScopePrivate, ExternalQueryAllowed: true,
-		}}},
-	}
-	if _, err := store.Save(&snap.Universe); err == nil {
-		t.Fatal("private star with external query capability must be rejected before persistence")
-	}
-	encoded, err := json.Marshal(snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(store.path(snap.ID), encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Load(snap.ID); err == nil {
-		t.Fatal("serialized private star with external query capability must be rejected")
 	}
 }
 

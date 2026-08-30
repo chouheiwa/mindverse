@@ -10,7 +10,7 @@ interface Props {
   shared: boolean
 }
 
-/** 模式面板：虫洞、暗物质、星云、边缘微光、好奇心结构。 */
+/** 模式面板：虫洞、熄灭的星、星云、边缘微光、好奇心结构。 */
 export function InfoPanel({ universe, mode, wormIdx, onWorm, onClose, shared }: Props) {
   const open = mode !== 'all'
   const u = universe
@@ -61,17 +61,18 @@ export function InfoPanel({ universe, mode, wormIdx, onWorm, onClose, shared }: 
       {mode === 'dark' && (
         <div className="stagger">
           <div>
-            <div className="lbl">暗物质 · 收藏过，但从未写过</div>
-            <h2>你想成为、还没开始的那个人</h2>
+            <div className="lbl">熄灭的星 · 曾经密集，然后停了</div>
+            <h2>你放下的那些</h2>
           </div>
           <p className="pnl-lead">
-            这些主题你反复收藏，<em>却一条都没有产出过</em>。它们不发光，但一直在那里。
+            这些主题你曾经一条条收进来，<em>然后就再没回去过</em>。
+            星还在原处，只是很久没有新的光了。
           </p>
           {u.dark.map((d) => (
             <div key={d.c} style={{ marginBottom: 22 }}>
               <div style={{ fontFamily: 'var(--f-d)', fontSize: 18, fontWeight: 600, marginBottom: 4 }}>{d.c}</div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--mute)', marginBottom: 8 }}>
-                收藏 {d.f} 条 · 创作 0 条 · {d.first} → {d.last}
+                {d.n} 条 · {d.first} → {d.last} · <em style={{ fontStyle: 'normal', color: 'var(--amber)' }}>已停 {d.gap} 个月</em>
               </div>
               {d.ev.map((e, i) => (
                 <a className="ev" key={i} href={e.u} target="_blank" rel="noopener noreferrer">

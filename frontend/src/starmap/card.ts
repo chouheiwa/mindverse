@@ -146,7 +146,7 @@ function paint(ctx: CanvasRenderingContext2D, u: Universe, opts: CardOptions) {
     y += 26
   }
 
-  // ── 暗物质：一行，但是最扎心的一行 ──
+  // ── 熄灭的星：一行，但是最扎心的一行 ──
   const d = u.dark[0]
   if (d) {
     y += 8
@@ -156,8 +156,8 @@ function paint(ctx: CanvasRenderingContext2D, u: Universe, opts: CardOptions) {
     ctx.fillRect(PAD, y, 2, 58)
     ctx.font = `300 13.5px ${F_B}`
     rich(ctx, [
-      { t: '还有一片不发光的地方 —— ', c: DIM },
-      { t: `收藏了 ${d.f} 条「${d.c}」，一条都没写过。`, c: AMBER },
+      { t: '还有一片不再发光的地方 —— ', c: DIM },
+      { t: `「${d.c}」留下 ${d.n} 条，已经 ${d.gap} 个月没有新的了。`, c: AMBER },
     ], PAD + 16, y + 22, W - PAD * 2 - 32, 22)
   }
 

@@ -44,7 +44,11 @@ export interface Wormhole {
 }
 
 export interface Solo { c: string; n: number; t: string; u: string; g: string[]; p: [number, number, number] }
-export interface Dark { c: string; f: number; o: number; first: string; last: string; ev: Evidence[] }
+/** 熄灭的星：曾经有过体量、但已经很久没有新增。gap 是距最近一次新增的月数。 */
+export interface Dark {
+  c: string; n: number; f: number; o: number; gap: number
+  first: string; last: string; ev: Evidence[]
+}
 export interface Nebula { c: string; n: number; burst: number; first: string; last: string }
 
 export interface Meta {

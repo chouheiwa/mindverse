@@ -37,9 +37,14 @@ export function nebulaPalette(u: Universe): [THREE.Color, THREE.Color, THREE.Col
     const [r, g, b] = starColor(c.hue, c.sat)
     return new THREE.Color(r, g, b)
   }
+  // 边缘那层是青色，而青与琥珀是补色，直接按 26% 混会混出脏黄绿。
+  // 色温主轴换成时间之后，第三大星群完全可能是暖色（实测：演化路径 hue32），
+  // 画面边缘就会出现一圈橙青撕裂，看着像色差而不像设计。
+  // 先把它拉向白再混：保留亮度上的呼应，不引进对冲的色相。
+  const pale = tint(2).clone().lerp(new THREE.Color(1, 1, 1), 0.62)
   return [
     new THREE.Color(0.12, 0.19, 0.66).lerp(tint(0), 0.26),  // 深蓝紫，主体
     new THREE.Color(0.54, 0.16, 0.60).lerp(tint(1), 0.30),  // 洋红紫，亮部
-    new THREE.Color(0.04, 0.42, 0.48).lerp(tint(2), 0.26),  // 青，边缘
+    new THREE.Color(0.04, 0.42, 0.48).lerp(pale, 0.26),     // 青，边缘
   ]
 }

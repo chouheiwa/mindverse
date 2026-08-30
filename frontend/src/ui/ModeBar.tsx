@@ -6,7 +6,7 @@ import './ModeBar.css'
 const MODES: { k: Mode; t: string; warm?: boolean }[] = [
   { k: 'all', t: '全景' },
   { k: 'worm', t: '虫洞', warm: true },
-  { k: 'dark', t: '暗物质', warm: true },
+  { k: 'dark', t: '熄灭的星', warm: true },
   { k: 'nebula', t: '星云' },
   { k: 'solo', t: '边缘微光' },
   { k: 'me', t: '好奇心结构' },

@@ -56,15 +56,17 @@ function SpanRail({ star, meta }: { star: Star; meta: Meta }) {
   )
 }
 
-function EvidenceList({ items, shared, highlight }: {
-  items: Evidence[]; shared: boolean; highlight?: string
+function EvidenceList({ items, shared, highlight, fresh }: {
+  items: Evidence[]; shared: boolean; highlight?: string; fresh: (y: string) => number
 }) {
   return (
     <>
       {items.map((e, i) => (
         <a className={`evp${highlight && e.u === highlight ? ' on' : ''}`} key={i}
           href={e.u} target="_blank" rel="noopener noreferrer">
-          <span className={`pdot ${e.o ? 'own' : 'fav'}`} />
+          {/* 明暗 = 新旧，暖色圈 = 我写过的 —— 与 3D 里那颗行星逐项对应 */}
+          <span className={`pdot${e.o ? ' own' : ''}`}
+            style={{ opacity: 0.34 + 0.66 * fresh(e.y) }} />
           {/* 分享快照不含原文标题 —— 只存结构与公开链接 */}
           <span className="evp-t">{e.t || (shared ? '在知乎上打开这条内容' : '')}</span>
           <span className="evp-y">{e.y}</span>
@@ -79,6 +81,12 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
   const dark: Dark | undefined = star ? universe.dark.find((d) => d.c === star.c) : undefined
   const nebula = star ? universe.nebula.find((n) => n.c === star.c) : undefined
   const rest = star ? star.n - star.ev.length : 0
+  // 与 gl/bodies.ts 同一套口径：按全宇宙跨度归一化，跨星系之间才可比
+  const fresh = useMemo(() => {
+    const lo = new Date(universe.meta.span[0] * 1000).getFullYear()
+    const hi = Math.max(new Date(universe.meta.span[1] * 1000).getFullYear() + 1, lo + 1)
+    return (y: string) => Math.min(1, Math.max(0, (frac(y) - lo) / (hi - lo)))
+  }, [universe.meta])
 
   return (
     <aside className={`pnl${star ? ' open' : ''}`} aria-live="polite">
@@ -94,7 +102,8 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
 
           <p className="pnl-lead">
             {dark ? (
-              <>你收藏了 <b>{star.f}</b> 条关于「{star.c}」的内容，<em>一条都没有写过</em>。这是一片暗物质。</>
+              <>关于「{star.c}」你留下了 <b>{star.n}</b> 条，最后一条停在 {star.la}，
+                <em>已经 {dark.gap} 个月没有新的了</em>。这颗星熄灭了。</>
             ) : nebula ? (
               <><b>{Math.round(star.bu * 100)}%</b> 的内容集中在同一个 30 天窗口里 —— 这是一次<em>短暂而密集的爆发</em>，不是长期兴趣。</>
             ) : (
@@ -110,10 +119,10 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
           <div>
             <h3>构成它的内容 · 每一条就是一颗行星</h3>
             <div className="lgd">
-              <span><i className="pdot own" />我写过的 · 自己发光</span>
-              <span><i className="pdot fav" />我只收藏的 · 反射恒星的光</span>
+              <span>点越亮 = 收得越近</span>
+              {star.o > 0 && <span><i className="pdot own" />暖色圈 = 我写过的</span>}
             </div>
-            <EvidenceList items={star.ev} shared={shared} highlight={highlight} />
+            <EvidenceList items={star.ev} shared={shared} highlight={highlight} fresh={fresh} />
             {rest > 0 && <div className="rest">另有 {rest} 条未在此列出</div>}
           </div>
 

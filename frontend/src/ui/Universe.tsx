@@ -204,7 +204,7 @@ export function UniverseView() {
               {/* 琥珀只在这一格出现 */}
               <div className="uv-anom">
                 <div className="uv-mt"><span className="k">虫洞</span><span className="v">{universe.wormholes.length}</span></div>
-                <div className="uv-mt"><span className="k">暗物质</span><span className="v">{universe.dark.length}</span></div>
+                <div className="uv-mt"><span className="k">熄灭</span><span className="v">{universe.dark.length}</span></div>
               </div>
             </div>
           )}

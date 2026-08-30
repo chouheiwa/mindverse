@@ -20,7 +20,7 @@ export const PlanetCard = forwardRef<HTMLDivElement, {
       <button className="pc-x" onClick={onClose} aria-label="取消选中">×</button>
       <div className="pc-h">
         {/* 与右侧列表、以及 3D 里那颗行星的着色一致 */}
-        <span className={`pdot ${own ? 'own' : 'fav'}`} />
+        <span className={`pdot${own ? ' own' : ''}`} />
         <span className="pc-k">{own ? '我写过的' : '我只收藏的'}</span>
         <span className="mono pc-y">{ev.y}</span>
       </div>

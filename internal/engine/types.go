@@ -131,11 +131,17 @@ type Solo struct {
 	Pos      [3]float64 `json:"p"`
 }
 
-// Dark 暗物质：收藏过但从未创作的概念。
+// Dark 熄灭的星：曾经有过体量、但已经很久没有新增的概念。
+//
+// 判据曾经是「收藏过但从未创作」。那条判据只对创作者成立 ——
+// 对一个从不写东西的人，他的每一个兴趣都满足它（实测 83/83），
+// 而配套文案「你想成为、还没开始的那个人」就成了对他全部兴趣的指控。
 type Dark struct {
 	Concept  string     `json:"c"`
+	N        int        `json:"n"` // 条目总数
 	Fav      int        `json:"f"`
 	Own      int        `json:"o"`
+	Gap      int        `json:"gap"` // 距最近一次新增的月数
 	First    string     `json:"first"`
 	Last     string     `json:"last"`
 	Evidence []Evidence `json:"ev"`

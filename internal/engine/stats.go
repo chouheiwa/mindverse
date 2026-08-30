@@ -135,8 +135,10 @@ type temporal struct {
 	Fav     int
 	Persist float64 // 有内容的自然月数 / 跨度自然月数 → 恒星亮度
 	Burst   float64 // 最密集 30 天窗口内的占比 → 星云判据
+	Active  int     // 真正有内容的自然月数 → 恒星色温（主轴）
 	First   string
 	Last    string
+	LastM   int // 最后活跃的月序（年*12+月），熄灭判据用
 	SpanM   int
 }
 
@@ -163,6 +165,8 @@ func computeTemporal(times []int64, own, fav int) temporal {
 		span = 1
 	}
 	t.SpanM = span
+	t.Active = len(months)
+	t.LastM = d1.Year()*12 + int(d1.Month())
 	t.Persist = round3(float64(len(months)) / float64(span))
 	if t.Persist > 1 {
 		t.Persist = 1
@@ -186,16 +190,54 @@ func computeTemporal(times []int64, own, fav int) temporal {
 
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
-// spectrum 把「创作占比」映射为恒星色温。
+// spectrum 把一个 0~1 的位次映射为恒星色温。
 //
-// 只收藏 → 琥珀(32°)，只创作 → 蓝白(218°)，中间穿过白色。
+// 低位 → 琥珀(32°)，高位 → 蓝白(218°)，中间穿过白色。
 // 关键：不在两个色相之间线性插值 —— 那会经过绿色，星空里没有绿星。
 // 真实恒星靠去饱和穿白，这里照做。
+//
+// 输入曾经是「创作占比」。2026-08-28 换掉了：绝大多数知乎用户只收藏、不创作，
+// 该比值对他们恒为 0，83 颗星会被涂成同一个最饱和的琥珀色 —— 实测确认。
+// 现在输入的是「活跃月数」的位次，见 rankOf。
 func spectrum(ratio float64) (hue, sat int) {
 	if ratio < 0.5 {
 		return 32, int(math.Round((0.5 - ratio) * 2 * 68))
 	}
 	return 218, int(math.Round((ratio - 0.5) * 2 * 62))
+}
+
+// rankOf 把一组值映射成各自在组内的位次（0~1），并列取同一位次。
+//
+// 用位次而不是原值：不同用户的分布形状差别极大 —— 有人所有兴趣都集中在三个月里，
+// 有人横跨七年。只有按各自的次序归一化，色彩才对每个人都铺得开，
+// 而不是挤在色谱的一端。
+func rankOf(vals map[int]float64) map[int]float64 {
+	out := make(map[int]float64, len(vals))
+	if len(vals) == 0 {
+		return out
+	}
+	xs := make([]float64, 0, len(vals))
+	for _, v := range vals {
+		xs = append(xs, v)
+	}
+	sort.Float64s(xs)
+	n := len(xs)
+	if n == 1 {
+		for k := range vals {
+			out[k] = 0.5
+		}
+		return out
+	}
+	for k, v := range vals {
+		lo := sort.SearchFloat64s(xs, v) // 严格小于 v 的个数
+		hi := lo                         // 小于等于 v 的个数
+		for hi < n && xs[hi] == v {
+			hi++
+		}
+		mid := float64(lo+hi-1) / 2 // 并列取区间中点
+		out[k] = mid / float64(n-1)
+	}
+	return out
 }
 
 // percentile 返回升序排列后位于 p（0~1）处的值。

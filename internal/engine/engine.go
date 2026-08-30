@@ -25,6 +25,19 @@ func defaultNamer(members []string, _ []string) string {
 }
 
 // Run 执行管线 ③~⑨，产出可直接交给前端的星图。
+// 熄灭判据的四个常量。
+//
+// darkQuantile 取用户自身最后活跃月份的分位；darkMinGap 是绝对下限，
+// 防止「上个月刚停」被叫成熄灭；darkMinN 要求有过一定体量，
+// 收藏过一两条谈不上熄灭；darkMax 限制条数 —— 这个模式是拿来读的，
+// 而且每颗熄灭的星会点亮它所在星群的轨道环，超过五个环画面就糊了。
+const (
+	darkQuantile = 0.10
+	darkMinGap   = 3
+	darkMinN     = 4
+	darkMax      = 5
+)
+
 func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	opt = opt.withDefaults()
 	if name == nil {
@@ -102,17 +115,27 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 
 	u := &Universe{}
 
+	// 色温主轴：活跃月数（真正有内容的自然月数）的位次。
+	//
+	// 曾经用的是「创作占比」own/(own+fav)。那条轴假设用户是创作者 ——
+	// 而绝大多数知乎用户只收藏。纯消费者的比值恒为 0，spectrum 会把每一颗星
+	// 都涂成同一个最饱和的琥珀色（2026-08-28 实测：83 颗星 1 种颜色）。
+	// 活跃月数对任何人都有方差，且完全不依赖 own。
+	act := make(map[int]float64, len(b.names))
+	for c := range b.names {
+		if valid[c] {
+			act[c] = float64(temp[c].Active)
+		}
+	}
+	starRank := rankOf(act)
+
 	// 恒星
 	for c, cn := range b.names {
 		if !valid[c] {
 			continue
 		}
 		t := temp[c]
-		ratio := 0.5
-		if t.Own+t.Fav > 0 {
-			ratio = float64(t.Own) / float64(t.Own+t.Fav)
-		}
-		hue, sat := spectrum(ratio)
+		hue, sat := spectrum(starRank[c])
 		u.Stars = append(u.Stars, Star{
 			Concept: cn, Cluster: comm[c], Pos: lay.starPos[c],
 			N: b.degConc[c], Own: t.Own, Fav: t.Fav, Hue: hue, Sat: sat,
@@ -129,6 +152,19 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	}
 	sort.Ints(gids)
 	nameOf := map[int]string{}
+
+	// 星群色温同样走位次。先取成员位次的均值，再在星群之间重新取位次 ——
+	// 只取均值会向中间回归，十几个星群会全糊成白色。
+	cAct := make(map[int]float64, len(gids))
+	for _, g := range gids {
+		sum := 0.0
+		for _, c := range clusterOf[g] {
+			sum += starRank[c]
+		}
+		cAct[g] = sum / float64(len(clusterOf[g]))
+	}
+	clusterRank := rankOf(cAct)
+
 	for _, g := range gids {
 		mem := append([]int(nil), clusterOf[g]...)
 		sort.Slice(mem, func(i, j int) bool { return b.degConc[mem[i]] > b.degConc[mem[j]] })
@@ -147,11 +183,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		for k := 0; k < 3; k++ {
 			center[k] = round2(center[k] / float64(len(mem)))
 		}
-		ratio := 0.5
-		if own+fav > 0 {
-			ratio = float64(own) / float64(own+fav)
-		}
-		hue, sat := spectrum(ratio)
+		hue, sat := spectrum(clusterRank[g])
 		nm := name(names, sampleTitles(in.Items, itemsOf[mem[0]], 3))
 		nameOf[g] = nm
 		u.Clusters = append(u.Clusters, Cluster{
@@ -314,15 +346,33 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		u.Solo = u.Solo[:8]
 	}
 
-	// 暗物质与星云
+	// 熄灭的星与星云
+	//
+	// 「很久没动」只能相对于用户自己：有人每天在收，有人半年一次。
+	// 阈值取该用户自身最后活跃月份的 p10，另加一个绝对下限 darkMinGap ——
+	// 上个月刚停的不能叫熄灭。2026-08-28 实测：写死 12 个月的绝对阈值
+	// 在样本上只剩 1 颗，写死 0 个月则是全部 83 颗，两头都不成立。
+	lastMs := make([]float64, 0, len(b.names))
+	newest := 0
+	for c := range b.names {
+		if valid[c] && b.degConc[c] >= darkMinN {
+			lastMs = append(lastMs, float64(temp[c].LastM))
+			if temp[c].LastM > newest {
+				newest = temp[c].LastM
+			}
+		}
+	}
+	darkCut := int(percentile(lastMs, darkQuantile))
+
 	for c, cn := range b.names {
 		if !valid[c] {
 			continue
 		}
 		t := temp[c]
-		if t.Fav >= 3 && t.Own == 0 {
+		if gap := newest - t.LastM; b.degConc[c] >= darkMinN && t.LastM <= darkCut && gap >= darkMinGap {
 			u.Dark = append(u.Dark, Dark{
-				Concept: cn, Fav: t.Fav, Own: t.Own, First: t.First, Last: t.Last,
+				Concept: cn, N: b.degConc[c], Fav: t.Fav, Own: t.Own, Gap: gap,
+				First: t.First, Last: t.Last,
 				Evidence: evidenceFor(in.Items, itemsOf[c], 4),
 			})
 		}
@@ -333,11 +383,18 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 		}
 	}
 	sort.Slice(u.Dark, func(i, j int) bool {
-		if u.Dark[i].Fav != u.Dark[j].Fav {
-			return u.Dark[i].Fav > u.Dark[j].Fav
+		if u.Dark[i].Gap != u.Dark[j].Gap {
+			return u.Dark[i].Gap > u.Dark[j].Gap
+		}
+		if u.Dark[i].N != u.Dark[j].N {
+			return u.Dark[i].N > u.Dark[j].N
 		}
 		return u.Dark[i].Concept < u.Dark[j].Concept
 	})
+	// 这个模式是拿来读的，不是拿来滚的
+	if len(u.Dark) > darkMax {
+		u.Dark = u.Dark[:darkMax]
+	}
 	sort.Slice(u.Nebula, func(i, j int) bool {
 		if u.Nebula[i].N != u.Nebula[j].N {
 			return u.Nebula[i].N > u.Nebula[j].N

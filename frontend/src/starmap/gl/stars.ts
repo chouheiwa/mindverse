@@ -313,7 +313,9 @@ export function modeDim(s: Star, mode: Mode, u: Universe, wormIdx: number): numb
       return w && (s.g === w.a || s.g === w.b) ? 1 : 0.11
     }
     case 'me':
-      return s.o > 0 ? 1 : 0.1
+      // 一条创作都没有的足迹里，「哪些是我写的」不是信息 ——
+      // 按老规则每一颗都会被压到 0.1，整张图直接全灭。这时候不压。
+      return u.meta.own === 0 ? 1 : s.o > 0 ? 1 : 0.1
     case 'solo':
       // 边缘微光不在恒星列表里，这个模式下恒星整体退到背景
       return 0.12
@@ -323,15 +325,16 @@ export function modeDim(s: Star, mode: Mode, u: Universe, wormIdx: number): numb
 }
 
 /**
- * 渲染用的压暗，在 modeDim 之上再把暗物质概念压黑。
+ * 渲染用的压暗，在 modeDim 之上再把熄灭的星压暗。
  *
- * 它们的语义就是「反复收藏、却一条都没写过 —— 它们不发光」。让它们像普通
- * 恒星一样亮着，等于把这个模式的整个隐喻拆掉。位置由引力透镜环标出
- * （见 overlay3d.ts）：中心什么都没有，只有被掰弯的背景，这才是诚实的画法。
+ * 它们的语义从「反复收藏却一条没写 —— 不发光」换成了「曾经亮过，现在停了」，
+ * 所以这里的下限也从 0.15（基本全黑）抬到 0.3：余烬该看得见。
+ * 全黑对旧语义成立，对新语义就是白白从图上抹掉五颗真实存在的星。
+ * 位置仍由引力透镜环标出（见 overlay3d.ts），环里现在是一点余光而不是空的。
  */
 export function renderDim(s: Star, mode: Mode, u: Universe, wormIdx: number): number {
   const d = modeDim(s, mode, u, wormIdx)
-  return u.dark.some((x) => x.c === s.c) ? Math.min(d, 0.15) : d
+  return u.dark.some((x) => x.c === s.c) ? Math.min(d, 0.3) : d
 }
 
 

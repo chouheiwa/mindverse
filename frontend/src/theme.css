@@ -85,12 +85,13 @@ button.primary {
 }
 button.primary:hover:not(:disabled) { filter: brightness(1.08) }
 
-/* 行星点。实心 = 自己发光（我写过的），半明半暗 = 只反射恒星的光（我只收藏的）。
-   与 3D 里两种行星的着色规则一致，右侧列表和行星卡共用，所以放在 token 层。 */
-.pdot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block }
-.pdot.own { background: radial-gradient(circle at 36% 32%, #EAF0FF, #8C9CDA 62%, #3A4682);
-  box-shadow: 0 0 7px 1px rgba(150, 175, 255, .5) }
-.pdot.fav { background: linear-gradient(115deg, #AAB6D8 0%, #5C6685 44%, #171D30 60%) }
+/* 行星点。明暗 = 内容的新旧（由内联 opacity 给），暖色圈 = 我写过的。
+   与 3D 里那颗行星的着色规则一一对应，右侧列表和行星卡共用，所以放在 token 层。
+   曾经是「实心=自己发光 / 半明半暗=只反射」—— 那套规则假设用户是创作者，
+   对只收藏的人每一颗都是暗的，等于没有信息。 */
+.pdot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
+  background: linear-gradient(115deg, #C6D0EC 0%, #7C88AE 42%, #232B44 68%) }
+.pdot.own { box-shadow: 0 0 0 1.5px rgba(255, 196, 107, .55), 0 0 7px 1px rgba(255, 180, 90, .35) }
 
 /* 边缘暗角与颗粒：让画面像是「看进去」而不是「贴上去」 */
 .vignette {

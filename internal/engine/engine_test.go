@@ -77,13 +77,19 @@ func TestRunOnRealSample(t *testing.T) {
 			t.Errorf("恒星「%s」持续性 %.3f 超过 1，分母算错了", s.Concept, s.Persist)
 		}
 	}
-	// 暗物质：收藏过但从未创作
+	// 熄灭的星：有过体量，且确实停了足够久
+	if len(u.Dark) > darkMax {
+		t.Errorf("熄灭的星 %d 颗，超过展示上限 %d", len(u.Dark), darkMax)
+	}
 	for _, d := range u.Dark {
-		if d.Own != 0 {
-			t.Errorf("暗物质「%s」不应有创作，实际 %d", d.Concept, d.Own)
+		if d.N < darkMinN {
+			t.Errorf("熄灭的星「%s」条目数 %d < %d，体量不足以称为熄灭", d.Concept, d.N, darkMinN)
+		}
+		if d.Gap < darkMinGap {
+			t.Errorf("熄灭的星「%s」只停了 %d 个月，不到下限 %d", d.Concept, d.Gap, darkMinGap)
 		}
 	}
-	t.Logf("星群 %d | 恒星 %d | 粒子 %d | 虫洞 %d | 孤例 %d | 暗物质 %d | 断裂修复 %d",
+	t.Logf("星群 %d | 恒星 %d | 粒子 %d | 虫洞 %d | 孤例 %d | 熄灭 %d | 断裂修复 %d",
 		u.Meta.Clusters, u.Meta.Concepts, len(u.Particles), len(u.Wormholes),
 		len(u.Solo), len(u.Dark), u.Meta.Splits)
 	if len(u.Wormholes) > 0 {
@@ -95,7 +101,8 @@ func TestRunOnRealSample(t *testing.T) {
 		}
 	}
 	for _, d := range u.Dark {
-		t.Logf("暗物质：%s 收藏 %d / 创作 0（%s → %s）", d.Concept, d.Fav, d.First, d.Last)
+		t.Logf("熄灭的星：%s %d 条（收藏 %d / 创作 %d），%s → %s，已停 %d 个月",
+			d.Concept, d.N, d.Fav, d.Own, d.First, d.Last, d.Gap)
 	}
 }
 
@@ -158,4 +165,51 @@ func BenchmarkRun(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// TestConsumerProfileKeepsVariety 守住这次改动的初衷。
+//
+// 绝大多数知乎用户只收藏、不创作。旧的着色轴是 own/(own+fav)，对这类用户恒为 0，
+// 83 颗星会被涂成同一个最饱和的琥珀色；旧的暗物质判据 Fav>=3 && Own==0
+// 对他们则是 83/83 全中，配套文案「你想成为、还没开始的那个人」
+// 变成对其全部兴趣的指控。
+//
+// 这个测试把样本语料的 Own 全部抹掉，断言星图仍然是一张星图。
+func TestConsumerProfileKeepsVariety(t *testing.T) {
+	in := loadSample(t)
+	for i := range in.Items {
+		in.Items[i].Own = false
+	}
+	u, err := Run(in, Options{}, nil)
+	if err != nil {
+		t.Fatalf("引擎失败: %v", err)
+	}
+	if u.Meta.Own != 0 {
+		t.Fatalf("这一组本应没有任何创作，实际 %d", u.Meta.Own)
+	}
+
+	colors := map[[2]int]int{}
+	for _, s := range u.Stars {
+		colors[[2]int{s.Hue, s.Sat}]++
+	}
+	// 旧实现在这里恒为 1
+	if len(colors) < 10 {
+		t.Errorf("纯消费者只得到 %d 种星色，星图退化成一片单色", len(colors))
+	}
+	for k, n := range colors {
+		if share := float64(n) / float64(len(u.Stars)); share > 0.5 {
+			t.Errorf("星色 hue%d/sat%d 占了 %.0f%%，色彩没有铺开", k[0], k[1], share*100)
+		}
+	}
+
+	// 旧实现在这里是 83（= 全部恒星）
+	if len(u.Dark) == 0 || len(u.Dark) > darkMax {
+		t.Errorf("熄灭的星 %d 颗，应在 1~%d 之间", len(u.Dark), darkMax)
+	}
+	// 结构性特征不依赖 own，必须原样还在
+	if len(u.Wormholes) == 0 {
+		t.Error("虫洞不应受创作与否影响，却为空")
+	}
+	t.Logf("纯消费者：恒星 %d | 星色 %d 种 | 熄灭 %d | 虫洞 %d | 星云 %d | 孤例 %d",
+		len(u.Stars), len(colors), len(u.Dark), len(u.Wormholes), len(u.Nebula), len(u.Solo))
 }

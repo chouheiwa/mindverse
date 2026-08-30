@@ -159,7 +159,9 @@ attribute vec3 iStarAxis;
 attribute vec3 iColor;
 // x=orbitR y=phase z=period w=planetR
 attribute vec4 iOrb;
-// x=own y=starSeed z=starR w=starPeriod
+// x=own*2+fresh y=starSeed z=starR w=starPeriod
+//   own   ∈{0,1}  是否本人创作
+//   fresh ∈[0,1)  内容的新旧，1 近 0 远
 attribute vec4 iMeta;
 attribute float iDim;
 attribute float iSel;
@@ -177,6 +179,7 @@ varying vec3 vL;
 varying vec3 vV;
 varying float vAlpha;
 varying float vOwn;
+varying float vFresh;
 varying float vSeed;
 varying float vSel;
 
@@ -202,7 +205,8 @@ void main() {
   vN = normalize(normalMatrix * nrm);
   vL = mvS.xyz - mv.xyz;
   vV = -mv.xyz;
-  vOwn = iMeta.x;
+  vOwn = step(2.0, iMeta.x);
+  vFresh = iMeta.x - vOwn * 2.0;
   vSeed = iOrb.y;
   vSel = iSel;
   vColor = iColor;
@@ -220,6 +224,7 @@ varying vec3 vL;
 varying vec3 vV;
 varying float vAlpha;
 varying float vOwn;
+varying float vFresh;
 varying float vSeed;
 varying float vSel;
 
@@ -234,17 +239,23 @@ void main() {
   vec3 rock = mix(vec3(0.28, 0.31, 0.40), vColor, 0.30) * tex;
 
   vec3 col;
+  // 每颗行星都由自己的恒星照亮 —— 这是物理，对谁都成立。
+  //
+  // 这里携带的数据是「新旧」：近期还在收的内容反照率高、带一层大气轮缘，
+  // 久远的暗而粗糙。曾经这里是「我写过的自己发光 / 只收藏的全黑」，
+  // 但绝大多数用户从不创作，那套规则会让他们的每一颗行星都是黑的。
+  float d = max(0.0, dot(N, L));
+  float term = smoothstep(-0.06, 0.28, dot(N, L));
+  float albedo = mix(0.30, 1.0, vFresh);
+  col = rock * albedo * (0.05 + 0.95 * d) * term;
+  float atmo = pow(1.0 - max(0.0, dot(N, V)), 3.0) * vFresh * 0.55;
+  col += vec3(0.42, 0.58, 0.95) * atmo * (0.25 + 0.75 * d);
+
+  // 我写过的：夜面也透出一点自己的光。是叠加，不再是有无光的分界。
   if (vOwn > 0.5) {
-    // 我写过的：自己发光。边缘一圈辉光，背面也不黑
     float rim = pow(1.0 - max(0.0, dot(N, V)), 2.2);
     vec3 glow = vec3(1.0, 0.80, 0.48);
-    float d = max(0.0, dot(N, L));
-    col = mix(rock, glow, 0.46) * (0.26 + 0.74 * d) + glow * rim * 0.45;
-  } else {
-    // 我只收藏的：只反射恒星的光，晨昏线之后全黑
-    float d = max(0.0, dot(N, L));
-    float term = smoothstep(-0.06, 0.28, dot(N, L));
-    col = rock * (0.05 + 0.95 * d) * term;
+    col += glow * (0.09 + rim * 0.36) * (1.0 - term * 0.5);
   }
 
   // 选中：加一道冷色轮缘。不整颗提亮 —— 那会把「自己发光 / 只反射」这条
@@ -414,10 +425,34 @@ export function makeBodies(u: Universe, reduceMotion: boolean): BodyLayer {
   //
   // 每条真实内容一颗行星。ev 由后端封顶在 6 条，所以一个恒星系是 3–6 颗，
   // 正好是能读清的量。
-  const planets: { d: StarDatum; idx: number; own: number; count: number }[] = []
+  // 新鲜度按全宇宙的时间跨度归一化，而不是各恒星自己的跨度 ——
+  // 否则每个星系里都必然有一颗「最新的」，跨系之间就没法比。
+  const monthOf = (y: string) => {
+    const [a, b] = y.split('.')
+    let yy = Number(a)
+    if (yy < 100) yy += 2000
+    return yy * 12 + Number(b)
+  }
+  let lo = Infinity, hi = -Infinity
+  for (const d of data) {
+    for (const e of d.s.ev ?? []) {
+      const m = monthOf(e.y)
+      if (Number.isFinite(m)) { if (m < lo) lo = m; if (m > hi) hi = m }
+    }
+  }
+  const span = Math.max(1, hi - lo)
+  const freshOf = (y: string) => {
+    const m = monthOf(y)
+    if (!Number.isFinite(m)) return 0.5
+    // 收在 [0,0.999]：1.0 会让打包进 iMeta.x 的 own 位读错
+    return Math.min(0.999, Math.max(0, (m - lo) / span))
+  }
+
+  const planets: { d: StarDatum; idx: number; own: number; fresh: number; count: number }[] = []
   for (const d of data) {
     const ev = d.s.ev ?? []
-    ev.forEach((e, k) => planets.push({ d, idx: k, own: e.o ? 1 : 0, count: ev.length }))
+    ev.forEach((e, k) =>
+      planets.push({ d, idx: k, own: e.o ? 1 : 0, fresh: freshOf(e.y), count: ev.length }))
   }
   const pn = planets.length
 
@@ -455,7 +490,7 @@ export function makeBodies(u: Universe, reduceMotion: boolean): BodyLayer {
     pStarAxis.set(d.axis, i * 3)
     pColor.set(d.color, i * 3)
     pOrb.set([r, phase, period, rad], i * 4)
-    pMeta.set([p.own, d.seed, d.bodyR, d.period], i * 4)
+    pMeta.set([p.own * 2 + p.fresh, d.seed, d.bodyR, d.period], i * 4)
     pStarIndex[i] = starIndexOf.get(d)!
     planetData.push({
       star: d, ev: d.s.ev[p.idx], index: i,

@@ -72,12 +72,36 @@ describe('Panel semantic entries', () => {
     expect(within(probes).getByText('无个人关系')).toBeInTheDocument()
   })
 
-  test('hides private provenance in shared mode and has no private exploration action', () => {
-    const privateProbe = { ...fixture.probes![0], bindings: [{ relation: 'collected' as const, folders: ['私密夹'] }], discoverySources: ['favorite_list' as const] }
-    const changed = { ...fixture, probes: [privateProbe] }
+  test('renders a public-only shared branch without deep private star sentinels', () => {
+    const stableProbe = { ...fixture.probes![0], authorId: 'author:alice', bindings: [{ relation: 'collected' as const, folders: ['私密夹'] }], discoverySources: ['favorite_list' as const] }
+    const unstableProbe = { ...fixture.probes![0], id: 'article:22', title: '公开文章二', url: 'https://zhuanlan.zhihu.com/p/22', authorName: 'UNVERIFIED_AUTHOR_SENTINEL' }
+    const privateEvidence = { t: 'PRIVATE_EVIDENCE_SENTINEL', u: 'https://private-evidence.test/item', o: 1, y: '26.01' }
+    const changed = {
+      ...fixture,
+      meta: { ...fixture.meta, own: 1, fav: 0 },
+      clusters: [{ ...fixture.clusters![0], name: 'PRIVATE_CLUSTER_SENTINEL', o: 1, f: 0 }],
+      stars: [{ ...star, n: 1, o: 1, f: 0, ev: [privateEvidence], probeIds: ['article:21', 'article:22'] }],
+      dark: [{ c: 'Alpha', n: 1, f: 0, o: 1, gap: 99, first: 'PRIVATE_FIRST', last: 'PRIVATE_LAST', ev: [privateEvidence] }],
+      probes: [stableProbe, unstableProbe],
+    }
     const index = indexUniverse(changed)
-    render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
+    const { container } = render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
       onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared />)
+    expect(screen.getByRole('heading', { name: '公开观测详情' })).toBeInTheDocument()
+    expect(screen.getByText('真实问题标题')).toBeInTheDocument()
+    expect(screen.getByText('真实文章标题')).toBeInTheDocument()
+    expect(screen.getByText(/Alice/)).toBeInTheDocument()
+    expect(container).not.toHaveTextContent('UNVERIFIED_AUTHOR_SENTINEL')
+    expect(container).not.toHaveTextContent('Alpha')
+    expect(container).not.toHaveTextContent('PRIVATE_CLUSTER_SENTINEL')
+    expect(container).not.toHaveTextContent('PRIVATE_EVIDENCE_SENTINEL')
+    expect(container).not.toHaveTextContent('1 条内容')
+    expect(container).not.toHaveTextContent('1 创作')
+    expect(container).not.toHaveTextContent('0 收藏')
+    expect(container).not.toHaveTextContent('活跃区间')
+    expect(container).not.toHaveTextContent('2026.01')
+    expect(container.innerHTML).not.toContain('private-evidence.test')
+    expect(container.querySelector('.pdot.own')).toBeNull()
     expect(screen.queryByText('我收藏')).not.toBeInTheDocument()
     expect(screen.queryByText('私密夹')).not.toBeInTheDocument()
     expect(screen.queryByText('收藏列表发现')).not.toBeInTheDocument()
@@ -123,5 +147,25 @@ describe('Panel semantic entries', () => {
     await user.click(within(region).getByRole('button', { name: '展开全部 9 个问题' }))
     expect(within(region).getAllByRole('button', { name: '进入问题行星' })).toHaveLength(9)
     expect(within(region).getByText('问题 9')).toBeInTheDocument()
+    expect(within(region).getAllByRole('button', { name: '进入问题行星' })[8]).toHaveFocus()
+    expect(within(region).getByRole('status')).toHaveTextContent('已显示 9 项，共 9 项')
+  })
+
+  test('expands probes with focus continuity and an accessible result announcement', async () => {
+    const user = userEvent.setup()
+    const probes = Array.from({ length: 9 }, (_, index) => ({
+      ...fixture.probes![0], id: `article:${index + 1}`, title: `文章 ${index + 1}`,
+      url: `https://zhuanlan.zhihu.com/p/${index + 1}`,
+    }))
+    const changed = { ...fixture, probes, stars: [{
+      ...star, questionIds: [], probeIds: probes.map(({ id }) => id),
+    }] }
+    const index = indexUniverse(changed)
+    render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+    const region = screen.getByRole('region', { name: '文章探测器 · 旁轨材料' })
+    await user.click(within(region).getByRole('button', { name: '展开全部 9 篇文章' }))
+    expect(within(region).getAllByRole('link', { name: '查看知乎原文章' })[8]).toHaveFocus()
+    expect(within(region).getByRole('status')).toHaveTextContent('已显示 9 项，共 9 项')
   })
 })

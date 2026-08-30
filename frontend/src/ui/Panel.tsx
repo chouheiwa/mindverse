@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { probesForStar, questionsForStar, type UniverseIndex } from '../domain/universe'
 import type { ArticleProbe, Dark, Evidence, Meta, Star, Universe } from '../types'
 import './Panel.css'
@@ -26,6 +26,9 @@ function publicDate(seconds: number | undefined): string | null {
   return Number.isFinite(date.getTime()) ? PUBLIC_DATE_FORMATTER.format(date) : null
 }
 
+const stableAuthorId = (value: string | undefined): value is string =>
+  value !== undefined && /^author:[A-Za-z0-9_-]+$/.test(value)
+
 function ProbeRelation({ probe, shared }: { probe: ArticleProbe; shared: boolean }) {
   if (shared) return null
   const created = probe.bindings.some(({ relation }) => relation === 'created')
@@ -48,25 +51,48 @@ function SemanticEntries({ index, star, shared, onEnterQuestion }: {
   const probes = probesForStar(index, star)
   const [questionLimit, setQuestionLimit] = useState(ENTRY_LIMIT)
   const [probeLimit, setProbeLimit] = useState(ENTRY_LIMIT)
+  const questionActions = useRef(new Map<string, HTMLButtonElement>())
+  const probeActions = useRef(new Map<string, HTMLAnchorElement>())
+  const questionFocusId = useRef<string | null>(null)
+  const probeFocusId = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    if (!questionFocusId.current) return
+    questionActions.current.get(questionFocusId.current)?.focus()
+    questionFocusId.current = null
+  }, [questionLimit])
+  useLayoutEffect(() => {
+    if (!probeFocusId.current) return
+    probeActions.current.get(probeFocusId.current)?.focus()
+    probeFocusId.current = null
+  }, [probeLimit])
   return <>
     <section className="entry-section" aria-labelledby="panel-questions">
       <h3 id="panel-questions">问题行星</h3>
       {!questions.length && <p className="entry-empty">尚无已收录的问题行星。</p>}
       <ol className="entry-list">
-        {questions.slice(0, questionLimit).map((question) => {
+        {questions.slice(0, questionLimit).map((question, position) => {
           const orbit = 'questionIds' in star ? star.questionIds.indexOf(question.id) + 1 : 0
           return <li className="entry-row" key={question.id}>
-            <span className="entry-index">{orbit ? `轨道 ${String(orbit).padStart(2, '0')}` : '已收录'}</span>
+            <span className="entry-index">{shared ? `问题 ${String(position + 1).padStart(2, '0')}` : orbit ? `轨道 ${String(orbit).padStart(2, '0')}` : '已收录'}</span>
             <strong>{question.title}</strong>
             <span className="entry-meta">{question.answerIds.length} 个已收录回答</span>
             <div className="entry-actions">
-              <button type="button" onClick={(event) => onEnterQuestion(question.id, event.currentTarget)}>进入问题行星</button>
+              <button ref={(node) => {
+                if (node) questionActions.current.set(question.id, node)
+                else questionActions.current.delete(question.id)
+              }} type="button" onClick={(event) => onEnterQuestion(question.id, event.currentTarget)}>进入问题行星</button>
               <a href={question.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原问题">原问题 ↗</a>
             </div>
           </li>
         })}
       </ol>
-      {questionLimit < questions.length && <button className="entry-more" type="button" onClick={() => setQuestionLimit(questions.length)}>
+      {questions.length > ENTRY_LIMIT && <span className="entry-status" role="status" aria-live="polite">
+        已显示 {Math.min(questionLimit, questions.length)} 项，共 {questions.length} 项
+      </span>}
+      {questionLimit < questions.length && <button className="entry-more" type="button" onClick={() => {
+        questionFocusId.current = questions[questionLimit]?.id ?? null
+        setQuestionLimit(questions.length)
+      }}>
         展开全部 {questions.length} 个问题
       </button>}
     </section>
@@ -83,15 +109,27 @@ function SemanticEntries({ index, star, shared, onEnterQuestion }: {
             probe.favoriteCount === undefined ? null : `${probe.favoriteCount} 收藏`,
           ].filter((item): item is string => item !== null)
           return <li className="entry-row" key={probe.id}>
-            <span className="entry-index">旁轨 {String(position + 1).padStart(2, '0')}</span>
+            <span className="entry-index">{shared ? '文章' : '旁轨'} {String(position + 1).padStart(2, '0')}</span>
             <strong>{probe.title}</strong>
-            <span className="entry-meta">{[probe.authorName || '作者未标注', date, ...counts].filter(Boolean).join(' · ')}</span>
+            <span className="entry-meta">{[
+              shared ? (stableAuthorId(probe.authorId) ? probe.authorName || '作者未标注' : '作者未标注') : probe.authorName || '作者未标注',
+              date, ...counts,
+            ].filter(Boolean).join(' · ')}</span>
             <div className="entry-provenance"><ProbeRelation probe={probe} shared={shared} /></div>
-            <a className="entry-original" href={probe.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原文章">查看原文章 ↗</a>
+            <a ref={(node) => {
+              if (node) probeActions.current.set(probe.id, node)
+              else probeActions.current.delete(probe.id)
+            }} className="entry-original" href={probe.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原文章">查看原文章 ↗</a>
           </li>
         })}
       </ol>
-      {probeLimit < probes.length && <button className="entry-more" type="button" onClick={() => setProbeLimit(probes.length)}>
+      {probes.length > ENTRY_LIMIT && <span className="entry-status" role="status" aria-live="polite">
+        已显示 {Math.min(probeLimit, probes.length)} 项，共 {probes.length} 项
+      </span>}
+      {probeLimit < probes.length && <button className="entry-more" type="button" onClick={() => {
+        probeFocusId.current = probes[probeLimit]?.id ?? null
+        setProbeLimit(probes.length)
+      }}>
         展开全部 {probes.length} 篇文章
       </button>}
       {!!probes.length && !shared && <p className="entry-note">创作或收藏只说明内容绑定关系，不代表赞同文章立场。</p>}
@@ -180,6 +218,14 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
       <button className="pnl-close" onClick={onClose} aria-label="关闭">×</button>
       {star && (
         <div className="stagger">
+          {shared ? <>
+            <div className="pnl-public-head">
+              <h2>公开观测详情</h2>
+              <p className="pnl-lead">仅显示该公开快照已收录的问题与文章；不包含个人轨迹、关系或时间线。</p>
+            </div>
+            <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star}
+              shared onEnterQuestion={onEnterQuestion} />
+          </> : <>
           <div>
             <h2>{star.c}</h2>
             <div className="pnl-strip">
@@ -226,6 +272,7 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
               </div>
             </div>
           )}
+          </>}
         </div>
       )}
     </aside>

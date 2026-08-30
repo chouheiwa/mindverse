@@ -234,17 +234,22 @@ func softFail(err error) bool {
 }
 
 // merger 按稳定内容身份去重，并合并同一条内容的用户关系。
-// 同一 ContentID 若出现不兼容的原始身份，result 会给所有
-// 冲突项加上由完整 SHA-256 得到的确定性 #conflict 后缀。
+// 同一 ContentID 若出现不兼容的原始身份，result 会将所有
+// 冲突项隔离为未准入证据，并赋予完整 SHA-256 的确定性证据键。
 type merger struct {
-	byKey      map[string]*Item
-	baseKeys   map[string][]string
-	order      []string
-	observedAt int64
+	byKey            map[string]*Item
+	baseKeys         map[string][]string
+	unresolvedCounts map[string]int
+	order            []string
+	observedAt       int64
 }
 
 func newMerger(observedAt ...int64) *merger {
-	m := &merger{byKey: map[string]*Item{}, baseKeys: map[string][]string{}}
+	m := &merger{
+		byKey:            map[string]*Item{},
+		baseKeys:         map[string][]string{},
+		unresolvedCounts: map[string]int{},
+	}
 	if len(observedAt) > 0 {
 		m.observedAt = observedAt[0]
 	}
@@ -252,6 +257,13 @@ func newMerger(observedAt ...int64) *merger {
 }
 
 func (m *merger) get(identity ContentIdentity) *Item {
+	if !identity.Resolved {
+		key := identity.EvidenceKey
+		it := &Item{Identity: identity, URL: identity.URL, ObservedAt: m.observedAt}
+		m.byKey[key] = it
+		m.order = append(m.order, key)
+		return it
+	}
 	fingerprint := identityFingerprint(identity)
 	key := identity.ContentID + "\x00" + fingerprint
 	if it, ok := m.byKey[key]; ok {
@@ -262,6 +274,14 @@ func (m *merger) get(identity ContentIdentity) *Item {
 	m.baseKeys[identity.ContentID] = append(m.baseKeys[identity.ContentID], key)
 	m.order = append(m.order, key)
 	return it
+}
+
+func (m *merger) unresolvedIdentity(identity ContentIdentity, evidenceParts ...string) ContentIdentity {
+	sum := sha256.Sum256([]byte(strings.Join(evidenceParts, "\x00")))
+	base := fmt.Sprintf("evidence:unresolved:%x", sum[:])
+	m.unresolvedCounts[base]++
+	identity.EvidenceKey = fmt.Sprintf("%s:%06d", base, m.unresolvedCounts[base])
+	return identity
 }
 
 func identityFingerprint(identity ContentIdentity) string {
@@ -278,14 +298,20 @@ func identityFingerprint(identity ContentIdentity) string {
 
 func (m *merger) addCollections(items []CollectionItem, folder string) {
 	for _, c := range items {
-		stableFields := []string{strconv.FormatInt(c.CreatedAt, 10)}
+		identity := ResolveIdentity(c.ContentType, c.ContentID, c.URL, c.Title)
+		stableFields := []string{string(c.ContentType), c.ContentID, c.URL, c.Title, c.Summary, strconv.FormatInt(c.CreatedAt, 10), strconv.FormatInt(c.FavTime, 10)}
 		if c.Author != nil {
 			stableFields = append(stableFields, c.Author.URLToken, c.Author.URL)
 		}
-		identity := ResolveIdentity(c.ContentType, c.ContentID, c.URL, c.Title, stableFields...)
+		if !identity.Resolved {
+			identity = m.unresolvedIdentity(identity, stableFields...)
+		}
 		it := m.get(identity)
 		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
-		it.PublishedAt, it.LikeCount = c.CreatedAt, c.LikeCount
+		it.PublishedAt = earliestNonZero(it.PublishedAt, c.CreatedAt)
+		if c.LikeCount > it.LikeCount {
+			it.LikeCount = c.LikeCount
+		}
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryFavoriteList)
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCollected, At: c.FavTime})
 		if c.Author != nil {
@@ -304,10 +330,17 @@ func (m *merger) addCollections(items []CollectionItem, folder string) {
 
 func (m *merger) addContents(items []ContentItem) {
 	for _, c := range items {
-		identity := ResolveIdentity(c.ContentType, c.ContentID, c.URL, c.Title, strconv.FormatInt(c.CreatedAt, 10))
+		identity := ResolveIdentity(c.ContentType, c.ContentID, c.URL, c.Title)
+		if !identity.Resolved {
+			identity = m.unresolvedIdentity(identity,
+				string(c.ContentType), c.ContentID, c.URL, c.Title, c.Summary, strconv.FormatInt(c.CreatedAt, 10))
+		}
 		it := m.get(identity)
 		it.Title, it.Summary, it.Type = c.Title, c.Summary, c.ContentType
-		it.PublishedAt, it.LikeCount = c.CreatedAt, c.LikeCount
+		it.PublishedAt = earliestNonZero(it.PublishedAt, c.CreatedAt)
+		if c.LikeCount > it.LikeCount {
+			it.LikeCount = c.LikeCount
+		}
 		it.Bindings = upsertBinding(it.Bindings, UserContentBinding{Relation: RelationCreated, At: c.CreatedAt})
 		it.DiscoverySources = appendDiscovery(it.DiscoverySources, DiscoveryOwnContent)
 	}
@@ -316,13 +349,24 @@ func (m *merger) addContents(items []ContentItem) {
 func upsertBinding(bindings []UserContentBinding, binding UserContentBinding) []UserContentBinding {
 	for i := range bindings {
 		if bindings[i].Relation == binding.Relation {
-			if binding.At > 0 {
-				bindings[i].At = binding.At
-			}
+			bindings[i].At = earliestNonZero(bindings[i].At, binding.At)
 			return bindings
 		}
 	}
 	return append(bindings, binding)
+}
+
+// earliestNonZero preserves the earliest known event for provenance while
+// treating zero as unknown. It is commutative, so ingestion order cannot alter
+// publication, collection, or observation semantics.
+func earliestNonZero(a, b int64) int64 {
+	if a == 0 {
+		return b
+	}
+	if b == 0 || a < b {
+		return a
+	}
+	return b
 }
 
 func addBindingFolder(bindings []UserContentBinding, relation UserContentRelation, folder string) []UserContentBinding {
@@ -358,13 +402,28 @@ func (m *merger) result() []Item {
 		sort.SliceStable(it.DiscoverySources, func(i, j int) bool { return it.DiscoverySources[i] < it.DiscoverySources[j] })
 		item := *it
 		baseID := item.Identity.ContentID
-		if len(m.baseKeys[baseID]) > 1 {
+		if item.Identity.Resolved && len(m.baseKeys[baseID]) > 1 {
 			_, fingerprint, _ := strings.Cut(key, "\x00")
-			item.Identity.ContentID = baseID + "#conflict:" + fingerprint
+			item.Identity.Resolved = false
+			item.Identity.Admitted = false
+			item.Identity.QuestionID = ""
+			item.Identity.QuestionURL = ""
+			item.Identity.EvidenceKey = "evidence:conflict:" + fingerprint
 		}
-		out = append(out, item)
+		out = append(out, cloneItem(item))
 	}
 	return out
+}
+
+func cloneItem(item Item) Item {
+	item.Bindings = append([]UserContentBinding(nil), item.Bindings...)
+	for i := range item.Bindings {
+		item.Bindings[i].Folders = append([]string(nil), item.Bindings[i].Folders...)
+	}
+	item.DiscoverySources = append([]DiscoverySource(nil), item.DiscoverySources...)
+	item.ConceptHints = append([]string(nil), item.ConceptHints...)
+	item.Folders = append([]string(nil), item.Folders...)
+	return item
 }
 
 func appendUniq(xs []string, v string) []string {

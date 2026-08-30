@@ -1,6 +1,9 @@
 package zhihu
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolveAnswerIdentity(t *testing.T) {
 	got := ResolveIdentity(TypeAnswer, "", "https://www.zhihu.com/question/123/answer/456", "真实问题")
@@ -92,5 +95,28 @@ func TestResolveIdentityRejectsRawAndURLIDMismatch(t *testing.T) {
 	}
 	if got.Admitted || got.QuestionID != "" || got.QuestionURL != "" {
 		t.Fatalf("raw ID 与 URL ID 冲突时不得准入：%+v", got)
+	}
+}
+
+func TestFallbackIdentityIgnoresMutableTitle(t *testing.T) {
+	const rawURL = "https://www.zhihu.com/answer/456"
+	before := ResolveIdentity(TypeAnswer, "", rawURL, "旧标题")
+	after := ResolveIdentity(TypeAnswer, "", rawURL, "编辑后的新标题")
+	if before.ContentID == "" || before.ContentID != after.ContentID {
+		t.Fatalf("同一不可变 URL 的 fallback ID 不得随标题变化：before=%q after=%q", before.ContentID, after.ContentID)
+	}
+	parts := strings.Split(before.ContentID, ":")
+	if len(parts) != 3 || parts[1] != "fallback" || len(parts[2]) != 64 {
+		t.Fatalf("fallback 必须使用完整 SHA-256：%q", before.ContentID)
+	}
+	if !before.Resolved || before.Admitted {
+		t.Fatalf("非规范但稳定的 URL 应解析为内容证据、不准入问题：%+v", before)
+	}
+}
+
+func TestEmptyIdentityIsExplicitlyUnresolved(t *testing.T) {
+	got := ResolveIdentity(TypeAnswer, "", "", "只有可变标题")
+	if got.Resolved || got.ContentID != "" || got.Admitted {
+		t.Fatalf("没有 raw ID 或 URL 时不得声称有稳定内容身份：%+v", got)
 	}
 }

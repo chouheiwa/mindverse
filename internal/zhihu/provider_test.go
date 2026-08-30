@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,21 +122,20 @@ func TestMergerDedupesCanonicalHostnameCaseAndSortsBindingFolders(t *testing.T) 
 func TestMergerKeepsDistinctEmptyURLFallbackIdentities(t *testing.T) {
 	m := newMerger()
 	m.addContents([]ContentItem{
-		{ContentType: TypeAnswer, Title: "相同标题", CreatedAt: 100},
-		{ContentType: TypeAnswer, Title: "相同标题", CreatedAt: 101},
+		{ContentType: TypeAnswer, Title: "相同标题"},
+		{ContentType: TypeAnswer, Title: "相同标题"},
 	})
 	got := m.result()
 	if len(got) != 2 {
 		t.Fatalf("空 URL 但稳定内容不同时不得折叠，实际 %d 条", len(got))
 	}
 	for _, it := range got {
-		parts := strings.Split(it.Identity.ContentID, ":")
-		if len(parts) != 3 || parts[1] != "fallback" || len(parts[2]) != 64 {
-			t.Fatalf("fallback 必须使用完整 SHA-256：%q", it.Identity.ContentID)
+		if it.Identity.Resolved || it.Identity.ContentID != "" || !strings.HasPrefix(it.Identity.EvidenceKey, "evidence:unresolved:") {
+			t.Fatalf("空身份必须作为 unresolved 证据保留：%+v", it.Identity)
 		}
 	}
-	if got[0].Identity.ContentID == got[1].Identity.ContentID {
-		t.Fatal("不同稳定内容的 fallback ID 不得相同")
+	if got[0].Identity.EvidenceKey == got[1].Identity.EvidenceKey {
+		t.Fatal("无稳定身份的两条输入不得全局去重")
 	}
 }
 
@@ -150,18 +150,62 @@ func TestMergerPreservesIncompatibleIdentityConflicts(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("同 ID 但不兼容的不可变身份必须分开保留，实际 %d 条", len(got))
 	}
-	if got[0].Identity.ContentID == got[1].Identity.ContentID || !strings.Contains(got[0].Identity.ContentID, "#conflict:") || !strings.Contains(got[1].Identity.ContentID, "#conflict:") {
-		t.Fatalf("冲突必须以确定性后缀可观测：%q %q", got[0].Identity.ContentID, got[1].Identity.ContentID)
+	for _, it := range got {
+		if it.Identity.Resolved || it.Identity.Admitted || it.Identity.QuestionID != "" || it.Identity.QuestionURL != "" {
+			t.Fatalf("同 ContentID 的问题归属冲突必须被隔离为未准入证据：%+v", it.Identity)
+		}
+		if !strings.HasPrefix(it.Identity.EvidenceKey, "evidence:conflict:") {
+			t.Fatalf("冲突证据必须有可观测键：%+v", it.Identity)
+		}
+	}
+	if got[0].Identity.EvidenceKey == got[1].Identity.EvidenceKey {
+		t.Fatal("冲突证据键必须互异")
 	}
 	mReverse := newMerger()
 	mReverse.addCollections([]CollectionItem{items[1], items[0]}, "")
 	reversed := mReverse.result()
-	gotIDs := []string{got[0].Identity.ContentID, got[1].Identity.ContentID}
-	reversedIDs := []string{reversed[0].Identity.ContentID, reversed[1].Identity.ContentID}
+	gotIDs := []string{got[0].Identity.EvidenceKey, got[1].Identity.EvidenceKey}
+	reversedIDs := []string{reversed[0].Identity.EvidenceKey, reversed[1].Identity.EvidenceKey}
 	sort.Strings(gotIDs)
 	sort.Strings(reversedIDs)
 	if fmt.Sprint(gotIDs) != fmt.Sprint(reversedIDs) {
 		t.Fatalf("冲突 ID 不得受输入顺序影响：got=%v reversed=%v", gotIDs, reversedIDs)
+	}
+}
+
+func TestMergerTimestampsAreOrderIndependent(t *testing.T) {
+	items := []CollectionItem{
+		{ContentID: "456", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456", Title: "A", CreatedAt: 200, FavTime: 400},
+		{ContentID: "456", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456", Title: "A", CreatedAt: 100, FavTime: 300},
+	}
+	merge := func(items []CollectionItem) Item {
+		m := newMerger(500)
+		m.addCollections(items, "folder")
+		return m.result()[0]
+	}
+	forward := merge(items)
+	reverse := merge([]CollectionItem{items[1], items[0]})
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("时间合并不得受输入顺序影响：forward=%+v reverse=%+v", forward, reverse)
+	}
+	if forward.PublishedAt != 100 || forward.ObservedAt != 500 || forward.EffectiveCollectedAt() != 300 {
+		t.Fatalf("应保留最早首发/观测/收藏时间：%+v", forward)
+	}
+}
+
+func TestMergerResultDeepCopiesNestedSlices(t *testing.T) {
+	m := newMerger()
+	m.addCollections([]CollectionItem{{
+		ContentID: "456", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/123/answer/456", Title: "A",
+		Favlists: []ContentFavlistItem{{Title: "folder"}},
+	}}, "")
+	first := m.result()
+	first[0].Bindings[0].Folders[0] = "mutated"
+	first[0].Bindings[0].Relation = RelationCreated
+	first[0].DiscoverySources[0] = DiscoveryPublicSearch
+	second := m.result()
+	if second[0].Bindings[0].Folders[0] != "folder" || second[0].Bindings[0].Relation != RelationCollected || second[0].DiscoverySources[0] != DiscoveryFavoriteList {
+		t.Fatalf("result 必须深拷贝嵌套 slice：%+v", second[0])
 	}
 }
 

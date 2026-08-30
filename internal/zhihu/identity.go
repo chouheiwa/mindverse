@@ -13,42 +13,51 @@ var questionPath = regexp.MustCompile(`^/question/([1-9][0-9]*)$`)
 var answerPath = regexp.MustCompile(`^/question/([1-9][0-9]*)/answer/([1-9][0-9]*)$`)
 var articlePath = regexp.MustCompile(`^/p/([1-9][0-9]*)$`)
 
-// ContentIdentity is the stable, public identity of a Zhihu content artifact.
-// Question fields are populated only when the original URL proves the relation.
+// ContentIdentity separates a resolved artifact identity from an ephemeral
+// evidence key. Question fields are populated only when the original URL
+// proves the relation.
 type ContentIdentity struct {
 	ContentID   string      `json:"contentId"`
+	EvidenceKey string      `json:"evidenceKey,omitempty"`
 	Type        ContentType `json:"type"`
 	URL         string      `json:"url"`
 	QuestionID  string      `json:"questionId,omitempty"`
 	QuestionURL string      `json:"questionUrl,omitempty"`
+	Resolved    bool        `json:"resolved"`
 	Admitted    bool        `json:"admitted"`
 }
 
 // ResolveIdentity parses only canonical Zhihu URL shapes and decimal raw IDs.
-// It never invents a question ID. An unparseable artifact still receives a
-// deterministic content identity so it can remain evidence without becoming a
-// question planet.
-func ResolveIdentity(contentType ContentType, rawID, rawURL, title string, stableFields ...string) ContentIdentity {
+// It never invents a question ID. A noncanonical but non-empty URL receives a
+// URL-derived fallback identity. With no immutable discriminator, ContentID is
+// deliberately empty and the merger assigns only a per-input evidence key.
+func ResolveIdentity(contentType ContentType, rawID, rawURL, title string) ContentIdentity {
 	identity := ContentIdentity{Type: contentType, URL: rawURL}
 	rawID = strings.TrimSpace(rawID)
 	hasRawID := decimalID.MatchString(rawID)
 	if hasRawID {
 		identity.ContentID = string(contentType) + ":" + rawID
+		identity.Resolved = true
 	}
 
 	parsedID, questionID := parseZhihuURL(contentType, rawURL)
 	if hasRawID && parsedID != "" && rawID != parsedID {
+		identity.EvidenceKey = identity.ContentID
 		return identity
 	}
 	if !hasRawID && parsedID != "" {
 		identity.ContentID = string(contentType) + ":" + parsedID
+		identity.Resolved = true
 	}
 	if identity.ContentID == "" {
-		fallbackParts := []string{string(contentType), rawID, rawURL, strings.TrimSpace(title)}
-		fallbackParts = append(fallbackParts, stableFields...)
-		sum := sha256.Sum256([]byte(strings.Join(fallbackParts, "\x00")))
+		if rawURL == "" {
+			return identity
+		}
+		sum := sha256.Sum256([]byte(string(contentType) + "\x00" + rawURL))
 		identity.ContentID = fmt.Sprintf("%s:fallback:%x", contentType, sum[:])
+		identity.Resolved = true
 	}
+	identity.EvidenceKey = identity.ContentID
 
 	if questionID != "" && strings.TrimSpace(title) != "" {
 		identity.QuestionID = questionID

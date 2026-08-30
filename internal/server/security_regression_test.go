@@ -332,7 +332,7 @@ func TestRegistryPersistenceFailuresRollbackMemoryAndBlockShareCreation(t *testi
 	}
 }
 
-func TestRegistryUsesDurablePrivateFileAndRollsBackOnDirectorySyncFailure(t *testing.T) {
+func TestRegistryRenameCommitKeepsDiskAndMemoryAlignedWhenDirectorySyncFails(t *testing.T) {
 	dir := t.TempDir()
 	r := newSessionRegistry(dir)
 	id, _ := randomToken()
@@ -350,11 +350,102 @@ func TestRegistryUsesDurablePrivateFileAndRollsBackOnDirectorySyncFailure(t *tes
 
 	r2 := newSessionRegistry(t.TempDir())
 	r2.syncDir = func(string) error { return errors.New("dir sync failed") }
-	if err := r2.promote(id, owner, time.Now().Add(time.Hour)); err == nil {
-		t.Fatal("directory sync failure accepted")
+	err = r2.promote(id, owner, time.Now().Add(time.Hour))
+	var uncertain interface{ DurabilityUncertain() bool }
+	if !errors.As(err, &uncertain) || !uncertain.DurabilityUncertain() {
+		t.Fatalf("directory sync error=%v, want durability uncertain", err)
 	}
-	if len(r2.records) != 0 {
-		t.Fatalf("directory sync failure mutated memory: %v", r2.records)
+	if len(r2.records) != 1 {
+		t.Fatalf("rename-committed candidate missing from memory: %v", r2.records)
+	}
+	reloaded, state, err := loadSessionRegistry(filepath.Dir(r2.path), time.Now())
+	if err != nil || state != registryCurrent || len(reloaded.records) != 1 {
+		t.Fatalf("rename-committed candidate missing on reload: state=%q records=%v err=%v", state, reloaded.records, err)
+	}
+}
+
+func TestRegistryCommittedDemotionAndRotationStayAlignedOnDirectorySyncFailure(t *testing.T) {
+	t.Run("demotion", func(t *testing.T) {
+		r := newSessionRegistry(t.TempDir())
+		id, _ := randomToken()
+		owner, _ := randomToken()
+		if err := r.promote(id, owner, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		r.syncDir = func(string) error { return errors.New("dir sync failed") }
+		err := r.removeOwner(owner)
+		var uncertain interface{ DurabilityUncertain() bool }
+		if !errors.As(err, &uncertain) || len(r.records) != 0 {
+			t.Fatalf("committed demotion diverged: records=%v err=%v", r.records, err)
+		}
+		if _, err := os.Stat(r.path); !os.IsNotExist(err) {
+			t.Fatalf("committed demotion left registry file: %v", err)
+		}
+	})
+
+	t.Run("rotation", func(t *testing.T) {
+		r := newSessionRegistry(t.TempDir())
+		oldID, _ := randomToken()
+		newID, _ := randomToken()
+		owner, _ := randomToken()
+		if err := r.promote(oldID, owner, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		r.syncDir = func(string) error { return errors.New("dir sync failed") }
+		rotated, err := r.rotateIfPromoted(oldID, newID, owner, time.Now().Add(time.Hour))
+		var uncertain interface{ DurabilityUncertain() bool }
+		if !rotated || !errors.As(err, &uncertain) {
+			t.Fatalf("committed rotation result: rotated=%v err=%v", rotated, err)
+		}
+		if _, oldExists := r.records[sessionHash(oldID)]; oldExists {
+			t.Fatalf("committed rotation retained old ID: %v", r.records)
+		}
+		if _, newExists := r.records[sessionHash(newID)]; !newExists {
+			t.Fatalf("committed rotation missing new ID: %v", r.records)
+		}
+		reloaded, state, reloadErr := loadSessionRegistry(filepath.Dir(r.path), time.Now())
+		if reloadErr != nil || state != registryCurrent {
+			t.Fatalf("committed rotation did not reload: state=%q err=%v", state, reloadErr)
+		}
+		if _, oldExists := reloaded.lookup(oldID, time.Now()); oldExists {
+			t.Fatal("committed rotation restored old ID after reload")
+		}
+		if reloadedOwner, newExists := reloaded.lookup(newID, time.Now()); !newExists || reloadedOwner != owner {
+			t.Fatalf("committed rotation lost new ID after reload: owner=%q exists=%v", reloadedOwner, newExists)
+		}
+	})
+}
+
+func TestDurabilityUncertainPromotionCannotCreateShareOrLeaveOwnerProof(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	cookie := startSession(t, s)
+	installUniverse(t, s, cookie, serverUniverse())
+	digest := previewDigest(t, s, cookie, "question:7")
+	realSync := s.registry.syncDir
+	calls := 0
+	s.registry.syncDir = func(path string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("dir sync failed")
+		}
+		return realSync(path)
+	}
+	rr := doRequest(t, s.Routes(), http.MethodPost, "/api/share", map[string]any{"questionIds": []string{"question:7"}, "digest": digest}, cookie)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("durability-uncertain promotion created share: %d %s", rr.Code, rr.Body.String())
+	}
+	if len(s.registry.records) != 0 {
+		t.Fatalf("orphan owner proof remained in memory: %v", s.registry.records)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".sessions")); !os.IsNotExist(err) {
+		t.Fatalf("orphan owner proof remained on disk: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.json")); len(matches) != 0 {
+		t.Fatalf("durability-uncertain promotion persisted share: %v", matches)
+	}
+	if restarted := testServer(t, dir); len(restarted.registry.records) != 0 {
+		t.Fatalf("orphan owner proof revived after restart: %v", restarted.registry.records)
 	}
 }
 
@@ -391,7 +482,7 @@ func TestProductionSessionCookieIsSecureAndOAuthCompatible(t *testing.T) {
 	}
 }
 
-func TestOAuthSuccessRotatesSessionAndPreservesOnlyNewCookieOwnership(t *testing.T) {
+func TestOAuthPromotedSessionKeepsServerIDSoLostResponseCannotStrandShare(t *testing.T) {
 	s := testServer(t, t.TempDir())
 	transport := &countingOAuthTransport{}
 	configureOAuth(s, transport)
@@ -406,6 +497,41 @@ func TestOAuthSuccessRotatesSessionAndPreservesOnlyNewCookieOwnership(t *testing
 	if rr.Code != http.StatusFound {
 		t.Fatalf("callback status=%d body=%s", rr.Code, rr.Body.String())
 	}
+	var responseCookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookieName {
+			responseCookie = c
+		}
+	}
+	if responseCookie == nil || responseCookie.Value != oldCookie.Value {
+		t.Fatalf("promoted session ID changed: old=%q response=%+v", oldCookie.Value, responseCookie)
+	}
+	replay := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=second&state="+url.QueryEscape(state), nil, oldCookie)
+	if replay.Code < 400 || transport.exchanges.Load() != 1 {
+		t.Fatalf("consumed state replayed: status=%d exchanges=%d", replay.Code, transport.exchanges.Load())
+	}
+	status := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, oldCookie)
+	if !strings.Contains(status.Body.String(), `"authorized":true`) || !strings.Contains(status.Body.String(), `"stateVerified":true`) {
+		t.Fatalf("promoted session did not receive verified authorization: %s", status.Body.String())
+	}
+
+	// Simulate the redirect/Set-Cookie response being lost followed by a process restart.
+	restarted := testServer(t, s.cfg.SnapshotDir)
+	if deleted := doRequest(t, restarted.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, oldCookie); deleted.Code != http.StatusOK {
+		t.Fatalf("lost callback response stranded share after restart: status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestOAuthUnpromotedSessionStillRotatesAndInvalidatesOldCookie(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	transport := &countingOAuthTransport{}
+	configureOAuth(s, transport)
+	oldCookie := startSession(t, s)
+	state := beginOAuth(t, s, oldCookie)
+	rr := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state="+url.QueryEscape(state), nil, oldCookie)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("callback status=%d body=%s", rr.Code, rr.Body.String())
+	}
 	var newCookie *http.Cookie
 	for _, c := range rr.Result().Cookies() {
 		if c.Name == cookieName {
@@ -413,25 +539,15 @@ func TestOAuthSuccessRotatesSessionAndPreservesOnlyNewCookieOwnership(t *testing
 		}
 	}
 	if newCookie == nil || newCookie.Value == oldCookie.Value {
-		t.Fatalf("session was not rotated: %+v", newCookie)
-	}
-	replay := doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=second&state="+url.QueryEscape(state), nil, oldCookie)
-	if replay.Code < 400 || transport.exchanges.Load() != 1 {
-		t.Fatalf("consumed state replayed: status=%d exchanges=%d", replay.Code, transport.exchanges.Load())
-	}
-	newStatus := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, newCookie)
-	if !strings.Contains(newStatus.Body.String(), `"authorized":true`) || !strings.Contains(newStatus.Body.String(), `"stateVerified":true`) {
-		t.Fatalf("new session did not receive verified authorization: %s", newStatus.Body.String())
+		t.Fatalf("unpromoted session did not rotate: old=%q new=%+v", oldCookie.Value, newCookie)
 	}
 	oldStatus := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, oldCookie)
 	if strings.Contains(oldStatus.Body.String(), `"authorized":true`) {
 		t.Fatalf("old cookie retained authorization: %s", oldStatus.Body.String())
 	}
-	if deleted := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, oldCookie); deleted.Code != http.StatusNotFound {
-		t.Fatalf("old cookie retained share ownership: status=%d", deleted.Code)
-	}
-	if deleted := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/"+shareID, nil, newCookie); deleted.Code != http.StatusOK {
-		t.Fatalf("rotated cookie lost share ownership: status=%d body=%s", deleted.Code, deleted.Body.String())
+	newStatus := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, newCookie)
+	if !strings.Contains(newStatus.Body.String(), `"authorized":true`) || !strings.Contains(newStatus.Body.String(), `"stateVerified":true`) {
+		t.Fatalf("rotated session lost verified authorization: %s", newStatus.Body.String())
 	}
 }
 

@@ -419,15 +419,12 @@ func randomToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// rotateAuthenticatedSession installs credentials into a fresh server-issued
-// session. The old object is scrubbed so already-leased requests cannot observe
-// the newly installed token; public-share ownership moves via the stable ownerID.
+// installAuthenticatedSession rotates an unpromoted session, closing fixation
+// because unknown client-chosen IDs are never accepted. A promoted session keeps
+// its already server-proven high-entropy ID: its cookie is the durable revocation
+// capability, so changing it cannot be made atomic with delivery of Set-Cookie.
 // Caller must hold old.opMu.
-func (s *Server) rotateAuthenticatedSession(w http.ResponseWriter, old *session, tok *zhihu.Token, profile *zhihu.Profile) error {
-	newID, err := randomToken()
-	if err != nil {
-		return err
-	}
+func (s *Server) installAuthenticatedSession(w http.ResponseWriter, old *session, tok *zhihu.Token, profile *zhihu.Profile) error {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -437,7 +434,17 @@ func (s *Server) rotateAuthenticatedSession(w http.ResponseWriter, old *session,
 	old.mu.Lock()
 	defer old.mu.Unlock()
 	owner := sessionOwner(old)
-	if _, err := s.registry.rotateIfPromoted(old.id, newID, owner, now.Add(share.TTL)); err != nil {
+	proofOwner, promoted := s.registry.lookup(old.id, now)
+	if promoted {
+		if proofOwner != owner {
+			return errors.New("inconsistent promoted session owner")
+		}
+		old.token, old.profile, old.stateChecked, old.lastSeen = tok, profile, true, now
+		s.setSessionCookie(w, old.id)
+		return nil
+	}
+	newID, err := randomToken()
+	if err != nil {
 		return err
 	}
 	if old.genCancel != nil {
@@ -621,7 +628,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.mu.Unlock()
-	if !checked || s.rotateAuthenticatedSession(w, sess, tok, profile) != nil {
+	if !checked || s.installAuthenticatedSession(w, sess, tok, profile) != nil {
 		writeErr(w, http.StatusInternalServerError, "无法安全完成登录，请重试")
 		return
 	}
@@ -919,6 +926,9 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
 	if err := s.promoteShareOwner(sess); err != nil {
+		if errors.Is(err, errRegistryDurabilityUncertain) {
+			s.cleanupShareOwner(sess)
+		}
 		if errors.Is(err, errSessionCapacity) {
 			writeErr(w, http.StatusTooManyRequests, "可撤销分享所有者已达上限")
 		} else {

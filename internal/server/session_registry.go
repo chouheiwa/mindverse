@@ -17,6 +17,20 @@ import (
 
 const ownerRegistryVersion = "owner-registry.v1"
 
+var errRegistryDurabilityUncertain = errors.New("registry durability uncertain")
+
+type registryDurabilityError struct{ cause error }
+
+func (e *registryDurabilityError) Error() string {
+	return fmt.Sprintf("%v: %v", errRegistryDurabilityUncertain, e.cause)
+}
+
+func (e *registryDurabilityError) Unwrap() []error {
+	return []error{errRegistryDurabilityUncertain, e.cause}
+}
+
+func (e *registryDurabilityError) DurabilityUncertain() bool { return true }
+
 type sessionRecord struct {
 	Owner     string    `json:"owner"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -93,11 +107,12 @@ func loadSessionRegistry(dir string, now time.Time) (*sessionRegistry, registryL
 		next[key] = record
 	}
 	if changed {
-		if err := r.persist(next); err != nil {
-			return nil, registryInvalid, err
+		if err := r.commit(next); err != nil {
+			return r, registryInvalid, err
 		}
+	} else {
+		r.records = next
 	}
-	r.records = next
 	return r, registryCurrent, nil
 }
 
@@ -137,11 +152,7 @@ func (r *sessionRegistry) promote(id, owner string, expiresAt time.Time) error {
 		return errSessionCapacity
 	}
 	next[key] = sessionRecord{Owner: owner, ExpiresAt: expiresAt}
-	if err := r.persist(next); err != nil {
-		return err
-	}
-	r.records = next
-	return nil
+	return r.commit(next)
 }
 
 func (r *sessionRegistry) rotateIfPromoted(oldID, newID, owner string, expiresAt time.Time) (bool, error) {
@@ -152,11 +163,8 @@ func (r *sessionRegistry) rotateIfPromoted(oldID, newID, owner string, expiresAt
 	next := cloneRecords(r.records)
 	delete(next, oldKey)
 	next[sessionHash(newID)] = sessionRecord{Owner: owner, ExpiresAt: expiresAt}
-	if err := r.persist(next); err != nil {
-		return false, err
-	}
-	r.records = next
-	return true, nil
+	err := r.commit(next)
+	return err == nil || errors.Is(err, errRegistryDurabilityUncertain), err
 }
 
 func (r *sessionRegistry) removeOwner(owner string) error {
@@ -169,11 +177,7 @@ func (r *sessionRegistry) removeOwner(owner string) error {
 	if len(next) == len(r.records) {
 		return nil
 	}
-	if err := r.persist(next); err != nil {
-		return err
-	}
-	r.records = next
-	return nil
+	return r.commit(next)
 }
 
 func (r *sessionRegistry) retainOwners(ownerKeys map[string]struct{}) error {
@@ -186,11 +190,7 @@ func (r *sessionRegistry) retainOwners(ownerKeys map[string]struct{}) error {
 	if len(next) == len(r.records) {
 		return nil
 	}
-	if err := r.persist(next); err != nil {
-		return err
-	}
-	r.records = next
-	return nil
+	return r.commit(next)
 }
 
 func (r *sessionRegistry) provenOwnerKeys() map[string]struct{} {
@@ -199,6 +199,17 @@ func (r *sessionRegistry) provenOwnerKeys() map[string]struct{} {
 		result[sessionHash(record.Owner)] = struct{}{}
 	}
 	return result
+}
+
+// commit mirrors the filesystem commit point: before rename/remove succeeds an
+// error leaves memory untouched; afterwards memory advances to the candidate
+// even when the parent-directory fsync reports uncertain crash durability.
+func (r *sessionRegistry) commit(next map[string]sessionRecord) error {
+	err := r.persist(next)
+	if err == nil || errors.Is(err, errRegistryDurabilityUncertain) {
+		r.records = next
+	}
+	return err
 }
 
 func (r *sessionRegistry) persist(next map[string]sessionRecord) error {
@@ -213,7 +224,10 @@ func (r *sessionRegistry) persist(next map[string]sessionRecord) error {
 			}
 			return err
 		}
-		return r.syncDir(dir)
+		if err := r.syncDir(dir); err != nil {
+			return &registryDurabilityError{cause: err}
+		}
+		return nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -249,7 +263,10 @@ func (r *sessionRegistry) persist(next map[string]sessionRecord) error {
 	if err := r.renameFile(tmpName, r.path); err != nil {
 		return err
 	}
-	return r.syncDir(dir)
+	if err := r.syncDir(dir); err != nil {
+		return &registryDurabilityError{cause: err}
+	}
+	return nil
 }
 
 func quarantineRegistry(path string, syncDir func(string) error) error {

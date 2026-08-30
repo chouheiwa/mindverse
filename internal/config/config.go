@@ -153,6 +153,7 @@ func validRedirectHost(host string) bool {
 }
 
 func isLoopbackHost(host string) bool {
+	host = strings.TrimSuffix(host, ".")
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}

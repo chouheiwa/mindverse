@@ -409,3 +409,18 @@ func TestNewStoreRemovesExpiredQuarantineFiles(t *testing.T) {
 		t.Fatalf("expired quarantine retained: %v", err)
 	}
 }
+
+func TestDeleteOwnedRejectsTraversalBeforeFilesystemRead(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	read := false
+	store.readFile = func(string) ([]byte, error) {
+		read = true
+		return nil, errors.New("must not read")
+	}
+	if err := store.DeleteOwned("../outside", "owner"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("traversal returned distinguishable error: %v", err)
+	}
+	if read {
+		t.Fatal("traversal reached filesystem read")
+	}
+}

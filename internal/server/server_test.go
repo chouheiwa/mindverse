@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -470,6 +471,27 @@ func TestShareDeleteRequiresOwnerAndSurvivesRestart(t *testing.T) {
 	}
 	if got := doRequest(t, restarted.Routes(), http.MethodGet, "/api/share/"+id, nil, nil); got.Code != http.StatusNotFound {
 		t.Fatalf("single delete did not persist: status=%d", got.Code)
+	}
+}
+
+func TestShareDeleteTraversalReturnsNotFoundAndPreservesOutsideFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "shares")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.json")
+	if err := os.WriteFile(outside, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := testServer(t, dir)
+	cookie := startSession(t, s)
+	rr := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/%2e%2e%2foutside", nil, cookie)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("traversal status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "private" {
+		t.Fatalf("outside file changed: %q err=%v", got, err)
 	}
 }
 

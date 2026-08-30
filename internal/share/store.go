@@ -174,6 +174,9 @@ func (s *Store) Load(id string) (*Record, error) {
 }
 
 func (s *Store) DeleteOwned(id, ownerSession string) error {
+	if !validID(id) {
+		return ErrNotFound
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := s.readFile(s.path(id))

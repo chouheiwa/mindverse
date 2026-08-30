@@ -9,6 +9,9 @@ import (
 )
 
 var decimalID = regexp.MustCompile(`^[1-9][0-9]*$`)
+var questionPath = regexp.MustCompile(`^/question/([1-9][0-9]*)$`)
+var answerPath = regexp.MustCompile(`^/question/([1-9][0-9]*)/answer/([1-9][0-9]*)$`)
+var articlePath = regexp.MustCompile(`^/p/([1-9][0-9]*)$`)
 
 // ContentIdentity is the stable, public identity of a Zhihu content artifact.
 // Question fields are populated only when the original URL proves the relation.
@@ -28,12 +31,16 @@ type ContentIdentity struct {
 func ResolveIdentity(contentType ContentType, rawID, rawURL, title string) ContentIdentity {
 	identity := ContentIdentity{Type: contentType, URL: rawURL}
 	rawID = strings.TrimSpace(rawID)
-	if decimalID.MatchString(rawID) {
+	hasRawID := decimalID.MatchString(rawID)
+	if hasRawID {
 		identity.ContentID = string(contentType) + ":" + rawID
 	}
 
 	parsedID, questionID := parseZhihuURL(contentType, rawURL)
-	if parsedID != "" {
+	if hasRawID && parsedID != "" && rawID != parsedID {
+		return identity
+	}
+	if !hasRawID && parsedID != "" {
 		identity.ContentID = string(contentType) + ":" + parsedID
 	}
 	if identity.ContentID == "" {
@@ -51,22 +58,21 @@ func ResolveIdentity(contentType ContentType, rawID, rawURL, title string) Conte
 
 func parseZhihuURL(contentType ContentType, rawURL string) (contentID, questionID string) {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" {
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(rawURL, "#") {
 		return "", ""
 	}
-	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
 	switch contentType {
 	case TypeAnswer:
-		if u.Hostname() == "www.zhihu.com" && len(parts) == 4 && parts[0] == "question" && decimalID.MatchString(parts[1]) && parts[2] == "answer" && decimalID.MatchString(parts[3]) {
-			return parts[3], parts[1]
+		if match := answerPath.FindStringSubmatch(u.EscapedPath()); strings.EqualFold(u.Host, "www.zhihu.com") && match != nil {
+			return match[2], match[1]
 		}
 	case TypeQuestion:
-		if u.Hostname() == "www.zhihu.com" && len(parts) == 2 && parts[0] == "question" && decimalID.MatchString(parts[1]) {
-			return parts[1], parts[1]
+		if match := questionPath.FindStringSubmatch(u.EscapedPath()); strings.EqualFold(u.Host, "www.zhihu.com") && match != nil {
+			return match[1], match[1]
 		}
 	case TypeArticle:
-		if u.Hostname() == "zhuanlan.zhihu.com" && len(parts) == 2 && parts[0] == "p" && decimalID.MatchString(parts[1]) {
-			return parts[1], ""
+		if match := articlePath.FindStringSubmatch(u.EscapedPath()); strings.EqualFold(u.Host, "zhuanlan.zhihu.com") && match != nil {
+			return match[1], ""
 		}
 	}
 	return "", ""

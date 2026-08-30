@@ -19,4 +19,13 @@ describe('question navigation accessibility styles', () => {
     expect(card).toMatch(/prefers-reduced-motion:\s*reduce/)
     expect(css('./QuestionEntryShell.css')).toMatch(/prefers-reduced-motion:\s*reduce/)
   })
+
+  test('uses a bounded horizontal question dock on mobile and preserves panel scroll clearance', () => {
+    const lane = css('./QuestionLane.css')
+    const panel = css('./Panel.css')
+    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.ql\s*\{[^}]*height:\s*92px/)
+    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.ql ol\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/)
+    expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.ql li\s*\{[^}]*flex:\s*0 0/)
+    expect(panel).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.pnl\.open\s*\{[^}]*padding-bottom:\s*330px/)
+  })
 })

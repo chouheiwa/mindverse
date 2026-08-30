@@ -62,6 +62,7 @@ describe('QuestionPlanetCard', () => {
     const user = userEvent.setup()
     const { container } = render(<QuestionPlanetCard planet={planet()} onClose={onClose} onEnter={onEnter} />)
     const enter = screen.getByRole('button', { name: '进入问题行星' })
+    expect(enter).toHaveAttribute('data-question-primary')
     const close = screen.getByRole('button', { name: '关闭问题行星入口' })
 
     await user.click(enter)

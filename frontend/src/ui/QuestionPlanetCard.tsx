@@ -28,7 +28,8 @@ export const QuestionPlanetCard = forwardRef<HTMLDivElement, {
       <h2>{planet.question.title}</h2>
       <p className={`qpc-relation${planet.created ? ' is-created' : ''}`}>{relationCopy(planet)}</p>
       <div className="qpc-actions">
-        <button type="button" className="qpc-enter" onClick={() => onEnter(planet)}>进入问题行星</button>
+        <button type="button" className="qpc-enter" data-question-primary
+          onClick={() => onEnter(planet)}>进入问题行星</button>
         <a href={planet.question.url} target="_blank" rel="noopener noreferrer">查看知乎原问题</a>
       </div>
     </aside>

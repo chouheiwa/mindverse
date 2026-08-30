@@ -1,0 +1,136 @@
+import { StrictMode } from 'react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import type { RendererCallbacks } from '../starmap/Renderer'
+import type { PlanetDatum } from '../starmap/gl/bodies'
+import type { CurrentUniverse } from '../types'
+
+const testState = vi.hoisted(() => ({
+  callbacks: null as RendererCallbacks | null,
+  planet: null as PlanetDatum | null,
+  selectCalls: [] as Array<[string, string]>,
+}))
+
+vi.mock('../api', () => ({
+  pollUntilDone: vi.fn(async () => ({ universe: fixture, filtered: 0 })),
+  shareIdFromPath: vi.fn(() => null),
+}))
+
+vi.mock('../starmap/Renderer', () => ({
+  Renderer: class MockRenderer {
+    constructor(_canvas: HTMLCanvasElement, _labels: HTMLCanvasElement, _index: unknown,
+      _reduceMotion: boolean, callbacks: RendererCallbacks) {
+      testState.callbacks = callbacks
+    }
+    start() {}
+    resize() {}
+    destroy() {}
+    setMode() {}
+    resetView() { testState.callbacks?.onPick?.(null) }
+    skipGenesis() {}
+    clearPlanet() { testState.callbacks?.onPickPlanet?.(null) }
+    selectQuestionPlanet(starId: string, questionId: string) {
+      testState.selectCalls.push([starId, questionId])
+      testState.callbacks?.onPickPlanet?.(testState.planet)
+      return testState.planet
+    }
+  },
+}))
+
+import { UniverseView } from './Universe'
+
+const star = {
+  id: 'star:v1:private:8ed3f6ad685b959e', scope: 'private', externalQueryAllowed: false,
+  questionIds: ['question:7'], probeIds: [], c: 'Alpha', g: 0, p: [0, 0, 0] as [number, number, number],
+  n: 1, o: 0, f: 1, hue: 218, sat: 50, pe: 1, bu: 0, fi: '2026.01', la: '2026.01', ev: [],
+} satisfies NonNullable<CurrentUniverse['stars']>[number]
+
+const fixture = {
+  schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
+  meta: { items: 1, concepts: 1, clusters: 1, own: 0, fav: 1, span: [1, 2] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
+  clusters: [{ g: 0, name: 'Cluster', lead: 'Alpha', c: [0, 0, 0] as [number, number, number], n: 1, o: 0, f: 1, hue: 218, sat: 50, mem: ['Alpha'] }],
+  stars: [star], particles: [], wormholes: [], solo: [], dark: [], nebula: [],
+  questions: [{ id: 'question:7', questionId: '7', title: '真实问题标题', url: 'https://www.zhihu.com/question/7', answerIds: ['answer:8'] }],
+  answers: [{
+    id: 'answer:8', questionId: 'question:7', title: '真实问题标题', summary: '摘要',
+    url: 'https://www.zhihu.com/question/7/answer/8', authorName: 'Alice', publishedAt: 1,
+    bindings: [], discoverySources: ['public_search'],
+  }],
+  probes: [],
+} satisfies CurrentUniverse
+
+const selectedPlanet = {
+  question: fixture.questions[0], answers: fixture.answers, answerCount: 1,
+  created: false, collected: false, latestPublicAt: 1, star: { s: star } as unknown as PlanetDatum['star'],
+  index: 0, orbitIndex: 1, u: [1, 0, 0], v: [0, 1, 0], orbitR: 2.1, phase: 0, period: 10, radius: .1,
+} satisfies PlanetDatum
+
+beforeEach(() => {
+  testState.callbacks = null
+  testState.planet = selectedPlanet
+  testState.selectCalls = []
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { callback(0); return 1 }))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) { this.setAttribute('open', '') })
+  HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) { this.removeAttribute('open') })
+})
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
+describe('Universe question keyboard integration', () => {
+  test('hands lane focus to the card, enters and leaves the shell, and clears stale entry state', async () => {
+    const user = userEvent.setup()
+    render(<StrictMode><UniverseView /></StrictMode>)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+
+    act(() => testState.callbacks?.onPick?.(star))
+    const canvas = screen.getByLabelText('认知宇宙三维星图')
+    canvas.focus()
+    act(() => testState.callbacks?.onPickPlanet?.(selectedPlanet))
+    expect(await screen.findByRole('button', { name: '进入问题行星' })).not.toHaveFocus()
+    expect(canvas).toHaveFocus()
+    act(() => testState.callbacks?.onPickPlanet?.(null))
+
+    const laneButton = await screen.findByRole('button', { name: /轨道 1.*真实问题标题/ })
+    laneButton.focus()
+    await user.keyboard('{Enter}')
+    expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
+    const enter = await screen.findByRole('button', { name: '进入问题行星' })
+    await waitFor(() => expect(enter).toHaveFocus())
+
+    await user.click(screen.getByRole('button', { name: '关闭问题行星入口' }))
+    await waitFor(() => expect(laneButton).toHaveFocus())
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByRole('button', { name: '进入问题行星' })).toHaveFocus())
+
+    await user.keyboard('{Enter}')
+    const dialog = await screen.findByRole('dialog')
+    fireEvent(dialog, new Event('cancel', { cancelable: true }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(laneButton).toHaveFocus()
+
+    await user.click(laneButton)
+    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    await user.click(await screen.findByRole('button', { name: '返回问题航道' }))
+    await waitFor(() => expect(laneButton).toHaveFocus())
+
+    await user.click(laneButton)
+    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    expect(await screen.findByRole('dialog')).toBeVisible()
+    act(() => testState.callbacks?.onPick?.(null))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    act(() => testState.callbacks?.onPick?.(star))
+    const resetLaneButton = await screen.findByRole('button', { name: /轨道 1.*真实问题标题/ })
+    await user.click(resetLaneButton)
+    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    expect(await screen.findByRole('dialog')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '熄灭的星' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+})

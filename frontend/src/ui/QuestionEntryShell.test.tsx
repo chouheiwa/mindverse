@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { useRef, useState } from 'react'
+import { StrictMode, useRef, useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { PlanetDatum } from '../starmap/gl/bodies'
@@ -34,6 +34,12 @@ describe('QuestionEntryShell', () => {
     expect(screen.getByText(/回答摘要/)).toBeVisible()
     expect(screen.getByText(/12 赞同 · 3 评论/)).toBeVisible()
     expect(screen.getByText(/深度观察模式尚未生成/)).toBeVisible()
+  })
+
+  test('renders an unknown public time for an invalid epoch instead of throwing', () => {
+    const unsafe = { ...planet, answers: [{ ...planet.answers[0], updatedAt: Number.MAX_SAFE_INTEGER }] }
+    expect(() => render(<QuestionEntryShell planet={unsafe} onBack={() => {}} />)).not.toThrow()
+    expect(screen.getByText('公开时间未知')).toBeVisible()
   })
 
   test('traps Tab inside the native modal while it is open', async () => {
@@ -83,5 +89,34 @@ describe('QuestionEntryShell', () => {
     view.unmount()
     await user.keyboard('{Escape}')
     expect(onBack).not.toHaveBeenCalled()
+  })
+
+  test('StrictMode cleanup close events never tear down a reopened destination', async () => {
+    const onBack = vi.fn()
+    HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute('open')
+      queueMicrotask(() => this.dispatchEvent(new Event('close')))
+    })
+    render(<StrictMode><QuestionEntryShell planet={planet} onBack={onBack} /></StrictMode>)
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible())
+    await Promise.resolve()
+    expect(onBack).not.toHaveBeenCalled()
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    expect(onBack).toHaveBeenCalledOnce()
+  })
+
+  test('fallback marks the shell modal, inerts background siblings, and restores them', async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, writable: true, value: undefined })
+    function Harness() {
+      const [open, setOpen] = useState(true)
+      return <><button>背景动作</button>{open && <QuestionEntryShell planet={planet} onBack={() => setOpen(false)} />}</>
+    }
+    const view = render(<Harness />)
+    const background = screen.getByRole('button', { name: '背景动作' })
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true')
+    expect(background).toHaveAttribute('inert')
+    await userEvent.click(screen.getByRole('button', { name: '返回问题航道' }))
+    expect(background).not.toHaveAttribute('inert')
+    view.unmount()
   })
 })

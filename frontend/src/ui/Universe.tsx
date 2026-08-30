@@ -38,6 +38,7 @@ export function UniverseView() {
   const cardRef = useRef<HTMLDivElement>(null)
   const cardSizeRef = useRef({ width: 332, height: 180 })
   const focusReturnRef = useRef<HTMLButtonElement | null>(null)
+  const focusCardFromLaneRef = useRef(false)
   const [mode, setMode] = useState<Mode>('all')
   const [wormIdx, setWormIdx] = useState(0)
   const [genesisDone, setGenesisDone] = useState(reduceMotion())
@@ -84,11 +85,13 @@ export function UniverseView() {
         setQuestionEntry(null)
         setPlanet(null)
         focusReturnRef.current = null
+        focusCardFromLaneRef.current = false
         setStar(s)
         if (s) setMode('all')
       },
       onPickPlanet: (selected) => {
         setQuestionEntry(null)
+        if (selected && !focusCardFromLaneRef.current) focusReturnRef.current = null
         setPlanet(selected)
       },
       // 命令式定位：行星一直在动，这里每帧都会被调用
@@ -135,6 +138,15 @@ export function UniverseView() {
     return () => observer.disconnect()
   }, [planet])
 
+  useEffect(() => {
+    if (!planet || !focusCardFromLaneRef.current) return
+    focusCardFromLaneRef.current = false
+    const frame = requestAnimationFrame(() => {
+      cardRef.current?.querySelector<HTMLButtonElement>('[data-question-primary]')?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [planet])
+
   useEffect(() => { rendererRef.current?.setMode(mode, wormIdx) }, [mode, wormIdx])
 
   const pickConcept = useCallback((c: string) => {
@@ -143,6 +155,7 @@ export function UniverseView() {
       setQuestionEntry(null)
       setPlanet(null)
       focusReturnRef.current = null
+      focusCardFromLaneRef.current = false
       rendererRef.current?.clearPlanet()
       setStar(s)
     }
@@ -153,6 +166,7 @@ export function UniverseView() {
     setPlanet(null)
     setQuestionEntry(null)
     focusReturnRef.current = null
+    focusCardFromLaneRef.current = false
     setMode((cur) => (cur === m && m !== 'all' ? 'all' : m))
   }, [])
 
@@ -175,8 +189,11 @@ export function UniverseView() {
 
   const selectQuestionFromLane = useCallback((datum: QuestionPlanetDatum, trigger: HTMLButtonElement) => {
     focusReturnRef.current = trigger
+    focusCardFromLaneRef.current = true
     setQuestionEntry(null)
-    rendererRef.current?.selectQuestionPlanet(datum.starId, datum.question.id)
+    if (!rendererRef.current?.selectQuestionPlanet(datum.starId, datum.question.id)) {
+      focusCardFromLaneRef.current = false
+    }
   }, [])
 
   const leaveQuestionEntry = useCallback(() => {
@@ -257,7 +274,7 @@ export function UniverseView() {
         <div className="uv-bar-in">
           {star ? (
             <nav className="uv-lad" aria-label="所在层级">
-              <button onClick={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; rendererRef.current?.resetView() }}>
+              <button onClick={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView() }}>
                 全景
               </button>
               <span aria-hidden="true">›</span>
@@ -294,7 +311,7 @@ export function UniverseView() {
         </Suspense>
       )}
       <Panel universe={universe} star={star} shared={shared}
-        onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; rendererRef.current?.resetView() }}
+        onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView() }}
         highlight={undefined}
         onPickConcept={pickConcept} />
       <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}

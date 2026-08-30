@@ -2,10 +2,14 @@ import { useEffect, useRef } from 'react'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import './QuestionEntryShell.css'
 
-const publicDate = (seconds: number | undefined) => seconds === undefined
-  ? '公开时间未知'
-  : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai' })
-    .format(new Date(seconds * 1000))
+const publicDate = (seconds: number | undefined) => {
+  if (seconds === undefined || !Number.isFinite(seconds)) return '公开时间未知'
+  const date = new Date(seconds * 1000)
+  if (!Number.isFinite(date.getTime())) return '公开时间未知'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai',
+  }).format(date)
+}
 
 export function QuestionEntryShell({ planet, onBack, getReturnFocus }: {
   planet: PlanetDatum
@@ -19,16 +23,31 @@ export function QuestionEntryShell({ planet, onBack, getReturnFocus }: {
     const dialog = dialogRef.current
     if (!dialog) return
     const returnFocus = getReturnFocus?.()
+    const inerted: Array<{ element: HTMLElement; hadAttribute: boolean }> = []
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal()
       nativeModalRef.current = true
     } else {
       dialog.setAttribute('open', '')
+      let branch: HTMLElement = dialog
+      while (branch.parentElement) {
+        const parent = branch.parentElement
+        for (const sibling of parent.children) {
+          if (sibling === branch || !(sibling instanceof HTMLElement)) continue
+          inerted.push({ element: sibling, hadAttribute: sibling.hasAttribute('inert') })
+          sibling.setAttribute('inert', '')
+        }
+        branch = parent
+        if (parent === document.body) break
+      }
     }
     headingRef.current?.focus()
     return () => {
       if (dialog.open && typeof dialog.close === 'function') dialog.close()
       else dialog.removeAttribute('open')
+      for (const { element, hadAttribute } of inerted) {
+        if (!hadAttribute) element.removeAttribute('inert')
+      }
       if (returnFocus?.isConnected) returnFocus.focus()
     }
   }, [getReturnFocus])
@@ -56,8 +75,8 @@ export function QuestionEntryShell({ planet, onBack, getReturnFocus }: {
   }
 
   return (
-    <dialog ref={dialogRef} className="qes" aria-labelledby="qes-title" onKeyDown={onKeyDown}
-      onCancel={(event) => { event.preventDefault(); onBack() }} onClose={onBack}>
+    <dialog ref={dialogRef} className="qes" aria-modal="true" aria-labelledby="qes-title" onKeyDown={onKeyDown}
+      onCancel={(event) => { event.preventDefault(); onBack() }}>
       <header className="qes-head">
         <button type="button" className="qes-back" onClick={onBack} aria-label="返回问题航道">← 返回问题航道</button>
         <span>QUESTION OBSERVATORY · ORBIT {String(planet.orbitIndex).padStart(2, '0')}</span>

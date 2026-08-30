@@ -75,3 +75,7 @@
   background: rgba(16, 23, 40, .8); border: 1px solid var(--rule-soft); border-radius: 2px;
   color: var(--dim); cursor: pointer; transition: color var(--t-instant) var(--e-enter) }
 .chips i:hover { color: var(--ink) }
+
+@media (max-width: 760px) {
+  .pnl.open { padding-bottom: 330px }
+}

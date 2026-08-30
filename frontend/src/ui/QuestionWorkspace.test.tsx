@@ -1,5 +1,5 @@
 import { StrictMode, useRef, useState } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { AnswerSatellite, QuestionPlanet, Universe } from '../types'
@@ -110,12 +110,66 @@ describe('QuestionWorkspace', () => {
     render(<QuestionWorkspace index={index([unknown])} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
     await user.click(screen.getByRole('tab', { name: '回溯' }))
     const panel = screen.getByRole('tabpanel', { name: '回溯' })
-    expect(within(panel).getByText(/可用首发时间 0\s*\/\s*12/)).toBeVisible()
-    expect(within(panel).getByText(/稳定作者 0\s*\/\s*3/)).toBeVisible()
-    expect(within(panel).getByText(/时间跨度 0\s*\/\s*1095 天/)).toBeVisible()
+    expect(within(panel).getByText('可用首发时间')).toBeVisible()
+    expect(within(panel).getByText('0 / 12')).toBeVisible()
+    expect(within(panel).getByText('稳定作者')).toBeVisible()
+    expect(within(panel).getByText('0 / 3')).toBeVisible()
+    expect(within(panel).getByText(/0 天（需至少 3 个 UTC 日历年）/)).toBeVisible()
     expect(within(panel).getByRole('link', { name: /查看原回答/ })).toHaveAttribute('href', unknown.url)
     expect(within(panel).queryByText(/答案纪年/)).not.toBeInTheDocument()
     expect(within(panel).queryByText(/分层|地层/)).not.toBeInTheDocument()
+    for (const term of within(panel).getAllByRole('term')) {
+      expect(term.parentElement?.querySelector('dd')).not.toBeNull()
+    }
+  })
+
+  test('uses machine-readable dates and no time element for an unknown publication date', async () => {
+    const user = userEvent.setup()
+    const known = answer('answer:1', { bindings: [{ relation: 'created', folders: [] }], publishedAt: Date.parse('2024-06-02T00:00:00Z') / 1000 })
+    const unknown = answer('answer:2', { bindings: [{ relation: 'created', folders: [] }] })
+    render(<QuestionWorkspace index={index([known, unknown])} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
+    expect(screen.getByText(/2024年6月2日/).closest('time')).toHaveAttribute('datetime', '2024-06-02')
+    expect(screen.getByText('首发时间未知').tagName).toBe('SPAN')
+    await user.click(screen.getByRole('tab', { name: '回溯' }))
+    expect(screen.getByText('首发时间未知').tagName).toBe('SPAN')
+  })
+
+  test('paginates large original lists by 50 without dropping source access', async () => {
+    const user = userEvent.setup()
+    const answers = Array.from({ length: 120 }, (_, i) => answer(`answer:${i + 1}`, {
+      bindings: [{ relation: 'created', folders: [] }],
+    }))
+    render(<QuestionWorkspace index={index(answers)} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
+    expect(screen.getAllByRole('link', { name: /查看原回答/ })).toHaveLength(50)
+    expect(screen.getByRole('status')).toHaveTextContent('已显示 50 / 120 条')
+    await user.click(screen.getByRole('button', { name: '加载更多' }))
+    expect(screen.getAllByRole('link', { name: /查看原回答/ })).toHaveLength(100)
+    expect(screen.getByRole('status')).toHaveTextContent('已显示 100 / 120 条')
+    await user.click(screen.getByRole('button', { name: '加载更多' }))
+    expect(screen.getAllByRole('link', { name: /查看原回答/ })).toHaveLength(120)
+    expect(screen.queryByRole('button', { name: '加载更多' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('已显示全部 120 条')
+  })
+
+  test('reacts to mobile media changes and cleans up the orientation listener', () => {
+    let listener: ((event: MediaQueryListEvent) => void) | undefined
+    const addEventListener = vi.fn((...args: Parameters<MediaQueryList['addEventListener']>) => {
+      const next = args[1]
+      if (typeof next === 'function') listener = next as (event: MediaQueryListEvent) => void
+    })
+    const media = {
+      matches: true, media: '(max-width: 760px)', onchange: null,
+      addEventListener,
+      removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+    } as MediaQueryList
+    vi.stubGlobal('matchMedia', vi.fn(() => media))
+    const view = render(<QuestionWorkspace index={index([])} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
+    expect(screen.getByRole('tablist')).toHaveAttribute('aria-orientation', 'horizontal')
+    act(() => listener?.({ matches: false } as MediaQueryListEvent))
+    expect(screen.getByRole('tablist')).toHaveAttribute('aria-orientation', 'vertical')
+    view.unmount()
+    expect(media.removeEventListener).toHaveBeenCalledWith('change', expect.any(Function))
+    vi.unstubAllGlobals()
   })
 
   test('shows an honest available retrospective and every original link', () => {

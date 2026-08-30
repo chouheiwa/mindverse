@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { AnswerSatellite, QuestionPlanet, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
-import { buildQuestionWorkspaceModel } from './questionWorkspaceModel'
+import { buildQuestionWorkspaceModel, hasUTCYearSpan } from './questionWorkspaceModel'
 
 const day = 86_400
 
@@ -49,16 +49,17 @@ describe('buildQuestionWorkspaceModel', () => {
     expect(model.personal?.items).toHaveLength(1)
     expect(model.personal?.items[0].relations).toEqual(['created', 'collected'])
     expect(model.personal?.items[0].publicEvidence).toEqual(['public_search', 'favorite_list', 'own_content'])
-    expect(model.answers[1].publicEvidence).toEqual(['favorite_list', 'own_content'])
+    expect('publicEvidence' in model.answers[1] && model.answers[1].publicEvidence).toEqual(['favorite_list', 'own_content'])
   })
 
   test.each([{ shared: true }, { readOnly: true }])('removes all binding-derived data from every public model branch %o', (options) => {
     const source = answer('answer:1', {
+      summary: 'PRIVATE_SUMMARY_SENTINEL', authorName: 'ORPHAN_AUTHOR_SENTINEL', observedAt: 1_700_000_003,
       bindings: [
         { relation: 'created', at: 1_700_000_001, folders: ['PRIVATE_FOLDER_SENTINEL'] },
         { relation: 'collected', at: 1_700_000_002, folders: ['SECOND_PRIVATE_FOLDER'] },
       ],
-      discoverySources: ['public_search'],
+      discoverySources: ['public_search', 'favorite_list', 'own_content'],
     })
     const before = structuredClone(source)
     const model = buildQuestionWorkspaceModel(index([source]), 'question:7', options)
@@ -74,7 +75,35 @@ describe('buildQuestionWorkspaceModel', () => {
     expect(serialized).not.toContain('SECOND_PRIVATE_FOLDER')
     expect(serialized).not.toContain('1700000001')
     expect(serialized).not.toContain('1700000002')
+    expect(serialized).not.toContain('1700000003')
+    expect(serialized).not.toContain('PRIVATE_SUMMARY_SENTINEL')
+    expect(serialized).not.toContain('ORPHAN_AUTHOR_SENTINEL')
+    expect(serialized).not.toContain('public_search')
+    expect(serialized).not.toContain('favorite_list')
+    expect(serialized).not.toContain('own_content')
     expect(source).toEqual(before)
+  })
+
+  test('public answers match the backend whitelist while private answers retain legitimate evidence', () => {
+    const source = answer('answer:1', {
+      summary: '私人摘要', authorId: 'author:alice', authorName: 'Alice', publishedAt: 10, updatedAt: 20,
+      observedAt: 30, likeCount: 4, commentCount: 5, favoriteCount: 6,
+      bindings: [{ relation: 'collected', at: 40, folders: ['资料'] }], discoverySources: ['favorite_list'],
+    })
+    const publicModel = buildQuestionWorkspaceModel(index([source]), 'question:7', { shared: true })
+    expect(publicModel.status).toBe('ready')
+    if (publicModel.status !== 'ready') return
+    expect(publicModel.answers[0]).toEqual({
+      id: 'answer:1', questionId: 'question:7', title: '回答 answer:1', url: source.url,
+      authorId: 'author:alice', authorName: 'Alice', publishedAt: 10, updatedAt: 20,
+      likeCount: 4, commentCount: 5, favoriteCount: 6,
+    })
+    const privateModel = buildQuestionWorkspaceModel(index([source]), 'question:7')
+    expect(privateModel.status).toBe('ready')
+    if (privateModel.status !== 'ready') return
+    expect(JSON.stringify(privateModel)).toContain('私人摘要')
+    expect(JSON.stringify(privateModel)).toContain('favorite_list')
+    expect(privateModel.personal?.items[0]).toMatchObject({ relations: ['collected'], folders: ['资料'] })
   })
 
   test('uses only positive publishedAt values for exact chronicle thresholds', () => {
@@ -101,6 +130,26 @@ describe('buildQuestionWorkspaceModel', () => {
     expect(insufficient.chronicle.flatItems).toHaveLength(12)
     expect(Object.hasOwn(insufficient.chronicle, 'strata')).toBe(false)
     expect(Object.hasOwn(insufficient.chronicle, 'layers')).toBe(false)
+  })
+
+  test('requires three actual UTC calendar years instead of a fixed day count', () => {
+    const utc = (value: string) => Date.parse(value + 'T00:00:00Z') / 1000
+    expect(hasUTCYearSpan(utc('2019-03-01'), utc('2022-02-28'), 3)).toBe(false)
+    expect(hasUTCYearSpan(utc('2019-03-01'), utc('2022-03-01'), 3)).toBe(true)
+    expect(hasUTCYearSpan(utc('2020-02-29'), utc('2023-02-27'), 3)).toBe(false)
+    expect(hasUTCYearSpan(utc('2020-02-29'), utc('2023-02-28'), 3)).toBe(true)
+
+    const buildAt = (last: string) => {
+      const start = utc('2019-03-01')
+      const end = utc(last)
+      return buildQuestionWorkspaceModel(index(Array.from({ length: 12 }, (_, i) => answer(`answer:${i + 1}`, {
+        authorId: `author:${i % 3}`, publishedAt: i === 11 ? end : start + i,
+      }))), 'question:7')
+    }
+    const short = buildAt('2022-02-28')
+    const exact = buildAt('2022-03-01')
+    expect(short.status === 'ready' && short.chronicle.status).toBe('insufficient')
+    expect(exact.status === 'ready' && exact.chronicle.status).toBe('available')
   })
 
   test('builds only a survivor-biased retrospective list at the exact threshold', () => {

@@ -11,6 +11,7 @@ describe('question navigation accessibility styles', () => {
     expect(card).toMatch(/\.qpc-close[^}]*width:\s*44px[^}]*height:\s*44px/s)
     expect(card).toMatch(/\.qpc-enter[^}]*min-height:\s*44px/s)
     expect(css('./QuestionWorkspace.css')).toMatch(/\.qw-back[^}]*min-height:\s*44px/s)
+    expect(css('./QuestionWorkspace.css')).toMatch(/\.qw-more[^}]*min-height:\s*44px/s)
   })
 
   test('defines focus-visible and reduced-motion treatments', () => {

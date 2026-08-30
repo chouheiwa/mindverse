@@ -6,24 +6,32 @@ const SECONDS_PER_DAY = 86_400
 export const CHRONICLE_REQUIREMENTS = Object.freeze({
   eligibleAnswers: 12,
   stableAuthors: 3,
-  spanDays: 3 * 365,
+  calendarYears: 3,
 })
 
-export interface WorkspaceAnswer {
+export interface PublicAnswerView {
   readonly id: string
+  readonly questionId: string
   readonly title: string
-  readonly summary?: string
   readonly url: string
   readonly authorId?: string
   readonly authorName?: string
   readonly publishedAt?: number
-  readonly publicEvidence: readonly DiscoverySource[]
+  readonly updatedAt?: number
+  readonly likeCount?: number
+  readonly commentCount?: number
+  readonly favoriteCount?: number
 }
 
-export interface PersonalWorkspaceAnswer extends WorkspaceAnswer {
+export interface PersonalWorkspaceAnswer extends PublicAnswerView {
+  readonly summary?: string
+  readonly observedAt?: number
+  readonly publicEvidence: readonly DiscoverySource[]
   readonly relations: readonly UserContentRelation[]
   readonly folders: readonly string[]
 }
+
+export type WorkspaceAnswer = PublicAnswerView | PersonalWorkspaceAnswer
 
 interface ChronicleBase {
   readonly requirements: typeof CHRONICLE_REQUIREMENTS
@@ -62,6 +70,20 @@ function deepFreeze<T>(value: T): T {
 }
 
 const unique = <T>(items: readonly T[]): T[] => [...new Set(items)]
+const stableAuthorId = (value: string | undefined): value is string =>
+  value !== undefined && /^author:[A-Za-z0-9_-]+$/.test(value)
+
+/** UTC anniversary policy: Feb 29 clamps to Feb 28 in a non-leap target year. */
+export function hasUTCYearSpan(startSeconds: number, endSeconds: number, years: number): boolean {
+  if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || years < 0) return false
+  const start = new Date(startSeconds * 1000)
+  if (!Number.isFinite(start.getTime())) return false
+  const targetYear = start.getUTCFullYear() + years
+  const month = start.getUTCMonth()
+  const day = Math.min(start.getUTCDate(), new Date(Date.UTC(targetYear, month + 1, 0)).getUTCDate())
+  const anniversary = Date.UTC(targetYear, month, day, start.getUTCHours(), start.getUTCMinutes(), start.getUTCSeconds()) / 1000
+  return endSeconds >= anniversary
+}
 
 export function buildQuestionWorkspaceModel(
   index: UniverseIndex,
@@ -86,15 +108,20 @@ export function buildQuestionWorkspaceModel(
     seen.add(answerId)
     const answer = index.answersById.get(answerId)
     if (!answer) continue
-    const publicView: WorkspaceAnswer = {
+    const publicView: PublicAnswerView = {
       id: answer.id,
+      questionId: answer.questionId,
       title: answer.title,
-      ...(answer.summary === undefined ? {} : { summary: answer.summary }),
       url: answer.url,
-      ...(answer.authorId === undefined ? {} : { authorId: answer.authorId }),
-      ...(answer.authorName === undefined ? {} : { authorName: answer.authorName }),
+      ...(stableAuthorId(answer.authorId) ? {
+        authorId: answer.authorId,
+        ...(answer.authorName === undefined ? {} : { authorName: answer.authorName }),
+      } : {}),
       ...(answer.publishedAt === undefined ? {} : { publishedAt: answer.publishedAt }),
-      publicEvidence: unique(answer.discoverySources),
+      ...(answer.updatedAt === undefined ? {} : { updatedAt: answer.updatedAt }),
+      ...(answer.likeCount === undefined ? {} : { likeCount: answer.likeCount }),
+      ...(answer.commentCount === undefined ? {} : { commentCount: answer.commentCount }),
+      ...(answer.favoriteCount === undefined ? {} : { favoriteCount: answer.favoriteCount }),
     }
     if (!privateSession) {
       answers.push(publicView)
@@ -104,6 +131,11 @@ export function buildQuestionWorkspaceModel(
       .sort((left, right) => (left === right ? 0 : left === 'created' ? -1 : 1))
     const privateView: PersonalWorkspaceAnswer = {
       ...publicView,
+      ...(answer.summary === undefined ? {} : { summary: answer.summary }),
+      ...(answer.observedAt === undefined ? {} : { observedAt: answer.observedAt }),
+      ...(answer.authorId === undefined ? {} : { authorId: answer.authorId }),
+      ...(answer.authorName === undefined ? {} : { authorName: answer.authorName }),
+      publicEvidence: unique(answer.discoverySources),
       relations,
       folders: unique(answer.bindings.flatMap((binding) => binding.folders).filter(Boolean)),
     }
@@ -118,6 +150,8 @@ export function buildQuestionWorkspaceModel(
     .filter((id): id is string => Boolean(id)))
   const epochs = eligible.map((answer) => answer.publishedAt as number)
   const spanDays = epochs.length < 2 ? 0 : Math.floor((Math.max(...epochs) - Math.min(...epochs)) / SECONDS_PER_DAY + Number.EPSILON)
+  const calendarSpanAvailable = epochs.length >= 2
+    && hasUTCYearSpan(Math.min(...epochs), Math.max(...epochs), CHRONICLE_REQUIREMENTS.calendarYears)
   const actual = {
     eligibleAnswers: eligible.length,
     stableAuthors: stableAuthors.size,
@@ -125,7 +159,7 @@ export function buildQuestionWorkspaceModel(
   }
   const available = actual.eligibleAnswers >= CHRONICLE_REQUIREMENTS.eligibleAnswers
     && actual.stableAuthors >= CHRONICLE_REQUIREMENTS.stableAuthors
-    && actual.spanDays >= CHRONICLE_REQUIREMENTS.spanDays
+    && calendarSpanAvailable
   const chronicle: InsufficientChronicle | AvailableChronicle = available ? {
     status: 'available',
     kind: 'retrospective_container_timeline',

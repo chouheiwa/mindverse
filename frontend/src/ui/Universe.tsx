@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone, shareIdFromPath } from '../api'
 import { Renderer } from '../starmap/Renderer'
@@ -12,9 +12,8 @@ import { QuestionPlanetCard } from './QuestionPlanetCard'
 import { QuestionLane } from './QuestionLane'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import { Seed } from './Seed'
+import { QuestionWorkspaceGate } from './QuestionWorkspaceGate'
 import './Universe.css'
-
-const QuestionWorkspace = lazy(() => import('./QuestionWorkspace').then((module) => ({ default: module.QuestionWorkspace })))
 
 const reduceMotion = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -149,7 +148,16 @@ export function UniverseView() {
 
   useEffect(() => { rendererRef.current?.setMode(mode, wormIdx) }, [mode, wormIdx])
 
-  useEffect(() => { rendererRef.current?.setWorkspaceOpen(questionEntry !== null) }, [questionEntry])
+  useEffect(() => {
+    const renderer = rendererRef.current
+    renderer?.setWorkspaceOpen(questionEntry !== null)
+    if (!questionEntry) return
+    renderer?.suspend()
+    return () => {
+      renderer?.setWorkspaceOpen(false)
+      renderer?.resume()
+    }
+  }, [questionEntry])
 
   const pickConcept = useCallback((c: string) => {
     const s = universe?.stars.find((x) => x.c === c)
@@ -174,6 +182,8 @@ export function UniverseView() {
 
   const onEnterQuestion = useCallback((selected: PlanetDatum) => {
     focusCardFromLaneRef.current = false
+    rendererRef.current?.setWorkspaceOpen(true)
+    rendererRef.current?.suspend()
     setPlanet(null)
     rendererRef.current?.clearPlanet()
     // clearPlanet synchronously emits onPickPlanet(null); write entry last.
@@ -313,12 +323,10 @@ export function UniverseView() {
       <QuestionPlanetCard ref={cardRef} planet={planet} onEnter={onEnterQuestion}
         onClose={closePlanet} />
       {questionEntry && (
-        <Suspense fallback={<div className="uv-entry-loading" role="status">正在建立问题航道…</div>}>
-          <QuestionWorkspace index={universeIndex} questionId={questionEntry.question.id}
-            orbitIndex={questionEntry.orbitIndex} shared={shared} readOnly={shared}
-            onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
-            getReturnFocus={getQuestionReturnFocus} />
-        </Suspense>
+        <QuestionWorkspaceGate index={universeIndex} questionId={questionEntry.question.id}
+          orbitIndex={questionEntry.orbitIndex} shared={shared} readOnly={shared}
+          onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
+          getReturnFocus={getQuestionReturnFocus} />
       )}
       <Panel universe={universe} star={star} shared={shared}
         onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView() }}

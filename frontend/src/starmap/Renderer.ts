@@ -14,6 +14,7 @@ import { Labels } from './gl/labels'
 import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
+import { resumeRenderClock } from './renderClock'
 
 /**
  * 星图渲染器。
@@ -145,6 +146,8 @@ export class Renderer {
   private tmp = new THREE.Vector3()
   private tmp2 = new THREE.Vector3()
   private lost = false
+  private destroyed = false
+  private suspendedAt: number | null = null
 
   private canvas: HTMLCanvasElement
   private u: Universe
@@ -250,7 +253,7 @@ export class Renderer {
   // ── 对外 ──
 
   start() {
-    if (!this.raf) this.raf = requestAnimationFrame(this.frame)
+    if (!this.destroyed && this.suspendedAt === null && !this.raf) this.raf = requestAnimationFrame(this.frame)
   }
 
   stop() {
@@ -258,7 +261,25 @@ export class Renderer {
     this.raf = 0
   }
 
+  suspend(now = performance.now()) {
+    if (this.suspendedAt !== null) return
+    this.suspendedAt = now
+    this.stop()
+  }
+
+  resume(now = performance.now()) {
+    if (this.suspendedAt === null) return
+    const clock = resumeRenderClock({ t0: this.t0, skipAt: this.skipAt, lastTouch: this.lastTouch }, this.suspendedAt, now)
+    this.t0 = clock.t0
+    this.skipAt = clock.skipAt
+    this.lastTouch = clock.lastTouch
+    this.lastNow = clock.lastNow
+    this.suspendedAt = null
+    this.start()
+  }
+
   destroy() {
+    this.destroyed = true
     this.stop()
     this.unbindPointer()
     this.labels.clear()

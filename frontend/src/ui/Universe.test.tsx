@@ -12,6 +12,8 @@ const testState = vi.hoisted(() => ({
   selectCalls: [] as Array<[string, string]>,
   restoreCalls: [] as Array<[string, string]>,
   workspaceCalls: [] as boolean[],
+  suspendCalls: 0,
+  resumeCalls: 0,
 }))
 
 vi.mock('../api', () => ({
@@ -33,6 +35,8 @@ vi.mock('../starmap/Renderer', () => ({
     skipGenesis() {}
     clearPlanet() { testState.callbacks?.onPickPlanet?.(null) }
     setWorkspaceOpen(open: boolean) { testState.workspaceCalls.push(open) }
+    suspend() { testState.suspendCalls += 1 }
+    resume() { testState.resumeCalls += 1 }
     selectQuestionPlanet(starId: string, questionId: string) {
       testState.selectCalls.push([starId, questionId])
       testState.callbacks?.onPickPlanet?.(testState.planet)
@@ -80,7 +84,15 @@ beforeEach(() => {
   testState.selectCalls = []
   testState.restoreCalls = []
   testState.workspaceCalls = []
-  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+  testState.suspendCalls = 0
+  testState.resumeCalls = 0
+  vi.stubGlobal('matchMedia', vi.fn(() => ({
+    matches: true,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+  })))
   vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { callback(0); return 1 }))
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
   HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) { this.setAttribute('open', '') })
@@ -119,13 +131,15 @@ describe('Universe question keyboard integration', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '进入问题行星' })).toHaveFocus())
 
     await user.keyboard('{Enter}')
-    const dialog = await screen.findByRole('dialog')
-    expect(screen.getByRole('tab', { name: '个人轨道' })).toBeVisible()
+    expect(testState.suspendCalls).toBeGreaterThan(0)
+    expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
+    const dialog = screen.getByRole('dialog')
     expect(testState.workspaceCalls).toContain(true)
     fireEvent(dialog, new Event('cancel', { cancelable: true }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(testState.workspaceCalls.at(-1)).toBe(false)
+    expect(testState.resumeCalls).toBeGreaterThan(0)
     expect(laneButton).toHaveFocus()
 
     await user.click(laneButton)

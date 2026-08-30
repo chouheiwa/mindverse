@@ -4,30 +4,65 @@ import { buildQuestionWorkspaceModel, type PersonalWorkspaceAnswer, type Workspa
 import './QuestionWorkspace.css'
 
 type Mode = 'personal' | 'retrospective' | 'prism'
+const PAGE_SIZE = 50
+const MOBILE_QUERY = '(max-width: 760px)'
+const PUBLIC_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC',
+})
 
 const formatDate = (seconds: number | undefined) => {
-  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return '首发时间未知'
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return null
   const date = new Date(seconds * 1000)
-  if (!Number.isFinite(date.getTime())) return '首发时间未知'
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai',
-  }).format(date)
+  if (!Number.isFinite(date.getTime())) return null
+  return { label: PUBLIC_DATE_FORMATTER.format(date), dateTime: date.toISOString().slice(0, 10) }
 }
 
 function OriginalAnswer({ answer }: { answer: WorkspaceAnswer }) {
+  const date = formatDate(answer.publishedAt)
   return (
     <li className="qw-answer">
       <div className="qw-answer-meta">
         <span>{answer.authorName || '作者未标注'}</span>
-        <time>{formatDate(answer.publishedAt)}</time>
+        {date ? <time dateTime={date.dateTime}>{date.label}</time> : <span>首发时间未知</span>}
       </div>
-      {answer.summary && <p>{answer.summary}</p>}
+      {'summary' in answer && answer.summary && <p>{answer.summary}</p>}
       <a href={answer.url} target="_blank" rel="noopener noreferrer"
         aria-label={`查看原回答${answer.authorName ? ` · ${answer.authorName}` : ''}`}>
         {answer.authorName ? `查看 ${answer.authorName} 的原回答` : '查看原回答'}
       </a>
     </li>
   )
+}
+
+function PaginatedOriginals({ answers, className = 'qw-originals' }: {
+  answers: readonly WorkspaceAnswer[]
+  className?: string
+}) {
+  const [visible, setVisible] = useState(PAGE_SIZE)
+  const shown = Math.min(visible, answers.length)
+  return <>
+    <ol className={className}>{answers.slice(0, shown).map((answer) => <OriginalAnswer key={answer.id} answer={answer} />)}</ol>
+    <div className="qw-page">
+      <span role="status">{shown === answers.length ? `已显示全部 ${answers.length} 条` : `已显示 ${shown} / ${answers.length} 条`}</span>
+      {shown < answers.length && <button type="button" className="qw-more" onClick={() => setVisible((count) => count + PAGE_SIZE)}>加载更多</button>}
+    </div>
+  </>
+}
+
+function useMobileTabs(): boolean {
+  const [mobile, setMobile] = useState(() => typeof matchMedia !== 'undefined' && matchMedia(MOBILE_QUERY).matches)
+  useEffect(() => {
+    if (typeof matchMedia === 'undefined') return
+    const media = matchMedia(MOBILE_QUERY)
+    const onChange = (event: MediaQueryListEvent) => setMobile(event.matches)
+    if (typeof media.addEventListener === 'function') media.addEventListener('change', onChange)
+    else media.addListener(onChange)
+    return () => {
+      if (typeof media.removeEventListener === 'function') media.removeEventListener('change', onChange)
+      else media.removeListener(onChange)
+    }
+  }, [])
+  return mobile
 }
 
 function PersonalPanel({ answers }: { answers: readonly PersonalWorkspaceAnswer[] }) {
@@ -41,13 +76,13 @@ function PersonalPanel({ answers }: { answers: readonly PersonalWorkspaceAnswer[
       <section aria-labelledby="qw-created">
         <p className="qw-kicker">RELATION · CREATED</p>
         <h2 id="qw-created">我创作</h2>
-        {created.length ? <ol className="qw-originals">{created.map((answer) => <OriginalAnswer key={answer.id} answer={answer} />)}</ol>
+        {created.length ? <PaginatedOriginals answers={created} />
           : <p className="qw-empty">当前样本中没有带有“创作”绑定的回答。</p>}
       </section>
       <section aria-labelledby="qw-collected">
         <p className="qw-kicker">RELATION · COLLECTED</p>
         <h2 id="qw-collected">我收藏</h2>
-        {collected.length ? <ol className="qw-originals">{collected.map((answer) => <OriginalAnswer key={answer.id} answer={answer} />)}</ol>
+        {collected.length ? <PaginatedOriginals answers={collected} />
           : <p className="qw-empty">当前样本中没有带有“收藏”绑定的回答。收藏只表示保存过，不推断你的态度。</p>}
       </section>
     </div>
@@ -64,16 +99,16 @@ function RetrospectivePanel({ chronicle }: {
           <p className="qw-kicker">EVIDENCE GATE</p>
           <h2 id="qw-threshold-title">尚不足以建立跨年回溯</h2>
           <dl>
-            <div><dt>可用首发时间 {chronicle.actual.eligibleAnswers} / {chronicle.requirements.eligibleAnswers}</dt></div>
-            <div><dt>稳定作者 {chronicle.actual.stableAuthors} / {chronicle.requirements.stableAuthors}</dt></div>
-            <div><dt>时间跨度 {chronicle.actual.spanDays} / {chronicle.requirements.spanDays} 天</dt></div>
+            <div><dt>可用首发时间</dt><dd>{chronicle.actual.eligibleAnswers} / {chronicle.requirements.eligibleAnswers}</dd></div>
+            <div><dt>稳定作者</dt><dd>{chronicle.actual.stableAuthors} / {chronicle.requirements.stableAuthors}</dd></div>
+            <div><dt>时间跨度</dt><dd>{chronicle.actual.spanDays} 天（需至少 {chronicle.requirements.calendarYears} 个 UTC 日历年）</dd></div>
           </dl>
           <p>只采用有效的首发时间；更新时间和采集时间不会替代或拉长跨度。</p>
         </section>
         <section aria-labelledby="qw-original-title">
           <h2 id="qw-original-title">当前样本原文</h2>
           {chronicle.flatItems.length
-            ? <ol className="qw-originals">{chronicle.flatItems.map((answer) => <OriginalAnswer key={answer.id} answer={answer} />)}</ol>
+            ? <PaginatedOriginals answers={chronicle.flatItems} />
             : <p className="qw-empty">这个问题尚无当前可访问的已收录回答，可先核验原问题。</p>}
         </section>
       </div>
@@ -85,7 +120,7 @@ function RetrospectivePanel({ chronicle }: {
         <p className="qw-kicker">RETROSPECTIVE · CURRENT SAMPLE</p>
         <h2 id="qw-chronicle-title">答案纪年 · 当前样本回溯</h2>
         <p className="qw-disclaimer">{chronicle.disclaimer}</p>
-        <ol className="qw-timeline">{chronicle.flatItems.map((answer) => <OriginalAnswer key={answer.id} answer={answer} />)}</ol>
+        <PaginatedOriginals answers={chronicle.flatItems} className="qw-timeline" />
       </section>
     </div>
   )
@@ -101,8 +136,7 @@ function PrismPanel() {
   )
 }
 
-export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
-  onBack, onRestoreCamera, getReturnFocus }: {
+export interface QuestionWorkspaceProps {
   index: UniverseIndex
   questionId: string
   shared?: boolean
@@ -111,8 +145,12 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   onBack: () => void
   onRestoreCamera: () => void
   getReturnFocus?: () => HTMLElement | null
-}) {
+}
+
+export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
+  onBack, onRestoreCamera, getReturnFocus }: QuestionWorkspaceProps) {
   const isPublic = shared || readOnly
+  const mobileTabs = useMobileTabs()
   const tabs: readonly Mode[] = isPublic ? ['retrospective', 'prism'] : ['personal', 'retrospective', 'prism']
   const [mode, setMode] = useState<Mode>(isPublic ? 'retrospective' : 'personal')
   const activeMode: Mode = isPublic && mode === 'personal' ? 'retrospective' : mode
@@ -176,8 +214,8 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     const current = tabs.indexOf(activeMode)
     let next: number | undefined
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % tabs.length
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + tabs.length) % tabs.length
+    if (event.key === 'ArrowRight' || (!mobileTabs && event.key === 'ArrowDown')) next = (current + 1) % tabs.length
+    if (event.key === 'ArrowLeft' || (!mobileTabs && event.key === 'ArrowUp')) next = (current - 1 + tabs.length) % tabs.length
     if (event.key === 'Home') next = 0
     if (event.key === 'End') next = tabs.length - 1
     if (next === undefined) return
@@ -221,7 +259,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
             <p className="qw-provenance">仅呈现此问题在本次规范化索引中仍可访问的回答；不声称覆盖知乎全部历史内容。</p>
           </div>
           <nav className="qw-rail" aria-label="问题观察模式">
-            <div role="tablist" aria-orientation="vertical">
+            <div role="tablist" aria-orientation={mobileTabs ? 'horizontal' : 'vertical'}>
               {tabs.map((tab, position) => <button key={tab} ref={(node) => {
                 if (node) tabRefs.current.set(tab, node)
                 else tabRefs.current.delete(tab)

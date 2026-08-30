@@ -73,8 +73,14 @@
   font-weight: 400; color: var(--mute); background: none; border: 1px solid var(--rule);
   padding: 6px 12px; border-radius: 2px }
 
-.uv-entry-loading { position: fixed; inset: 0; z-index: 29; display: grid; place-items: center;
-  background: var(--ground); color: var(--readout); font-family: var(--f-m); font-size: 11px; letter-spacing: .1em }
+.uv-entry-modal { position: fixed; inset: 0; z-index: 29; width: auto; height: auto; max-width: none; max-height: none;
+  margin: 0; padding: 0; border: 0; background: var(--ground); color: var(--ink) }
+.uv-entry-modal::backdrop { background: var(--ground) }
+.uv-entry-state { min-height: 100dvh; display: grid; place-content: center; justify-items: start; gap: 18px; width: min(560px, calc(100vw - 40px)); margin: auto }
+.uv-entry-state h1 { margin: 0; font-family: var(--f-d); font-size: clamp(24px, 4vw, 38px) }
+.uv-entry-state p { max-width: 52ch; margin: 0; color: var(--dim); line-height: 1.8 }
+.uv-entry-state > div { display: flex; gap: 12px }
+.uv-entry-state button { min-height: 44px }
 
 /* 手机：仪表带变成底部一张卡片，模式条横向可滑 —— 换承载，不换隐喻 */
 @media (max-width: 760px) {

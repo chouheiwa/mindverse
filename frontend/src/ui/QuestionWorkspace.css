@@ -29,11 +29,13 @@
 .qw-answer-meta { display: flex; flex-wrap: wrap; gap: 7px 18px; color: var(--readout, #aeb8d2); font-size: 11px }
 .qw-answer p { margin: 10px 0; color: var(--dim); font-size: 13px; line-height: 1.75 }
 .qw-answer a { min-height: 44px; display: inline-flex; align-items: center; font-size: 12px }
+.qw-page { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: var(--dim); font-size: 11px }
+.qw-more { min-height: 44px; min-width: 96px; border: 1px solid var(--rule); background: transparent; color: var(--ink) }
 .qw-empty, .qw-thresholds > p, .qw-abstain p, .qw-disclaimer { color: var(--dim); font-size: 12px; line-height: 1.8 }
 .qw-retrospective { max-width: 820px }
 .qw-thresholds { padding-bottom: 42px }
 .qw-thresholds dl { margin: 24px 0; border-top: 1px solid var(--rule) }
-.qw-thresholds dl > div { min-height: 52px; display: grid; align-items: center; border-bottom: 1px solid var(--rule) }
+.qw-thresholds dl > div { min-height: 52px; display: grid; grid-template-columns: minmax(130px, 1fr) auto; align-items: center; gap: 20px; border-bottom: 1px solid var(--rule) }
 .qw-thresholds dt { color: var(--dim); font-size: 12px }
 .qw-thresholds dd { margin: 0; font-family: var(--f-m); color: var(--ink); font-size: 12px }
 .qw-disclaimer { margin: 0 0 30px; padding: 15px 0; border-block: 1px solid var(--rule) }
@@ -43,7 +45,7 @@
 .qw-error { width: min(800px, calc(100vw - 40px)); margin: 12vh auto; color: var(--ink) }
 .qw-error p { color: var(--dim) }
 .qw :focus-visible { outline: 2px solid var(--focus, #f0c36a); outline-offset: 3px }
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .qw { overflow-y: auto }
   .qw-head { position: sticky; top: 0; grid-template-columns: 1fr auto; padding-inline: 12px }
   .qw-head > span { display: none }

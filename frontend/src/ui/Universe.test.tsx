@@ -194,8 +194,9 @@ describe('Universe question keyboard integration', () => {
     const user = userEvent.setup()
     render(<StrictMode><UniverseView /></StrictMode>)
     await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
 
-    act(() => testState.callbacks?.onPick?.(star))
+    act(() => testState.callbacks!.onPick?.(star))
     const canvas = screen.getByLabelText('认知宇宙三维星图')
     canvas.focus()
     act(() => testState.callbacks?.onPickPlanet?.(selectedPlanet))

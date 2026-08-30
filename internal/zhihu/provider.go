@@ -363,24 +363,37 @@ func stableAuthorID(author *ContentAuthor) string {
 	if author == nil {
 		return ""
 	}
-	if token := strings.TrimSpace(author.URLToken); token != "" && token == author.URLToken &&
-		!strings.ContainsAny(token, "/?# 	\r\n") {
+	if token := strings.TrimSpace(author.URLToken); token == author.URLToken && safeAuthorToken(token) {
 		return "author:" + token
 	}
 	u, err := url.Parse(author.URL)
-	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, "www.zhihu.com") ||
-		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+	if err != nil || u.Scheme != "https" || u.Host != "www.zhihu.com" || u.Port() != "" || u.Opaque != "" ||
+		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
 		return ""
 	}
 	const prefix = "/people/"
-	if !strings.HasPrefix(u.EscapedPath(), prefix) {
+	if !strings.HasPrefix(u.Path, prefix) {
 		return ""
 	}
-	token := strings.TrimPrefix(u.EscapedPath(), prefix)
-	if token == "" || strings.Contains(token, "/") {
+	token := strings.TrimPrefix(u.Path, prefix)
+	expectedPath := prefix + token
+	if !safeAuthorToken(token) || u.Path != expectedPath || u.EscapedPath() != expectedPath {
 		return ""
 	}
 	return "author:" + token
+}
+
+func safeAuthorToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (m *merger) addContents(items []ContentItem) {

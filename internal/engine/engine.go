@@ -49,11 +49,12 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	if len(in.Items) == 0 {
 		return nil, fmt.Errorf("语料为空")
 	}
+	concepts := canonicalizeConceptAnnotations(in.Concepts)
 
 	rng := rand.New(rand.NewPCG(opt.Seed, opt.Seed^0x9E3779B97F4A7C15))
 
 	// ③④ 二部图
-	b := buildBipartite(in.Concepts, opt.MinSupport)
+	b := buildBipartite(concepts, opt.MinSupport)
 	if len(b.names) == 0 {
 		return nil, fmt.Errorf("没有任何概念达到支持度阈值 %d，语料太少", opt.MinSupport)
 	}
@@ -276,8 +277,8 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 			}
 			w.Evidence = append(w.Evidence, WormholeEvidence{
 				Title: trimRunes(in.Items[k].Title, 56), URL: in.Items[k].URL,
-				SideA: joinSide(b, in.Concepts[k], comm, p.a),
-				SideB: joinSide(b, in.Concepts[k], comm, p.b),
+				SideA: joinSide(b, concepts[k], comm, p.a),
+				SideB: joinSide(b, concepts[k], comm, p.b),
 			})
 		}
 		u.Wormholes = append(u.Wormholes, w)
@@ -298,7 +299,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	// 孤例通道：支持度不足、但挂在成形星群上的稀有概念。
 	// 支持度阈值只用于星群成形，桥接检测必须放开 —— 否则会杀掉最好的虫洞。
 	rawFreq := map[string]int{}
-	for _, cs := range in.Concepts {
+	for _, cs := range concepts {
 		s := map[string]bool{}
 		for _, c := range cs {
 			if !s[c] {
@@ -319,7 +320,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	}
 	sort.Strings(soloNames)
 	for _, cn := range soloNames {
-		for k, cs := range in.Concepts {
+		for k, cs := range concepts {
 			if !contains(cs, cn) {
 				continue
 			}

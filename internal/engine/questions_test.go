@@ -63,6 +63,35 @@ func TestStableStarIDAcrossOrdering(t *testing.T) {
 	}
 }
 
+func TestNormalizedEquivalentConceptsMergeWithoutLosingLinks(t *testing.T) {
+	answer := admittedAnswer("8", "7", "Question")
+	article := admittedArticle("21", "Article")
+	tests := []Input{
+		{Items: []zhihu.Item{answer, article}, Concepts: [][]string{{"  Graph\tTheory "}, {"graph theory"}}},
+		{Items: []zhihu.Item{article, answer}, Concepts: [][]string{{"graph theory"}, {"  Graph\tTheory "}}},
+	}
+	var want Star
+	for i, in := range tests {
+		u, err := Run(in, smallOptions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(u.Stars) != 1 {
+			t.Fatalf("case %d: normalized-equivalent concepts produced %d stars: %+v", i, len(u.Stars), u.Stars)
+		}
+		got := u.Stars[0]
+		if got.Concept != "Graph Theory" || !reflect.DeepEqual(got.QuestionIDs, []string{"question:7"}) ||
+			!reflect.DeepEqual(got.ProbeIDs, []string{"article:21"}) || len(got.Evidence) != 2 {
+			t.Fatalf("case %d: canonical merge lost content links: %+v", i, got)
+		}
+		if i == 0 {
+			want = got
+		} else if got.ID != want.ID || got.Concept != want.Concept || !reflect.DeepEqual(got.QuestionIDs, want.QuestionIDs) || !reflect.DeepEqual(got.ProbeIDs, want.ProbeIDs) {
+			t.Fatalf("input reorder changed canonical star: %+v / %+v", want, got)
+		}
+	}
+}
+
 func TestStableStarIDSeparatesScopes(t *testing.T) {
 	privateID, err := StableStarID(ScopePrivate, "Graph Theory")
 	if err != nil {
@@ -214,6 +243,65 @@ func TestArticleProbeIsSingleEntity(t *testing.T) {
 		if !reflect.DeepEqual(star.ProbeIDs, []string{"article:21"}) || len(star.QuestionIDs) != 0 {
 			t.Fatalf("article has wrong star relation: %+v", star)
 		}
+	}
+}
+
+func TestProjectionRejectsMismatchedArticleIdentity(t *testing.T) {
+	it := admittedArticle("21", "Article")
+	it.Identity.URL = "https://zhuanlan.zhihu.com/p/22"
+	it.URL = it.Identity.URL
+	u, err := Run(Input{Items: []zhihu.Item{it}, Concepts: [][]string{{"Concept"}}}, smallOptions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Probes) != 0 || len(u.Stars) != 1 || len(u.Stars[0].ProbeIDs) != 0 {
+		t.Fatalf("mismatched article ID became a probe: probes=%+v star=%+v", u.Probes, u.Stars)
+	}
+	if len(u.Stars[0].Evidence) != 1 || u.Stars[0].Evidence[0].URL != it.URL {
+		t.Fatalf("rejected article must remain private evidence: %+v", u.Stars[0].Evidence)
+	}
+}
+
+func TestDuplicatePublicURLsNormalizeIndependentOfInputOrder(t *testing.T) {
+	answerLower := admittedAnswer("8", "7", "Question")
+	answerUpper := answerLower
+	answerUpper.Identity = zhihu.ResolveIdentity(zhihu.TypeAnswer, "8", "https://WWW.ZHIHU.COM/question/7/answer/8", "Question")
+	answerUpper.URL = answerUpper.Identity.URL
+	articleLower := admittedArticle("21", "Article")
+	articleUpper := articleLower
+	articleUpper.Identity = zhihu.ResolveIdentity(zhihu.TypeArticle, "21", "https://ZHUANLAN.ZHIHU.COM/p/21", "Article")
+	articleUpper.URL = articleUpper.Identity.URL
+
+	runPublicJSON := func(items []zhihu.Item) ([]byte, *Universe) {
+		t.Helper()
+		concepts := make([][]string, len(items))
+		for i := range concepts {
+			concepts[i] = []string{"Concept"}
+		}
+		u, err := Run(Input{Items: items, Concepts: concepts}, smallOptions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(struct {
+			Questions []QuestionPlanet  `json:"questions"`
+			Answers   []AnswerSatellite `json:"answers"`
+			Probes    []ArticleProbe    `json:"probes"`
+		}{u.Questions, u.Answers, u.Probes})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded, u
+	}
+	aJSON, a := runPublicJSON([]zhihu.Item{answerLower, answerUpper, articleLower, articleUpper})
+	bJSON, _ := runPublicJSON([]zhihu.Item{articleUpper, articleLower, answerUpper, answerLower})
+	if !reflect.DeepEqual(aJSON, bJSON) {
+		t.Fatalf("public entity JSON depends on duplicate input order:\n%s\n%s", aJSON, bJSON)
+	}
+	if len(a.Answers) != 1 || a.Answers[0].URL != "https://www.zhihu.com/question/7/answer/8" {
+		t.Fatalf("answer URL is not canonical: %+v", a.Answers)
+	}
+	if len(a.Probes) != 1 || a.Probes[0].URL != "https://zhuanlan.zhihu.com/p/21" {
+		t.Fatalf("article URL is not canonical: %+v", a.Probes)
 	}
 }
 

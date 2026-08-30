@@ -34,6 +34,39 @@ func normalizeConcept(concept string) string {
 	}, normalized)
 }
 
+// canonicalizeConceptAnnotations merges spelling variants that have the same
+// identity normalization. The display spelling is the lexicographically first
+// trimmed/collapsed form, so input order cannot select it.
+func canonicalizeConceptAnnotations(concepts [][]string) [][]string {
+	displayByNormalized := map[string]string{}
+	for _, itemConcepts := range concepts {
+		for _, raw := range itemConcepts {
+			normalized := normalizeConcept(raw)
+			if normalized == "" {
+				continue
+			}
+			display := strings.Join(strings.Fields(raw), " ")
+			if current, exists := displayByNormalized[normalized]; !exists || display < current {
+				displayByNormalized[normalized] = display
+			}
+		}
+	}
+	out := make([][]string, len(concepts))
+	for i, itemConcepts := range concepts {
+		seen := map[string]bool{}
+		for _, raw := range itemConcepts {
+			normalized := normalizeConcept(raw)
+			if normalized == "" || seen[normalized] {
+				continue
+			}
+			seen[normalized] = true
+			out[i] = append(out[i], displayByNormalized[normalized])
+		}
+		sort.Strings(out[i])
+	}
+	return out
+}
+
 type starIDFunc func(ConceptScope, string) (string, error)
 
 func assignStableStarIDs(stars []Star, build starIDFunc) error {
@@ -166,12 +199,15 @@ func parseAdmittedArticle(item zhihu.Item) (string, bool) {
 		return "", false
 	}
 	resolved := zhihu.ResolveIdentity(zhihu.TypeArticle, rawID, identity.URL, item.Title)
-	return identity.ContentID, identity.Resolved && resolved.Resolved && resolved.ContentID == identity.ContentID && resolved.URL == identity.URL
+	fromURL := zhihu.ResolveIdentity(zhihu.TypeArticle, "", identity.URL, item.Title)
+	return identity.ContentID, identity.Resolved && resolved.Resolved && resolved.ContentID == identity.ContentID &&
+		fromURL.Resolved && fromURL.ContentID == identity.ContentID && resolved.URL == identity.URL
 }
 
 func answerFromItem(item zhihu.Item, answerID, questionID string) *AnswerSatellite {
 	return &AnswerSatellite{
-		ID: answerID, QuestionID: questionID, Title: item.Title, Summary: item.Summary, URL: item.Identity.URL,
+		ID: answerID, QuestionID: questionID, Title: item.Title, Summary: item.Summary,
+		URL:      "https://www.zhihu.com/question/" + strings.TrimPrefix(questionID, "question:") + "/answer/" + strings.TrimPrefix(answerID, "answer:"),
 		AuthorID: item.AuthorID, AuthorName: item.Author, PublishedAt: item.PublishedAt, UpdatedAt: item.UpdatedAt,
 		ObservedAt: item.ObservedAt, LikeCount: item.LikeCount, CommentCount: item.CommentCount,
 		FavoriteCount: item.FavoriteCount, Bindings: cloneBindings(item.Bindings),
@@ -181,7 +217,8 @@ func answerFromItem(item zhihu.Item, answerID, questionID string) *AnswerSatelli
 
 func articleFromItem(item zhihu.Item, probeID string) *ArticleProbe {
 	return &ArticleProbe{
-		ID: probeID, Title: item.Title, Summary: item.Summary, URL: item.Identity.URL,
+		ID: probeID, Title: item.Title, Summary: item.Summary,
+		URL:      "https://zhuanlan.zhihu.com/p/" + strings.TrimPrefix(probeID, "article:"),
 		AuthorID: item.AuthorID, AuthorName: item.Author, PublishedAt: item.PublishedAt, UpdatedAt: item.UpdatedAt,
 		ObservedAt: item.ObservedAt, LikeCount: item.LikeCount, CommentCount: item.CommentCount,
 		FavoriteCount: item.FavoriteCount, Bindings: cloneBindings(item.Bindings),

@@ -58,6 +58,14 @@ func TestCollectionAuthorIdentityRequiresStableSource(t *testing.T) {
 			name:   "noncanonical profile URL",
 			author: &ContentAuthor{Name: "Dave", URL: "https://www.zhihu.com/people/dave-4?utm_source=test"},
 		},
+		{
+			name:   "percent encoded separator",
+			author: &ContentAuthor{Name: "Eve", URL: "https://www.zhihu.com/people/alice%2Fadmin"},
+		},
+		{
+			name:   "percent encoded token",
+			author: &ContentAuthor{Name: "Frank", URL: "https://www.zhihu.com/people/%61lice"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -1,15 +1,17 @@
 import { forwardRef } from 'react'
-import type { PlanetDatum } from '../starmap/gl/bodies'
+import type { Evidence } from '../types'
+import type { StarDatum } from '../starmap/gl/starData'
 import './PlanetCard.css'
 
 /**
- * 行星卡：一颗行星 = 一条真实内容。
+ * 轻量回答／探测器内容面板，保留给后续实体层使用。
+ * 问题行星入口使用独立的 QuestionPlanetCard。
  *
  * 位置由 Renderer 每帧直接写 style（见 onAnchor），不走 React state ——
  * 行星一直在公转，挂到状态上就是每帧重渲染整棵树。
  */
 export const PlanetCard = forwardRef<HTMLDivElement, {
-  planet: PlanetDatum | null
+  planet: { ev: Evidence; star: StarDatum; own: boolean } | null
   shared: boolean
   onClose: () => void
 }>(function PlanetCard({ planet, shared, onClose }, ref) {

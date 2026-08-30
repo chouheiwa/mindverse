@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import type { Evidence, Mode, Universe } from '../../types'
+import type { Mode, Universe } from '../../types'
+import { selectPlanetData, type QuestionPlanetDatum, type UniverseIndex } from '../../domain/universe'
 import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
 import { starData, type StarDatum } from './starData'
 import { renderDim } from './stars'
@@ -15,9 +16,9 @@ import { renderDim } from './stars'
 //   > 11px           行星与轨道开始浮现
 //   > 34px           整个恒星系完全展开
 //
-// 行星 = 这颗恒星携带的真实内容（Star.ev，每颗 3–6 条），不是编出来的装饰。
-// 其中最要紧的一条语义：**你写过的行星自己发光，你只收藏的只能反射恒星的光，
-// 背面是全黑的**。「收藏了却从没写过」这件事，物理上恰好就是不发光的天体。
+// 行星 = 恒星引用、且已进入全局索引的真实知乎问题。旧 Evidence 不生成行星。
+// 只有问题下存在本人创作回答的真实 binding 时，行星才带暖色自发光；收藏关系与
+// 纯公共问题都只反射恒星光。新鲜度只取回答的 PublishedAt / UpdatedAt。
 
 /** 行星轨道半径：从这里起步，每颗往外推一档。单位是世界坐标。 */
 const ORBIT_BASE = 2.1
@@ -332,7 +333,11 @@ void main() {
  */
 export interface PlanetDatum {
   star: StarDatum
-  ev: Evidence
+  question: QuestionPlanetDatum['question']
+  answerCount: number
+  created: boolean
+  collected: boolean
+  latestPublicAt?: number
   /** 实例下标，用于置选中态 */
   index: number
   u: [number, number, number]
@@ -341,7 +346,6 @@ export interface PlanetDatum {
   phase: number
   period: number
   radius: number
-  own: boolean
 }
 
 export interface BodyLayer {
@@ -357,7 +361,8 @@ export interface BodyLayer {
   dispose(): void
 }
 
-export function makeBodies(u: Universe, reduceMotion: boolean): BodyLayer {
+export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLayer {
+  const u = index.universe
   const data = starData(u)
   const n = data.length
 
@@ -423,37 +428,35 @@ export function makeBodies(u: Universe, reduceMotion: boolean): BodyLayer {
 
   // ── 行星与轨道 ──
   //
-  // 每条真实内容一颗行星。ev 由后端封顶在 6 条，所以一个恒星系是 3–6 颗，
-  // 正好是能读清的量。
-  // 新鲜度按全宇宙的时间跨度归一化，而不是各恒星自己的跨度 ——
+  // 每个由恒星显式引用、并存在于全局索引的问题生成一颗星系内行星。
+  // 新鲜度按全宇宙问题回答的公开时间跨度归一化，而不是各恒星自己的跨度 ——
   // 否则每个星系里都必然有一颗「最新的」，跨系之间就没法比。
-  const monthOf = (y: string) => {
-    const [a, b] = y.split('.')
-    let yy = Number(a)
-    if (yy < 100) yy += 2000
-    return yy * 12 + Number(b)
-  }
+  const selectedQuestions = data.map((d) => selectPlanetData(index, d.s))
   let lo = Infinity, hi = -Infinity
-  for (const d of data) {
-    for (const e of d.s.ev ?? []) {
-      const m = monthOf(e.y)
-      if (Number.isFinite(m)) { if (m < lo) lo = m; if (m > hi) hi = m }
+  for (const system of selectedQuestions) {
+    for (const question of system) {
+      const at = question.latestPublicAt
+      if (at !== undefined) {
+        if (at < lo) lo = at
+        if (at > hi) hi = at
+      }
     }
   }
   const span = Math.max(1, hi - lo)
-  const freshOf = (y: string) => {
-    const m = monthOf(y)
-    if (!Number.isFinite(m)) return 0.5
+  const freshOf = (at: number | undefined) => {
+    if (at === undefined || !Number.isFinite(lo) || !Number.isFinite(hi)) return 0.45
     // 收在 [0,0.999]：1.0 会让打包进 iMeta.x 的 own 位读错
-    return Math.min(0.999, Math.max(0, (m - lo) / span))
+    return Math.min(0.999, Math.max(0, (at - lo) / span))
   }
 
-  const planets: { d: StarDatum; idx: number; own: number; fresh: number; count: number }[] = []
-  for (const d of data) {
-    const ev = d.s.ev ?? []
-    ev.forEach((e, k) =>
-      planets.push({ d, idx: k, own: e.o ? 1 : 0, fresh: freshOf(e.y), count: ev.length }))
-  }
+  const planets: { d: StarDatum; idx: number; datum: QuestionPlanetDatum; own: number; fresh: number }[] = []
+  data.forEach((d, starIndex) => selectedQuestions[starIndex].forEach((datum, idx) => planets.push({
+    d,
+    idx,
+    datum,
+    own: datum.created ? 1 : 0,
+    fresh: freshOf(datum.latestPublicAt),
+  })))
   const pn = planets.length
 
   const pU = new Float32Array(pn * 3)
@@ -481,7 +484,8 @@ export function makeBodies(u: Universe, reduceMotion: boolean): BodyLayer {
     // 开普勒式：外圈更慢
     const period = 7 + 2.4 * Math.pow(r, 1.5)
     const phase = ((p.idx * 137.508 + d.seed * 31.7) * Math.PI) / 180
-    const rad = PLANET_MIN + (PLANET_MAX - PLANET_MIN) * (((p.idx * 7919) % 100) / 100)
+    const answerScale = Math.min(1, Math.log1p(p.datum.answerCount) / Math.log1p(30))
+    const rad = PLANET_MIN + (PLANET_MAX - PLANET_MIN) * answerScale
 
     pU.set(uu, i * 3)
     pV.set(vv, i * 3)
@@ -493,8 +497,14 @@ export function makeBodies(u: Universe, reduceMotion: boolean): BodyLayer {
     pMeta.set([p.own * 2 + p.fresh, d.seed, d.bodyR, d.period], i * 4)
     pStarIndex[i] = starIndexOf.get(d)!
     planetData.push({
-      star: d, ev: d.s.ev[p.idx], index: i,
-      u: uu, v: vv, orbitR: r, phase, period, radius: rad, own: p.own === 1,
+      star: d,
+      question: p.datum.question,
+      answerCount: p.datum.answerCount,
+      created: p.datum.created,
+      collected: p.datum.collected,
+      latestPublicAt: p.datum.latestPublicAt,
+      index: i,
+      u: uu, v: vv, orbitR: r, phase, period, radius: rad,
     })
   })
 

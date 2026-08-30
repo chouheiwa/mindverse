@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { BlendFunction, BloomEffect, ChromaticAberrationEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Mode, Star, Universe } from '../types'
+import type { UniverseIndex } from '../domain/universe'
 import { orbit } from './projection'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
 import { makeStars, modeDim, type StarLayer } from './gl/stars'
@@ -32,7 +33,7 @@ import { detectQuality, type Quality } from './quality'
  */
 export interface RendererCallbacks {
   onPick?: (star: Star | null) => void
-  /** 点中一颗行星（= 一条真实内容）。传 null 表示取消选中。 */
+  /** 点中一颗问题行星（= 一个被恒星引用的真实知乎问题）。传 null 表示取消选中。 */
   onPickPlanet?: (p: PlanetDatum | null) => void
   /**
    * 选中行星在屏幕上的位置，每帧回调。
@@ -148,12 +149,13 @@ export class Renderer {
   constructor(
     canvas: HTMLCanvasElement,
     labelCanvas: HTMLCanvasElement,
-    u: Universe,
+    index: UniverseIndex,
     reduceMotion: boolean,
     cb: RendererCallbacks = {},
     quality: Quality = detectQuality(reduceMotion),
   ) {
     this.canvas = canvas
+    const u = index.universe
     this.u = u
     this.reduceMotion = reduceMotion
     this.cb = cb
@@ -182,7 +184,7 @@ export class Renderer {
     const data = starData(u)
     this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u))
     this.stars = makeStars(u, reduceMotion, data)
-    this.bodies = makeBodies(u, reduceMotion)
+    this.bodies = makeBodies(index, reduceMotion)
     this.dust = makeDust(u, reduceMotion)
     this.rings = makeRings(u)
     this.overlay = makeOverlay3D(u)

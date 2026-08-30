@@ -72,6 +72,13 @@
   font-weight: 400; color: var(--mute); background: none; border: 1px solid var(--rule);
   padding: 6px 12px; border-radius: 2px }
 
+.uv-question-transition { position: fixed; z-index: 10; left: 50%; bottom: calc(var(--bar-h) + 18px);
+  transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 13px;
+  border: 1px solid var(--rule); border-radius: 2px; background: rgba(7, 11, 24, .94);
+  color: var(--dim); font-family: var(--f-m); font-size: 10px; letter-spacing: .06em }
+.uv-question-transition button { padding: 1px 4px; border: 0; background: none; color: var(--mute); font-size: 14px }
+.uv-question-transition button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px }
+
 /* 手机：仪表带变成底部一张卡片，模式条横向可滑 —— 换承载，不换隐喻 */
 @media (max-width: 760px) {
   .uv-head { left: 18px; top: 18px; max-width: 76vw }
@@ -93,4 +100,5 @@
   .uv-act { width: 100% }
   .uv-hint, .uv-filtered { bottom: 232px }
   .uv-filtered { left: 18px; right: 18px }
+  .uv-question-transition { bottom: 214px; max-width: calc(100vw - 36px); white-space: nowrap }
 }

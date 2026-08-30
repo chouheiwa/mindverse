@@ -26,6 +26,16 @@ export interface UniverseIndex {
   readonly probesById: ReadonlyMap<string, ArticleProbe>
 }
 
+/** Star-local rendering model for one globally indexed public question. */
+export interface QuestionPlanetDatum {
+  readonly starId: string
+  readonly question: QuestionPlanet
+  readonly answerCount: number
+  readonly created: boolean
+  readonly collected: boolean
+  readonly latestPublicAt?: number
+}
+
 const fail = (path: string, message: string): never => {
   throw new Error('invalid universe at ' + path + ': ' + message)
 }
@@ -494,6 +504,49 @@ export function indexUniverse(input: WireUniverse | Universe): UniverseIndex {
 export function questionsForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly QuestionPlanet[] {
   if (!('questionIds' in star) || !star.questionIds?.length) return EMPTY_RESULT
   return Object.freeze(star.questionIds.map((id) => index.questionsById.get(id)).filter((item): item is QuestionPlanet => item !== undefined))
+}
+
+/**
+ * Select admitted question planets for one current star.
+ *
+ * Relations come only from the question's referenced answer bindings. Discovery
+ * metadata and private observation timestamps do not describe a personal relation
+ * or public freshness, so neither participates in these aggregates.
+ */
+export function selectPlanetData(
+  index: UniverseIndex,
+  star: Star | WireCurrentStar | WireLegacyStar,
+): readonly QuestionPlanetDatum[] {
+  if (!('id' in star) || !('questionIds' in star) || !star.questionIds?.length) return EMPTY_RESULT
+  const result: QuestionPlanetDatum[] = []
+  for (const questionId of star.questionIds) {
+    const question = index.questionsById.get(questionId)
+    if (!question) continue
+    let created = false
+    let collected = false
+    let latestPublicAt: number | undefined
+    for (const answerId of question.answerIds) {
+      const answer = index.answersById.get(answerId)
+      if (!answer) continue
+      for (const binding of answer.bindings) {
+        if (binding.relation === 'created') created = true
+        if (binding.relation === 'collected') collected = true
+      }
+      for (const at of [answer.publishedAt, answer.updatedAt]) {
+        if (at !== undefined && (latestPublicAt === undefined || at > latestPublicAt)) latestPublicAt = at
+      }
+    }
+    const datum: QuestionPlanetDatum = {
+      starId: star.id,
+      question,
+      answerCount: question.answerIds.length,
+      created,
+      collected,
+      ...(latestPublicAt === undefined ? {} : { latestPublicAt }),
+    }
+    result.push(Object.freeze(datum))
+  }
+  return Object.freeze(result)
 }
 export function probesForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly ArticleProbe[] {
   if (!('probeIds' in star) || !star.probeIds?.length) return EMPTY_RESULT

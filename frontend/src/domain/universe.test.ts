@@ -9,6 +9,7 @@ import {
   probesForStar,
   publicStarsForShare,
   questionsForStar,
+  selectPlanetData,
 } from './universe'
 
 const evidence = { t: 'private evidence', u: 'https://example.test/private', o: 1, y: '26.08' }
@@ -37,6 +38,53 @@ const expectKeys = (value: object, keys: readonly string[]) =>
   expect(Object.keys(value).sort()).toEqual([...keys].sort())
 
 describe('current universe indexes', () => {
+  test('selectPlanetDataUsesAdmittedQuestionsOnly', () => {
+    const index = indexUniverse(fixture)
+    const planets = selectPlanetData(index, index.universe.stars[0])
+
+    expect(planets.map(({ question }) => question.id)).toEqual(['question:7'])
+    expect(planets[0].question).toBe(index.questionsById.get('question:7'))
+    expect(planets.some(({ question }) => question.title === evidence.t)).toBe(false)
+
+    const { schemaVersion: _schema, analysisVersion: _analysis, questions: _questions, answers: _answers, probes: _probes, ...legacyCore } = fixture
+    const legacy = indexUniverse({
+      ...legacyCore,
+      stars: fixture.stars.map(({ id: _id, scope: _scope, externalQueryAllowed: _allowed, questionIds: _questionIds, probeIds: _probeIds, ...star }) => star),
+    } as unknown as LegacyUniverse)
+    expect(selectPlanetData(legacy, legacy.universe.stars[0])).toEqual([])
+  })
+
+  test('creates star-local orbit data without duplicating the global question', () => {
+    const index = indexUniverse(fixture)
+    const alpha = selectPlanetData(index, index.universe.stars[0])[0]
+    const beta = selectPlanetData(index, index.universe.stars[1])[0]
+
+    expect(alpha).not.toBe(beta)
+    expect(alpha.question).toBe(beta.question)
+    expect(alpha.starId).not.toBe(beta.starId)
+  })
+
+  test('derives answer aggregates only from referenced answer public timestamps and bindings', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    changed.questions![0].answerIds = ['answer:10', 'answer:8', 'answer:9']
+    changed.answers = [
+      { ...changed.answers![0], publishedAt: 10, updatedAt: 20, observedAt: 900, bindings: [], discoverySources: ['favorite_list'] },
+      { ...changed.answers![0], id: 'answer:9', url: 'https://www.zhihu.com/question/7/answer/9', publishedAt: 30, updatedAt: 25, observedAt: 800, bindings: [{ relation: 'created', at: 700, folders: [] }], discoverySources: ['public_search'] },
+      { ...changed.answers![0], id: 'answer:10', url: 'https://www.zhihu.com/question/7/answer/10', publishedAt: 15, updatedAt: 35, observedAt: 999, bindings: [{ relation: 'collected', at: 600, folders: [] }], discoverySources: ['own_content'] },
+    ]
+    const datum = selectPlanetData(indexUniverse(changed), changed.stars![0])[0]
+
+    expect(datum).toMatchObject({ answerCount: 3, created: true, collected: true, latestPublicAt: 35 })
+  })
+
+  test('orders planet data by sorted question references', () => {
+    const changed = clone(fixture)
+    changed.stars[0].questionIds = ['question:7', 'question:9']
+    changed.questions.push({ id: 'question:9', questionId: '9', title: 'Later question', url: 'https://www.zhihu.com/question/9', answerIds: [] })
+    expect(selectPlanetData(indexUniverse(changed), changed.stars[0]).map(({ question }) => question.id))
+      .toEqual(['question:7', 'question:9'])
+  })
+
   test('two stars resolve one global question to the same object identity', () => {
     const index = indexUniverse(fixture)
     expect(questionsForStar(index, fixture.stars[0])[0]).toBe(questionsForStar(index, fixture.stars[1])[0])

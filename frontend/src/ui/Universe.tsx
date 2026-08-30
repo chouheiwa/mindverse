@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone, shareIdFromPath } from '../api'
 import { Renderer } from '../starmap/Renderer'
@@ -7,7 +7,8 @@ import { Panel } from './Panel'
 import { InfoPanel } from './InfoPanel'
 import { ModeBar } from './ModeBar'
 import { Card } from './Card'
-import { PlanetCard } from './PlanetCard'
+import { indexUniverse } from '../domain/universe'
+import { QuestionPlanetCard } from './QuestionPlanetCard'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import { Seed } from './Seed'
 import './Universe.css'
@@ -30,6 +31,9 @@ export function UniverseView() {
   const [error, setError] = useState<string | null>(null)
   const [star, setStar] = useState<Star | null>(null)
   const [planet, setPlanet] = useState<PlanetDatum | null>(null)
+  // Task 6 consumes this transition boundary to mount the observation workspace.
+  // For now it records an intentional entry without pretending that workspace exists.
+  const [questionEntryId, setQuestionEntryId] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const [mode, setMode] = useState<Mode>('all')
   const [wormIdx, setWormIdx] = useState(0)
@@ -41,6 +45,7 @@ export function UniverseView() {
     () => new URLSearchParams(location.search).get('seed') === '1',
   )
   const [reload, setReload] = useState(0)
+  const universeIndex = useMemo(() => universe ? indexUniverse(universe) : null, [universe])
 
   // 取数据：分享页读快照，否则轮询生成
   useEffect(() => {
@@ -66,8 +71,8 @@ export function UniverseView() {
 
   // 挂渲染器：canvas 由它独占，不随 React 重渲染
   useEffect(() => {
-    if (!universe || !canvasRef.current || !labelRef.current) return
-    const r = new Renderer(canvasRef.current, labelRef.current, universe, reduceMotion(), {
+    if (!universeIndex || !canvasRef.current || !labelRef.current) return
+    const r = new Renderer(canvasRef.current, labelRef.current, universeIndex, reduceMotion(), {
       onPick: (s) => { setStar(s); if (s) setMode('all') },
       onPickPlanet: setPlanet,
       // 命令式定位：行星一直在动，这里每帧都会被调用
@@ -76,10 +81,10 @@ export function UniverseView() {
         if (!el) return
         el.style.visibility = visible ? 'visible' : 'hidden'
         // 贴边时把卡片收回视口内
-        const w = el.offsetWidth || 274
+        const w = el.offsetWidth || 332
         const cx = Math.min(Math.max(x, w / 2 + 12), innerWidth - w / 2 - 12)
         // 行星靠近顶部时卡片翻到它下面，否则会盖住标题
-        const below = y < (el.offsetHeight || 130) + 40
+        const below = y < (el.offsetHeight || 180) + 40
         el.classList.toggle('below', below)
         el.style.transform = below
           ? `translate(-50%, 0) translate(${cx}px, ${y + 20}px)`
@@ -100,7 +105,7 @@ export function UniverseView() {
       r.destroy()
       rendererRef.current = null
     }
-  }, [universe])
+  }, [universeIndex])
 
   useEffect(() => { rendererRef.current?.setMode(mode, wormIdx) }, [mode, wormIdx])
 
@@ -113,6 +118,11 @@ export function UniverseView() {
     setStar(null)
     setPlanet(null)
     setMode((cur) => (cur === m && m !== 'all' ? 'all' : m))
+  }, [])
+
+  /** Stable hand-off for the question workspace introduced in Task 6. */
+  const onEnterQuestion = useCallback((selected: PlanetDatum) => {
+    setQuestionEntryId(selected.question.id)
   }, [])
 
   const panelOpen = star !== null || mode !== 'all'
@@ -175,7 +185,7 @@ export function UniverseView() {
         </button>
       )}
       <div className="uv-hint" style={{ opacity: hint ? 1 : 0 }}>
-        点恒星飞进它的星系 · 点行星看那条内容 · 滚轮拉远逐级返回
+        点恒星飞进它的星系 · 点行星查看真实问题 · 滚轮拉远逐级返回
       </div>
 
       {/* 仪表带：左边是「我在看什么」，中间是视图，右边是唯一的动作。
@@ -211,11 +221,17 @@ export function UniverseView() {
         </div>
       </div>
       {card && <Card universe={universe} onClose={() => setCard(false)} />}
-      <PlanetCard ref={cardRef} planet={planet} shared={shared}
+      <QuestionPlanetCard ref={cardRef} planet={planet} onEnter={onEnterQuestion}
         onClose={() => { setPlanet(null); rendererRef.current?.clearPlanet() }} />
+      {questionEntryId && (
+        <div className="uv-question-transition" role="status" data-question-id={questionEntryId}>
+          已选定问题行星 · 观察模式即将接入
+          <button type="button" onClick={() => setQuestionEntryId(null)} aria-label="关闭进入提示">×</button>
+        </div>
+      )}
       <Panel universe={universe} star={star} shared={shared}
         onClose={() => { setStar(null); setPlanet(null); rendererRef.current?.resetView() }}
-        highlight={planet?.ev.u}
+        highlight={undefined}
         onPickConcept={pickConcept} />
       <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
         shared={shared} onWorm={setWormIdx} onClose={() => setMode('all')} />

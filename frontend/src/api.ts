@@ -1,4 +1,5 @@
-import type { Generation, OAuthStatus } from './types'
+import { indexUniverse, parseUniverse } from './domain/universe'
+import type { Generation, OAuthStatus, WireGeneration } from './types'
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { credentials: 'same-origin', ...init })
@@ -10,8 +11,13 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const getOAuthStatus = () => json<OAuthStatus>('/api/oauth/status')
-export const getGeneration = () => json<Generation>('/api/universe')
-export const startGeneration = () => json<Generation>('/api/universe', { method: 'POST' })
+const normalizeGeneration = ({ universe, ...generation }: WireGeneration): Generation => {
+  if (universe == null) return generation
+  const parsed = parseUniverse(universe)
+  return { ...generation, universe: indexUniverse(parsed).universe }
+}
+export const getGeneration = () => json<WireGeneration>('/api/universe').then(normalizeGeneration)
+export const startGeneration = () => json<WireGeneration>('/api/universe', { method: 'POST' }).then(normalizeGeneration)
 export const wipeSession = () => json<{ ok: boolean }>('/api/session/data', { method: 'DELETE' })
 /** 分享路由 /s/{id}；Task 8 将接入新的逐项公开视图。 */
 export function shareIdFromPath(): string | null {

@@ -195,6 +195,36 @@ describe('compatibility and validation', () => {
     expect(() => parseUniverse(changed)).toThrow(/limit/)
   })
 
+  test('rejects sparse arrays', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    changed.questions = new Array(1)
+    expect(() => parseUniverse(changed)).toThrow(/dense own data properties/)
+  })
+
+  test('rejects array accessors without executing their getters', () => {
+    const changed = clone(fixture) as CurrentUniverse
+    let reads = 0
+    Object.defineProperty(changed.questions, '0', {
+      enumerable: true,
+      get: () => {
+        reads += 1
+        return fixture.questions[0]
+      },
+    })
+    expect(() => parseUniverse(changed)).toThrow(/JSON data property/)
+    expect(reads).toBe(0)
+  })
+
+  test.each(['symbol', 'custom'])('rejects arrays with %s own properties', (kind) => {
+    const changed = clone(fixture) as CurrentUniverse
+    if (kind === 'symbol') {
+      Object.defineProperty(changed.questions, Symbol('extra'), { value: true, enumerable: true })
+    } else {
+      Object.defineProperty(changed.questions, 'extra', { value: true, enumerable: true })
+    }
+    expect(() => parseUniverse(changed)).toThrow(/unknown array key/)
+  })
+
   test('wire parsing preserves nullable legacy slices and omitted current star references', () => {
     const legacy = parseUniverse({
       meta: fixture.meta,

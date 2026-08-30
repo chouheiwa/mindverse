@@ -132,6 +132,9 @@ export interface Generation {
   state: GenState; stage: string; progress: number; error?: string; universe?: Universe
   filtered: number; source: string; calls: number
 }
+export interface WireGeneration extends Omit<Generation, 'universe'> {
+  universe?: WireUniverse | null
+}
 export interface OAuthStatus {
   configured: boolean; localOnly: boolean; authorized: boolean; appId: string; redirectUri: string
   profile: { name: string; avatar_url: string; headline: string; url: string } | null

@@ -63,8 +63,26 @@ const integer = (value: unknown, path: string): number => {
 const flag = (value: unknown, path: string): boolean =>
   typeof value === 'boolean' ? value : fail(path, 'expected boolean')
 const list = (value: unknown, path: string): unknown[] => {
-  const parsed = value === null ? [] : Array.isArray(value) ? value : fail(path, 'expected array or null')
-  if (parsed.length > UNIVERSE_COLLECTION_LIMIT) fail(path, 'collection limit exceeded')
+  if (value === null) return []
+  const parsed = Array.isArray(value) ? value : fail(path, 'expected array or null')
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(parsed, 'length') ?? fail(path + '.length', 'expected JSON data property')
+  if (!Object.hasOwn(lengthDescriptor, 'value')) fail(path + '.length', 'expected JSON data property')
+  const length = typeof lengthDescriptor.value === 'number' && Number.isSafeInteger(lengthDescriptor.value) && lengthDescriptor.value >= 0
+    ? lengthDescriptor.value : fail(path + '.length', 'expected JSON data property')
+  if (length > UNIVERSE_COLLECTION_LIMIT) fail(path, 'collection limit exceeded')
+  const indices = new Set<number>()
+  for (const key of Reflect.ownKeys(parsed)) {
+    if (key === 'length') continue
+    const stringKey = typeof key === 'string' ? key : fail(path, 'unknown array key ' + String(key))
+    if (!/^(0|[1-9]\d*)$/.test(stringKey)) fail(path, 'unknown array key ' + stringKey)
+    const index = Number(stringKey)
+    const descriptor = Object.getOwnPropertyDescriptor(parsed, stringKey)
+    if (index >= length || !descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      fail(path + '[' + stringKey + ']', 'expected JSON data property')
+    }
+    indices.add(index)
+  }
+  if (indices.size !== length) fail(path, 'expected dense own data properties')
   return parsed
 }
 const optionalText = (value: unknown, path: string): string | undefined =>

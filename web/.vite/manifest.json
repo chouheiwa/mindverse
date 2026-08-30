@@ -1,0 +1,208 @@
+{
+  "_PublicShareContent-B_tS-BP5.js": {
+    "file": "assets/PublicShareContent-B_tS-BP5.js",
+    "name": "PublicShareContent",
+    "imports": [
+      "_theme-ENJpZHcd.js",
+      "_apiCore-BzPZ3njc.js"
+    ]
+  },
+  "_api-koE_C2-b.js": {
+    "file": "assets/api-koE_C2-b.js",
+    "name": "api",
+    "imports": [
+      "_apiCore-BzPZ3njc.js"
+    ]
+  },
+  "_apiCore-BzPZ3njc.js": {
+    "file": "assets/apiCore-BzPZ3njc.js",
+    "name": "apiCore"
+  },
+  "_postprocessing-DEVNFRfJ.js": {
+    "file": "assets/postprocessing-DEVNFRfJ.js",
+    "name": "postprocessing",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CvOWVqaR.js",
+      "_three-CRglOXhH.js",
+      "_three-iIGaBBoM.js",
+      "_three-CNMgPxYf.js",
+      "_three-DGqgeLFw.js"
+    ]
+  },
+  "_theme-CbzUqeID.css": {
+    "file": "assets/theme-CbzUqeID.css",
+    "src": "_theme-CbzUqeID.css"
+  },
+  "_theme-ENJpZHcd.js": {
+    "file": "assets/theme-ENJpZHcd.js",
+    "name": "theme",
+    "css": [
+      "assets/theme-CbzUqeID.css"
+    ]
+  },
+  "_three-BaKNbgsC.js": {
+    "file": "assets/three-BaKNbgsC.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CvOWVqaR.js",
+      "_three-CRglOXhH.js",
+      "_three-iIGaBBoM.js",
+      "_three-CNMgPxYf.js",
+      "_three-BdAEWc9W.js"
+    ]
+  },
+  "_three-BdAEWc9W.js": {
+    "file": "assets/three-BdAEWc9W.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CvOWVqaR.js",
+      "_three-CRglOXhH.js"
+    ]
+  },
+  "_three-CNMgPxYf.js": {
+    "file": "assets/three-CNMgPxYf.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CvOWVqaR.js",
+      "_three-CRglOXhH.js"
+    ]
+  },
+  "_three-CRglOXhH.js": {
+    "file": "assets/three-CRglOXhH.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CvOWVqaR.js",
+      "_three-iIGaBBoM.js",
+      "_three-CNMgPxYf.js",
+      "_three-BdAEWc9W.js"
+    ]
+  },
+  "_three-CvOWVqaR.js": {
+    "file": "assets/three-CvOWVqaR.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CRglOXhH.js"
+    ]
+  },
+  "_three-DGqgeLFw.js": {
+    "file": "assets/three-DGqgeLFw.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CRglOXhH.js"
+    ]
+  },
+  "_three-DSTeC33X.js": {
+    "file": "assets/three-DSTeC33X.js",
+    "name": "three",
+    "imports": [
+      "_three-CvOWVqaR.js",
+      "_three-CRglOXhH.js"
+    ]
+  },
+  "_three-iIGaBBoM.js": {
+    "file": "assets/three-iIGaBBoM.js",
+    "name": "three",
+    "imports": [
+      "_three-DSTeC33X.js",
+      "_three-CvOWVqaR.js",
+      "_three-CRglOXhH.js",
+      "_three-CNMgPxYf.js",
+      "_three-BaKNbgsC.js",
+      "_three-BdAEWc9W.js"
+    ]
+  },
+  "index.html": {
+    "file": "assets/landing-CgcKFdJo.js",
+    "name": "landing",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_theme-ENJpZHcd.js",
+      "_api-koE_C2-b.js"
+    ],
+    "css": [
+      "assets/landing-s2Lwws91.css"
+    ]
+  },
+  "src/starmap/Renderer.ts": {
+    "file": "assets/Renderer-Bi5zgsa2.js",
+    "name": "Renderer",
+    "src": "src/starmap/Renderer.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_api-koE_C2-b.js",
+      "_three-DSTeC33X.js",
+      "_three-CRglOXhH.js",
+      "_three-iIGaBBoM.js",
+      "_three-CNMgPxYf.js",
+      "_three-DGqgeLFw.js",
+      "_postprocessing-DEVNFRfJ.js"
+    ]
+  },
+  "src/ui/QuestionWorkspace.tsx": {
+    "file": "assets/QuestionWorkspace-CDYhy80M.js",
+    "name": "QuestionWorkspace",
+    "src": "src/ui/QuestionWorkspace.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_theme-ENJpZHcd.js",
+      "src/ui/Universe.tsx"
+    ],
+    "css": [
+      "assets/QuestionWorkspace-yDIn9jlz.css"
+    ]
+  },
+  "src/ui/SharedView.tsx": {
+    "file": "assets/SharedView-CmzqTJ3g.js",
+    "name": "SharedView",
+    "src": "src/ui/SharedView.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_theme-ENJpZHcd.js",
+      "_PublicShareContent-B_tS-BP5.js"
+    ],
+    "css": [
+      "assets/SharedView-BYyUodOf.css"
+    ]
+  },
+  "src/ui/Universe.tsx": {
+    "file": "assets/Universe-Bf7PoxFm.js",
+    "name": "Universe",
+    "src": "src/ui/Universe.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_theme-ENJpZHcd.js",
+      "_api-koE_C2-b.js",
+      "_apiCore-BzPZ3njc.js",
+      "universe.html",
+      "_PublicShareContent-B_tS-BP5.js"
+    ],
+    "dynamicImports": [
+      "src/ui/QuestionWorkspace.tsx",
+      "src/starmap/Renderer.ts"
+    ],
+    "css": [
+      "assets/Universe-c-VBVzhr.css"
+    ]
+  },
+  "universe.html": {
+    "file": "assets/universe-CdvIGYGo.js",
+    "name": "universe",
+    "src": "universe.html",
+    "isEntry": true,
+    "imports": [
+      "_theme-ENJpZHcd.js"
+    ],
+    "dynamicImports": [
+      "src/ui/SharedView.tsx",
+      "src/ui/Universe.tsx"
+    ]
+  }
+}

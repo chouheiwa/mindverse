@@ -3,3 +3,7 @@ dist/
 .DS_Store
 .superpowers/
 .worktrees/
+data/snapshots/*.json
+.env
+.env.*
+!.env.example

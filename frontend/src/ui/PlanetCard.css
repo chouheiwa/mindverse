@@ -32,8 +32,8 @@
   border-top: 1px solid rgba(155, 176, 255, .16);
 }
 
-.pc-x { position: absolute; right: 7px; top: 4px; font-family: var(--f-m); font-size: 15px;
-  color: var(--mute); background: none; border: 0; padding: 3px 5px; line-height: 1; cursor: pointer }
+.pc-x { position: absolute; right: 0; top: 0; min-width: 44px; min-height: 44px; font-family: var(--f-m); font-size: 15px;
+  color: var(--mute); background: none; border: 0; padding: 0; line-height: 1; cursor: pointer }
 .pc-x:hover { color: var(--ink) }
 .pc-h { display: flex; gap: 9px; align-items: center }
 .pc-y { font-size: 10px; color: var(--mute) }

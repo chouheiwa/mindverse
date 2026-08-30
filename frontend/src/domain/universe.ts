@@ -15,6 +15,8 @@ export const UNIVERSE_COLLECTION_LIMIT = 10_000
 const UNIVERSE_NODE_LIMIT = 100_000
 const UNIVERSE_EDGE_LIMIT = 250_000
 const UNIVERSE_PRIMITIVE_LIMIT = 250_000
+/** Stops hostile JSON-like object graphs before recursive traversal can exhaust the stack. */
+export const UNIVERSE_MAX_DEPTH = 128
 /** Rendering cap: one star system must remain navigable and GPU-safe. */
 export const UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT = 512
 const validatedWires = new WeakSet<object>()
@@ -123,7 +125,8 @@ function sanitizeInput(value: unknown): unknown {
   let edges = 0
   let primitives = 0
   const active = new WeakSet<object>()
-  const visit = (entry: unknown, path: string): unknown => {
+  const visit = (entry: unknown, path: string, depth: number): unknown => {
+    if (depth > UNIVERSE_MAX_DEPTH) fail(path, 'maximum depth exceeded')
     if (typeof entry !== 'object' || entry === null) {
       primitives += 1
       if (primitives > UNIVERSE_PRIMITIVE_LIMIT) fail(path, 'primitive budget exceeded')
@@ -138,7 +141,7 @@ function sanitizeInput(value: unknown): unknown {
       const source = ownArrayValues(entry, path)
       edges += source.length
       if (edges > UNIVERSE_EDGE_LIMIT) fail(path, 'edge budget exceeded')
-      const result = source.map((item, index) => visit(item, path + '[' + index + ']'))
+      const result = source.map((item, index) => visit(item, path + '[' + index + ']', depth + 1))
       sanitizedArrays.add(result)
       active.delete(entry)
       return result
@@ -155,7 +158,7 @@ function sanitizeInput(value: unknown): unknown {
         fail(path + '.' + stringKey, 'expected JSON data property')
       }
       Object.defineProperty(result, stringKey, {
-        value: visit(descriptor.value, path + '.' + stringKey),
+        value: visit(descriptor.value, path + '.' + stringKey, depth + 1),
         enumerable: true,
         configurable: true,
         writable: true,
@@ -164,7 +167,7 @@ function sanitizeInput(value: unknown): unknown {
     active.delete(entry)
     return result
   }
-  return visit(value, 'universe')
+  return visit(value, 'universe', 0)
 }
 const optionalText = (value: unknown, path: string): string | undefined =>
   value === undefined ? undefined : text(value, path)

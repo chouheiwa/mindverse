@@ -21,4 +21,10 @@ describe('public/private universe module boundary', () => {
     expect(source('./ui/Universe.tsx')).not.toMatch(/(?:import|from) ['"]\.\/SharedView['"]|<SharedView/)
     expect(source('./ui/SharedView.tsx')).not.toMatch(/Renderer|Panel|QuestionWorkspace|\.\/Universe/)
   })
+
+  test('keeps the WebGL renderer out of the private shell until the canvas is ready', () => {
+    const privateRoot = source('./ui/Universe.tsx')
+    expect(privateRoot).toMatch(/import\('\.\.\/starmap\/Renderer'\)/)
+    expect(privateRoot).not.toMatch(/^import\s+\{\s*Renderer\s*\}\s+from\s+['"]\.\.\/starmap\/Renderer['"]/m)
+  })
 })

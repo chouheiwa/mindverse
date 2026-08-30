@@ -240,4 +240,21 @@ describe('Universe question keyboard integration', () => {
     fireEvent.click(screen.getByRole('button', { name: '熄灭的星' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
+
+  test('moves focus back to the card when the already-selected lane item is chosen again', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    act(() => testState.callbacks?.onPick?.(star))
+
+    const laneButton = await screen.findByRole('button', { name: /轨道 1.*真实问题标题/ })
+    await user.click(laneButton)
+    const enter = within(await screen.findByRole('complementary', { name: '问题行星入口' }))
+      .getByRole('button', { name: '进入问题行星' })
+    await waitFor(() => expect(enter).toHaveFocus())
+
+    laneButton.focus()
+    await user.click(laneButton)
+    await waitFor(() => expect(enter).toHaveFocus())
+  })
 })

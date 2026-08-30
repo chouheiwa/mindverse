@@ -10,6 +10,7 @@ import {
   publicStarsForShare,
   questionsForStar,
   selectPlanetData,
+  UNIVERSE_MAX_DEPTH,
   UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT,
 } from './universe'
 
@@ -97,6 +98,19 @@ describe('current universe indexes', () => {
     const changed = clone(fixture) as unknown as Record<string, unknown>
     changed.bomb = Array.from({ length: 101 }, () => Array<unknown>(10_000).fill(0))
     expect(() => parseUniverse(changed)).toThrow(/bomb.*edge budget exceeded/)
+  })
+
+  test('rejects deeply nested hostile input before exhausting the JavaScript stack', () => {
+    const changed = clone(fixture) as unknown as Record<string, unknown>
+    let nested: Record<string, unknown> = {}
+    changed.bomb = nested
+    for (let depth = 0; depth <= UNIVERSE_MAX_DEPTH; depth += 1) {
+      const next: Record<string, unknown> = {}
+      nested.next = next
+      nested = next
+    }
+
+    expect(() => parseUniverse(changed)).toThrow(/maximum depth exceeded/)
   })
 
   test('derives answer aggregates only from referenced answer public timestamps and bindings', () => {

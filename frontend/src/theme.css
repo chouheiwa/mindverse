@@ -6,7 +6,7 @@
   --surface: #0E1424;
   --ink: #DDE4F2;
   --dim: #9AA4BE;
-  --mute: #697291;
+  --mute: #747E9E;
   --readout: #AEB8D2;
   --rule: #161D33;
   --rule-soft: rgba(155, 176, 255, .10);
@@ -56,10 +56,10 @@ a:hover { color: var(--star-hi) }
 
 .lbl {
   font-family: var(--f-m);
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: .22em;
   text-transform: uppercase;
-  color: var(--mute);
+  color: var(--dim);
 }
 .mono { font-family: var(--f-m); font-variant-numeric: tabular-nums }
 

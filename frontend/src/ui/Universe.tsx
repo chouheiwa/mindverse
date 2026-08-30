@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone } from '../api'
-import { Renderer } from '../starmap/Renderer'
+import type { Renderer } from '../starmap/Renderer'
 import { Loading } from './Loading'
 import { Panel } from './Panel'
 import { InfoPanel } from './InfoPanel'
@@ -78,7 +78,14 @@ export function PrivateUniverseView() {
   // 挂渲染器：canvas 由它独占，不随 React 重渲染
   useEffect(() => {
     if (!universeIndex || !canvasRef.current || !labelRef.current) return
-    const r = new Renderer(canvasRef.current, labelRef.current, universeIndex, reduceMotion(), {
+    const canvas = canvasRef.current
+    const labels = labelRef.current
+    let disposed = false
+    let instance: Renderer | null = null
+    const mountRenderer = async () => {
+      const { Renderer: WebGLRenderer } = await import('../starmap/Renderer')
+      if (disposed) return
+      const r = new WebGLRenderer(canvas, labels, universeIndex, reduceMotion(), {
       onPick: (s) => {
         if (s) {
           const active = document.activeElement
@@ -118,16 +125,30 @@ export function PrivateUniverseView() {
         setHint(true)
         setTimeout(() => setHint(false), 6000)
       },
-    })
-    rendererRef.current = r
-    r.start()
-    const onResize = () => r.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      r.destroy()
-      rendererRef.current = null
+      })
+      if (disposed) {
+        r.destroy()
+        return
+      }
+      instance = r
+      rendererRef.current = r
+      r.setMode(mode, wormIdx)
+      r.start()
+      window.addEventListener('resize', onResize)
     }
+    const onResize = () => instance?.resize()
+    void mountRenderer().catch((cause: unknown) => {
+      if (!disposed) setError(cause instanceof Error ? cause.message : String(cause))
+    })
+    return () => {
+      disposed = true
+      window.removeEventListener('resize', onResize)
+      instance?.destroy()
+      if (rendererRef.current === instance) rendererRef.current = null
+    }
+    // Renderer lifecycle follows the immutable universe index. Current mode is applied on mount
+    // and subsequent changes flow through the dedicated effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [universeIndex])
 
   useEffect(() => {
@@ -224,13 +245,20 @@ export function PrivateUniverseView() {
   }, [restoreLaneFocus])
 
   const selectQuestionFromLane = useCallback((datum: QuestionPlanetDatum, trigger: HTMLButtonElement) => {
+    const alreadySelected = planet?.question.id === datum.question.id
     focusReturnRef.current = trigger
     focusCardFromLaneRef.current = true
     setQuestionEntry(null)
-    if (!rendererRef.current?.selectQuestionPlanet(datum.starId, datum.question.id)) {
+    const selected = rendererRef.current?.selectQuestionPlanet(datum.starId, datum.question.id)
+    if (!selected) {
       focusCardFromLaneRef.current = false
+    } else if (alreadySelected) {
+      focusCardFromLaneRef.current = false
+      requestAnimationFrame(() => {
+        cardRef.current?.querySelector<HTMLButtonElement>('[data-question-primary]')?.focus()
+      })
     }
-  }, [])
+  }, [planet?.question.id])
 
   const enterQuestionFromPanel = useCallback((questionId: string, trigger: HTMLButtonElement) => {
     if (!star || !('id' in star)) return

@@ -5,6 +5,19 @@ import { describe, expect, test } from 'vitest'
 
 const css = (name: string) => readFileSync(new URL(name, import.meta.url), 'utf8')
 
+const luminance = (hex: string) => {
+  const channels = hex.match(/[\da-f]{2}/gi)?.map((part) => Number.parseInt(part, 16) / 255) ?? []
+  const linear = channels.map((channel) => channel <= 0.04045
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+}
+
+const contrast = (foreground: string, background: string) => {
+  const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a)
+  return (light + 0.05) / (dark + 0.05)
+}
+
 describe('question navigation accessibility styles', () => {
   test('keeps primary and close targets at least 44px', () => {
     const card = css('./QuestionPlanetCard.css')
@@ -30,6 +43,20 @@ describe('question navigation accessibility styles', () => {
 
   test('uses the AA text token for panel empty and note copy', () => {
     expect(css('./Panel.css')).toMatch(/\.entry-empty, \.entry-note\s*\{[^}]*color:\s*var\(--dim\)/s)
+  })
+
+  test('keeps the global instrument label legible and the muted token AA on the ground', () => {
+    const theme = css('../theme.css')
+    const token = theme.match(/--mute:\s*(#[\dA-F]{6})/i)?.[1]
+    const ground = theme.match(/--ground:\s*(#[\dA-F]{6})/i)?.[1]
+    expect(token).toBeDefined()
+    expect(ground).toBeDefined()
+    expect(contrast(token!, ground!)).toBeGreaterThanOrEqual(4.5)
+    expect(theme).toMatch(/\.lbl\s*\{[^}]*font-size:\s*(?:12|1[3-9]|[2-9]\d)px[^}]*color:\s*var\(--(?:dim|readout)\)/s)
+  })
+
+  test('keeps the legacy planet close control touch-sized on mobile-capable layouts', () => {
+    expect(css('./PlanetCard.css')).toMatch(/\.pc-x\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s)
   })
 
   test('does not use the low-contrast mute token for small InfoPanel metadata', () => {

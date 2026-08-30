@@ -1,7 +1,10 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { rmSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+
+const configDir = fileURLToPath(new URL('.', import.meta.url))
 
 // 多页构建：保持 Go 侧路由不变（/ 与 /universe.html，/s/{id} 复用后者）。
 // 产物直接落进 web/，Go 用 http.FileServer 提供。
@@ -19,15 +22,40 @@ function cleanAssets(dir: string): Plugin {
   }
 }
 export default defineConfig({
-  plugins: [react(), cleanAssets(resolve(__dirname, '../web/assets'))],
+  plugins: [react(), cleanAssets(resolve(configDir, '../web/assets'))],
   base: '/',
+  // three 默认导出是一个单体模块，无法被 Rolldown 按模块继续分包。
+  // 指向等价的源码入口后，tree-shaking 与 maxSize 才能真正生效。
+  resolve: {
+    alias: [{ find: /^three$/, replacement: resolve(configDir, 'node_modules/three/src/Three.js') }],
+  },
   build: {
-    outDir: resolve(__dirname, '../web'),
+    outDir: resolve(configDir, '../web'),
     emptyOutDir: false,
-    rollupOptions: {
+    manifest: true,
+    rolldownOptions: {
       input: {
-        landing: resolve(__dirname, 'index.html'),
-        universe: resolve(__dirname, 'universe.html'),
+        landing: resolve(configDir, 'index.html'),
+        universe: resolve(configDir, 'universe.html'),
+      },
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'three',
+              test: /node_modules[\\/]three[\\/]/,
+              priority: 2,
+              maxSize: 450_000,
+              includeDependenciesRecursively: false,
+            },
+            {
+              name: 'postprocessing',
+              test: /node_modules[\\/]postprocessing[\\/]/,
+              priority: 1,
+              includeDependenciesRecursively: false,
+            },
+          ],
+        },
       },
     },
   },

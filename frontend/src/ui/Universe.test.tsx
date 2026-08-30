@@ -107,6 +107,18 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
+
+  test('labels seed data as public samples and never renders a 1970 personal-history claim', async () => {
+    apiState.pollUntilDone.mockResolvedValue({
+      universe: { ...fixture, meta: { ...fixture.meta, source: 'seed', span: [0, 0] as [number, number] } },
+      filtered: 0,
+    })
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    expect(screen.getByText(/公开样本内容/)).toBeVisible()
+    expect(screen.queryByText(/1970/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/你的知乎|真实的知乎收藏与创作/)).not.toBeInTheDocument()
+  })
   test('opens the only public sharing action and restores focus after close', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)

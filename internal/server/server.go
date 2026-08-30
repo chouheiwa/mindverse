@@ -28,6 +28,7 @@ import (
 const cookieName = "mindverse_session"
 const maxSessionCount = 10000
 const sessionCleanupInterval = time.Minute
+const oauthStateTTL = 10 * time.Minute
 
 // genState 是一次星图生成的状态。生成要跑模型，必然慢，所以异步 + 轮询。
 type genState string
@@ -52,23 +53,25 @@ type generation struct {
 
 // session 只驻留内存。OAuth token 绝不落盘。
 type session struct {
-	opMu         sync.Mutex
-	mu           sync.Mutex
-	id           string
-	epoch        uint64
-	genCancel    context.CancelFunc
-	authCancel   context.CancelFunc
-	authOp       uint64
-	state        string
-	token        *zhihu.Token
-	stateChecked bool
-	profile      *zhihu.Profile
-	gen          generation
-	seedCorpus   *zhihu.Corpus // 游客模式：现场挑出来的语料
-	genToday     int
-	genDay       string
-	lastSeen     time.Time
-	active       int // guarded by Server.mu; active leases are never evictable
+	opMu           sync.Mutex
+	mu             sync.Mutex
+	id             string
+	ownerID        string
+	epoch          uint64
+	genCancel      context.CancelFunc
+	authCancel     context.CancelFunc
+	authOp         uint64
+	state          string
+	stateExpiresAt time.Time
+	token          *zhihu.Token
+	stateChecked   bool
+	profile        *zhihu.Profile
+	gen            generation
+	seedCorpus     *zhihu.Corpus // 游客模式：现场挑出来的语料
+	genToday       int
+	genDay         string
+	lastSeen       time.Time
+	active         int // guarded by Server.mu; active leases are never evictable
 }
 
 type shareStore interface {
@@ -80,11 +83,12 @@ type shareStore interface {
 
 // Server 是应用主体。
 type Server struct {
-	cfg   *config.Config
-	oauth *zhihu.OAuth
-	store shareStore
-	ext   extract.Extractor
-	seed  *seed.Builder
+	cfg      *config.Config
+	oauth    *zhihu.OAuth
+	store    shareStore
+	registry *sessionRegistry
+	ext      extract.Extractor
+	seed     *seed.Builder
 
 	mu                 sync.Mutex
 	sess               map[string]*session
@@ -100,8 +104,13 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	registry, err := loadSessionRegistry(cfg.SnapshotDir, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("load session registry: %w", err)
+	}
 	return &Server{
 		cfg: cfg, store: store, ext: ext,
+		registry:    registry,
 		seed:        seed.NewBuilder(zhihu.NewClient(cfg.AccessSecret, "")),
 		oauth:       &zhihu.OAuth{AppID: cfg.AppID, AppKey: cfg.AppKey, RedirectURI: cfg.RedirectURI},
 		sess:        map[string]*session{},
@@ -113,7 +122,9 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
-	private := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, s.withSession(handler)) }
+	private := func(pattern string, handler http.HandlerFunc) {
+		mux.Handle(pattern, noStore(s.csrfGuard(s.withSession(handler))))
+	}
 	private("GET /api/oauth/status", s.oauthStatus)
 	private("GET /auth/start", s.authStart)
 	private("GET /auth/callback", s.authCallback)
@@ -124,7 +135,7 @@ func (s *Server) Routes() http.Handler {
 	private("GET /api/universe", s.universeGet)
 	private("POST /api/share", s.shareCreate)
 	private("POST /api/share/preview", s.sharePreview)
-	mux.HandleFunc("GET /api/share/{id}", s.shareGet)
+	mux.Handle("GET /api/share/{id}", noStore(http.HandlerFunc(s.shareGet)))
 	private("DELETE /api/share/{id}", s.shareDelete)
 	private("DELETE /api/session/data", s.wipe)
 	// 分享页复用同一张星图，数据由 /api/share/{id} 提供
@@ -138,6 +149,38 @@ func (s *Server) Routes() http.Handler {
 	})
 	mux.Handle("/", http.FileServer(http.Dir(s.cfg.WebDir)))
 	return mux
+}
+
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) csrfGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			writeErr(w, http.StatusForbidden, "跨站请求已拒绝")
+			return
+		}
+		if raw := r.Header.Get("Origin"); raw != "" {
+			origin, err := url.Parse(raw)
+			expectedScheme := "https"
+			if s.cfg.LocalOnly() {
+				expectedScheme = "http"
+			}
+			if err != nil || origin.Scheme != expectedScheme || origin.Host != r.Host || origin.User != nil || origin.Path != "" {
+				writeErr(w, http.StatusForbidden, "请求来源校验失败")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func publicShareID(id string) bool {
@@ -180,34 +223,43 @@ func fromCtx(r *http.Request) *session {
 var errSessionCapacity = errors.New("session capacity reached")
 
 func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*session, error) {
-	s.evictIdleSessions(time.Now())
+	now := time.Now()
+	s.evictIdleSessions(now)
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
-		if !ok && validSessionID(c.Value) {
+		var refreshErr error
+		owner, issued := s.registry.lookup(c.Value, now)
+		if !ok && validSessionID(c.Value) && issued {
 			if s.ensureSessionCapacityLocked() {
-				sess = &session{id: c.Value, lastSeen: time.Now()}
+				sess = &session{id: c.Value, ownerID: owner, lastSeen: now}
 				s.sess[c.Value] = sess
 				ok = true
 			}
 		}
 		if ok {
 			sess.active++
+			refreshErr = s.registry.put(sess.id, sessionOwner(sess), now.Add(share.TTL))
 		}
 		s.mu.Unlock()
 		if ok {
+			if refreshErr != nil {
+				s.releaseSession(sess)
+				return nil, refreshErr
+			}
 			s.setSessionCookie(w, sess.id)
 			return sess, nil
-		}
-		if validSessionID(c.Value) {
-			return nil, errSessionCapacity
 		}
 	}
 	id, err := randomToken()
 	if err != nil {
 		panic("generate session identifier: " + err.Error())
 	}
-	sess := &session{id: id, lastSeen: time.Now()}
+	ownerID, err := randomToken()
+	if err != nil {
+		panic("generate owner identifier: " + err.Error())
+	}
+	sess := &session{id: id, ownerID: ownerID, lastSeen: now}
 	s.mu.Lock()
 	if !s.ensureSessionCapacityLocked() {
 		s.mu.Unlock()
@@ -215,6 +267,11 @@ func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*sessio
 	}
 	sess.active = 1
 	s.sess[id] = sess
+	if err := s.registry.put(id, ownerID, now.Add(share.TTL)); err != nil {
+		delete(s.sess, id)
+		s.mu.Unlock()
+		return nil, err
+	}
 	s.mu.Unlock()
 	s.setSessionCookie(w, id)
 	return sess, nil
@@ -247,6 +304,7 @@ func (s *Server) evictIdleSessions(now time.Time) {
 		sess.mu.Unlock()
 		if idle {
 			delete(s.sess, id)
+			_ = s.registry.remove(id)
 		}
 	}
 	hook := s.onSessionCleanup
@@ -296,12 +354,69 @@ func validSessionID(id string) bool {
 	return err == nil && len(id) == 32 && len(b) == 24 && base64.RawURLEncoding.EncodeToString(b) == id
 }
 
+func sessionOwner(sess *session) string {
+	if sess.ownerID != "" {
+		return sess.ownerID
+	}
+	return sess.id
+}
+
+func (s *Server) currentSession(sess *session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess[sess.id] == sess
+}
+
 func randomToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// rotateAuthenticatedSession installs credentials into a fresh server-issued
+// session. The old object is scrubbed so already-leased requests cannot observe
+// the newly installed token; public-share ownership moves via the stable ownerID.
+// Caller must hold old.opMu.
+func (s *Server) rotateAuthenticatedSession(w http.ResponseWriter, old *session, tok *zhihu.Token, profile *zhihu.Profile) error {
+	newID, err := randomToken()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sess[old.id] != old {
+		return errors.New("stale session")
+	}
+	old.mu.Lock()
+	defer old.mu.Unlock()
+	owner := sessionOwner(old)
+	if err := s.registry.rotate(old.id, newID, owner, now.Add(share.TTL)); err != nil {
+		return err
+	}
+	if old.genCancel != nil {
+		old.genCancel()
+		old.genCancel = nil
+		old.gen = generation{}
+	}
+	fresh := &session{
+		id: newID, ownerID: owner, epoch: old.epoch + 1,
+		token: tok, profile: profile, stateChecked: true,
+		gen: old.gen, seedCorpus: old.seedCorpus,
+		genToday: old.genToday, genDay: old.genDay, lastSeen: now,
+	}
+	delete(s.sess, old.id)
+	s.sess[newID] = fresh
+	old.epoch++
+	old.authOp++
+	old.authCancel = nil
+	old.token, old.profile, old.seedCorpus = nil, nil, nil
+	old.state, old.stateExpiresAt, old.stateChecked = "", time.Time{}, false
+	old.gen = generation{}
+	s.setSessionCookie(w, newID)
+	return nil
 }
 
 // ── 处理器 ──
@@ -328,20 +443,17 @@ func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 	profile := sess.profile
 	sess.mu.Unlock()
 
-	keyDiag, secDiag, warns := zhihu.Diagnose(s.cfg.AppID, s.cfg.AppKey, s.cfg.AccessSecret)
+	warns := zhihu.CredentialWarnings(s.cfg.AppID, s.cfg.AppKey, s.cfg.AccessSecret)
 	writeJSON(w, 200, map[string]any{
-		"configured":    s.cfg.OAuthReady(),
-		"localOnly":     s.cfg.LocalOnly(),
-		"authorized":    authorized,
-		"appId":         s.cfg.AppID,
-		"redirectUri":   s.cfg.RedirectURI,
-		"profile":       profile,
-		"stateVerified": checked,
-		// 回调实测可能不返 state。未校验时前端必须显示「仅适合黑客松联调」，
-		// 不得宣称通过了标准 OAuth CSRF 校验。
+		"configured":       s.cfg.OAuthReady(),
+		"localOnly":        s.cfg.LocalOnly(),
+		"authorized":       authorized,
+		"appId":            s.cfg.AppID,
+		"redirectUri":      s.cfg.RedirectURI,
+		"profile":          profile,
+		"stateVerified":    checked,
 		"csrfClaimAllowed": checked,
 		"source":           s.cfg.Source,
-		"credentials":      map[string]any{"appKey": keyDiag, "accessSecret": secDiag},
 		"warnings":         warns,
 	})
 }
@@ -357,17 +469,22 @@ func (s *Server) authStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "无法创建安全登录状态")
 		return
 	}
-	sess.opMu.Lock()
-	sess.mu.Lock()
-	sess.state = st
-	sess.mu.Unlock()
-	sess.opMu.Unlock()
-
 	u, err := s.oauth.AuthorizeURL(st)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	sess.opMu.Lock()
+	if !s.currentSession(sess) {
+		sess.opMu.Unlock()
+		writeErr(w, http.StatusConflict, "登录会话已旋转，请重试")
+		return
+	}
+	sess.mu.Lock()
+	sess.state = st
+	sess.stateExpiresAt = time.Now().Add(oauthStateTTL)
+	sess.mu.Unlock()
+	sess.opMu.Unlock()
 	http.Redirect(w, r, u, http.StatusFound)
 }
 
@@ -381,7 +498,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.opMu.Lock()
 	sess.mu.Lock()
-	expected, epoch := sess.state, sess.epoch
+	expected, expiresAt, epoch := sess.state, sess.stateExpiresAt, sess.epoch
 	sess.mu.Unlock()
 	sess.opMu.Unlock()
 	if expected == "" {
@@ -394,11 +511,15 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "state 校验失败")
 		return
 	}
+	if !expiresAt.After(time.Now()) {
+		writeErr(w, 400, "state 已过期，请重新发起授权")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 	sess.opMu.Lock()
 	sess.mu.Lock()
-	if sess.epoch != epoch || sess.state != expected || sess.authCancel != nil {
+	if sess.epoch != epoch || sess.state != expected || sess.authCancel != nil || !sess.stateExpiresAt.After(time.Now()) {
 		sess.mu.Unlock()
 		sess.opMu.Unlock()
 		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
@@ -407,6 +528,9 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	sess.authCancel = cancel
 	sess.authOp++
 	authOp := sess.authOp
+	// 校验成功后立即消费，不等 token exchange 返回，防止并发重放。
+	sess.state = ""
+	sess.stateExpiresAt = time.Time{}
 	sess.mu.Unlock()
 	sess.opMu.Unlock()
 	defer func() {
@@ -427,7 +551,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.opMu.Lock()
 	sess.mu.Lock()
-	stale := sess.epoch != epoch || sess.state != expected || sess.authOp != authOp
+	stale := sess.epoch != epoch || sess.authOp != authOp
 	sess.mu.Unlock()
 	sess.opMu.Unlock()
 	if stale {
@@ -440,13 +564,16 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
 	sess.mu.Lock()
-	if sess.epoch != epoch || sess.state != expected || sess.authOp != authOp {
+	if sess.epoch != epoch || sess.authOp != authOp {
 		sess.mu.Unlock()
 		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
 		return
 	}
-	sess.token, sess.stateChecked, sess.profile, sess.state = tok, checked, profile, ""
 	sess.mu.Unlock()
+	if !checked || s.rotateAuthenticatedSession(w, sess, tok, profile) != nil {
+		writeErr(w, http.StatusInternalServerError, "无法安全完成登录，请重试")
+		return
+	}
 	http.Redirect(w, r, "/universe.html", http.StatusFound)
 }
 
@@ -454,6 +581,10 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
+	if !s.currentSession(sess) {
+		writeErr(w, http.StatusConflict, "会话已旋转")
+		return
+	}
 	sess.mu.Lock()
 	sess.epoch++
 	if sess.genCancel != nil {
@@ -465,7 +596,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 		sess.authCancel = nil
 	}
 	sess.authOp++
-	sess.token, sess.profile, sess.state, sess.stateChecked = nil, nil, "", false
+	sess.token, sess.profile, sess.state, sess.stateExpiresAt, sess.stateChecked = nil, nil, "", time.Time{}, false
 	sess.gen = generation{}
 	sess.mu.Unlock()
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -572,7 +703,11 @@ func (s *Server) universeStart(w http.ResponseWriter, r *http.Request) {
 	if sess.genCancel != nil {
 		sess.genCancel()
 	}
-	sess.gen = generation{State: genRunning, Stage: "正在读取你的知乎足迹", Progress: 5}
+	stage := "正在读取你的知乎足迹"
+	if sess.seedCorpus != nil {
+		stage = "正在读取公开样本内容"
+	}
+	sess.gen = generation{State: genRunning, Stage: stage, Progress: 5}
 	epoch := sess.epoch
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	sess.genCancel = cancel
@@ -703,6 +838,10 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
+	if !s.currentSession(sess) {
+		writeErr(w, http.StatusConflict, "会话已旋转")
+		return
+	}
 	sess.mu.Lock()
 	u := sess.gen.Universe
 	epoch := sess.epoch
@@ -721,11 +860,12 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请至少选择一个问题")
 		return
 	}
-	if request.Digest == "" || !share.VerifyPreviewDigest(request.Digest, previewOwnerContext(sess.id, epoch), request.Selection, view) {
+	owner := sessionOwner(sess)
+	if request.Digest == "" || !share.VerifyPreviewDigest(request.Digest, previewOwnerContext(owner, epoch), request.Selection, view) {
 		writeErr(w, http.StatusConflict, "分享预览已过期，请重新预览")
 		return
 	}
-	record, err := s.store.Create(sess.id, view)
+	record, err := s.store.Create(owner, view)
 	if err != nil {
 		if errors.Is(err, share.ErrQuota) {
 			writeErr(w, http.StatusTooManyRequests, "有效分享数已达上限")
@@ -762,7 +902,7 @@ func (s *Server) sharePreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		share.ShareView
 		Digest string `json:"digest"`
-	}{ShareView: view, Digest: share.PreviewDigest(previewOwnerContext(sess.id, epoch), request.Selection, view)})
+	}{ShareView: view, Digest: share.PreviewDigest(previewOwnerContext(sessionOwner(sess), epoch), request.Selection, view)})
 }
 
 func previewOwnerContext(sessionID string, epoch uint64) string {
@@ -849,7 +989,13 @@ func (s *Server) retainSession(sess *session) bool {
 
 func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
-	if err := s.store.DeleteOwned(r.PathValue("id"), sess.id); err != nil {
+	sess.opMu.Lock()
+	defer sess.opMu.Unlock()
+	if !s.currentSession(sess) {
+		writeErr(w, http.StatusConflict, "会话已旋转")
+		return
+	}
+	if err := s.store.DeleteOwned(r.PathValue("id"), sessionOwner(sess)); err != nil {
 		writeErr(w, http.StatusNotFound, "分享不存在或已过期")
 		return
 	}
@@ -861,7 +1007,11 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 	sess := fromCtx(r)
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
-	if err := s.store.DeleteAllOwned(sess.id); err != nil {
+	if !s.currentSession(sess) {
+		writeErr(w, http.StatusConflict, "会话已旋转")
+		return
+	}
+	if err := s.store.DeleteAllOwned(sessionOwner(sess)); err != nil {
 		writeErr(w, http.StatusInternalServerError, "删除分享失败")
 		return
 	}
@@ -878,7 +1028,7 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 	sess.authOp++
 	sess.gen = generation{}
 	sess.token, sess.profile, sess.seedCorpus = nil, nil, nil
-	sess.state, sess.stateChecked = "", false
+	sess.state, sess.stateExpiresAt, sess.stateChecked = "", time.Time{}, false
 	sess.mu.Unlock()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

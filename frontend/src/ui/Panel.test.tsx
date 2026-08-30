@@ -106,6 +106,20 @@ describe('Panel semantic entries', () => {
     expect(screen.getByText('尚无已收录的文章探测器。')).toBeInTheDocument()
   })
 
+  test('describes seed stars as public sample directions without personal claims', () => {
+    const seedUniverse = {
+      ...fixture,
+      meta: { ...fixture.meta, source: 'seed', span: [0, 0] as [number, number] },
+      stars: [{ ...star, o: 1, f: 1, ev: [{ t: '公开样本', u: 'https://www.zhihu.com/question/7', o: 1, y: '26.01' }] }],
+    }
+    const index = indexUniverse(seedUniverse)
+    render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+    expect(screen.getAllByText(/公开样本内容/).length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { name: '构成它的公开样本内容' })).toBeVisible()
+    expect(screen.queryByText(/我创作|我收藏|个人内容档案|个人关系/)).not.toBeInTheDocument()
+  })
+
   test('shows the same honest empty states for a legacy star', () => {
     const legacy: LegacyUniverse = {
       meta: fixture.meta, clusters: fixture.clusters!, stars: [{

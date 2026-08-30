@@ -102,8 +102,8 @@ export function Landing() {
 
           <div className="lp-promises">
             <div>
-              <h3>不存原文</h3>
-              <p>内容只在内存里过一遍，落盘的只有算出来的结构。</p>
+              <h3>私有默认</h3>
+              <p>私人宇宙只存内存；只有你逐项确认的公开分享字段会在服务端持久化。</p>
             </div>
             <div>
               <h3>不贴人格标签</h3>

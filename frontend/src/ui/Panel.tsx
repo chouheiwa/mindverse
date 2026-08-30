@@ -32,21 +32,22 @@ function publicDate(seconds: number | undefined): { label: string; dateTime: str
   return { label: PUBLIC_DATE_FORMATTER.format(date), dateTime: `${parts.year}-${parts.month}-${parts.day}` }
 }
 
-function ProbeRelation({ probe }: { probe: ArticleProbe }) {
+function ProbeRelation({ probe, personal }: { probe: ArticleProbe; personal: boolean }) {
   const created = probe.bindings.some(({ relation }) => relation === 'created')
   const collected = probe.bindings.some(({ relation }) => relation === 'collected')
-  if (created || collected) return <span className="entry-relations">
+  if (personal && (created || collected)) return <span className="entry-relations">
     {created && <span>我创作</span>}{collected && <span>我收藏</span>}
   </span>
   return <span className="entry-relation-neutral">
-    {probe.discoverySources.includes('public_search') ? '公开发现' : '未发现可证明的个人关系'}
+    {probe.discoverySources.includes('public_search') ? '公开发现' : personal ? '未发现可证明的个人关系' : '公开方向材料'}
   </span>
 }
 
-function SemanticEntries({ index, star, onEnterQuestion }: {
+function SemanticEntries({ index, star, onEnterQuestion, personal }: {
   index: UniverseIndex
   star: Star
   onEnterQuestion: Props['onEnterQuestion']
+  personal: boolean
 }) {
   const questions = questionsForStar(index, star)
   const probes = probesForStar(index, star)
@@ -119,7 +120,7 @@ function SemanticEntries({ index, star, onEnterQuestion }: {
                 : <> · <span>首发时间未知</span></>}
               {!!counts.length && <> · {counts.join(' · ')}</>}
             </span>
-            <div className="entry-provenance"><ProbeRelation probe={probe} /></div>
+            <div className="entry-provenance"><ProbeRelation probe={probe} personal={personal} /></div>
             <a ref={(node) => {
               if (node) probeActions.current.set(probe.id, node)
               else probeActions.current.delete(probe.id)
@@ -136,7 +137,7 @@ function SemanticEntries({ index, star, onEnterQuestion }: {
       }}>
         加载更多文章
       </button>}
-      {!!probes.length && <p className="entry-note">创作或收藏只说明内容绑定关系，不代表赞同文章立场。</p>}
+      {!!probes.length && personal && <p className="entry-note">创作或收藏只说明内容绑定关系，不代表赞同文章立场。</p>}
     </section>
   </>
 }
@@ -185,8 +186,8 @@ function SpanRail({ star, meta }: { star: Star; meta: Meta }) {
   )
 }
 
-function EvidenceList({ items, highlight, fresh }: {
-  items: Evidence[]; highlight?: string; fresh: (y: string) => number
+function EvidenceList({ items, highlight, fresh, personal }: {
+  items: Evidence[]; highlight?: string; fresh: (y: string) => number; personal: boolean
 }) {
   return (
     <>
@@ -194,7 +195,7 @@ function EvidenceList({ items, highlight, fresh }: {
         <a className={`evp${highlight && e.u === highlight ? ' on' : ''}`} key={i}
           href={e.u} target="_blank" rel="noopener noreferrer">
           {/* 个人内容档案的旧关系标记，不映射为 3D 问题行星。 */}
-          <span className={`pdot${e.o ? ' own' : ''}`}
+          <span className={`pdot${personal && e.o ? ' own' : ''}`}
             style={{ opacity: 0.34 + 0.66 * fresh(e.y) }} />
           <span className="evp-t">{e.t}</span>
           <span className="evp-y">{e.y}</span>
@@ -205,6 +206,7 @@ function EvidenceList({ items, highlight, fresh }: {
 }
 
 export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQuestion, shared, highlight }: Props) {
+  const personal = universe.meta.source !== 'seed'
   const cluster = star ? universe.clusters.find((c) => c.g === star.g) : null
   const dark: Dark | undefined = star ? universe.dark.find((d) => d.c === star.c) : undefined
   const nebula = star ? universe.nebula.find((n) => n.c === star.c) : undefined
@@ -225,12 +227,15 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
           <div>
             <h2>{star.c}</h2>
             <div className="pnl-strip">
-              {star.n} 条内容<u>·</u>{star.o} 创作<u>·</u>{star.f} 收藏<u>·</u>属于「{cluster?.name}」星群
+              {personal ? <>{star.n} 条内容<u>·</u>{star.o} 创作<u>·</u>{star.f} 收藏<u>·</u>属于「{cluster?.name}」星群</>
+                : <>{star.n} 条公开样本内容<u>·</u>属于「{cluster?.name}」方向星群</>}
             </div>
           </div>
 
           <p className="pnl-lead">
-            {dark ? (
+            {!personal ? (
+              <>这颗方向星由 <b>{star.n}</b> 条公开样本内容构成，仅描述样本方向，不推断任何用户绑定。</>
+            ) : dark ? (
               <>关于「{star.c}」你留下了 <b>{star.n}</b> 条，最后一条停在 {star.la}，
                 <em>已经 {dark.gap} 个月没有新的了</em>。这颗星熄灭了。</>
             ) : nebula ? (
@@ -242,19 +247,21 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
 
           <div>
             <h3>活跃区间</h3>
-            <SpanRail star={star} meta={universe.meta} />
+            {universe.meta.span[0] > 0 && universe.meta.span[1] > 0
+              ? <SpanRail star={star} meta={universe.meta} />
+              : <p className="entry-empty">时间范围未提供</p>}
           </div>
 
-          <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star}
+          <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star} personal={personal}
             onEnterQuestion={onEnterQuestion} />
 
           <div>
-            <h3>构成它的个人内容档案</h3>
+            <h3>{personal ? '构成它的个人内容档案' : '构成它的公开样本内容'}</h3>
             <div className="lgd">
-              <span>点越亮 = 收得越近</span>
-              {star.o > 0 && <span><i className="pdot own" />暖色圈 = 我写过的</span>}
+              <span>{personal ? '点越亮 = 收得越近' : '亮度 = 样本时间新近程度'}</span>
+              {personal && star.o > 0 && <span><i className="pdot own" />暖色圈 = 我写过的</span>}
             </div>
-            <EvidenceList items={star.ev} highlight={highlight} fresh={fresh} />
+            <EvidenceList items={star.ev} highlight={highlight} fresh={fresh} personal={personal} />
             {rest > 0 && <div className="rest">另有 {rest} 条未在此列出</div>}
           </div>
 

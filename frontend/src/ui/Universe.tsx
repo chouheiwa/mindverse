@@ -69,7 +69,7 @@ export function PrivateUniverseView() {
         setUniverse(g.universe!)
         setFiltered(g.filtered)
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        if (!ac.signal.aborted) setError(e instanceof Error ? e.message : String(e))
       }
     })()
     return () => ac.abort()
@@ -82,6 +82,7 @@ export function PrivateUniverseView() {
     const labels = labelRef.current
     let disposed = false
     let instance: Renderer | null = null
+    let hintTimer: ReturnType<typeof setTimeout> | null = null
     const mountRenderer = async () => {
       const { Renderer: WebGLRenderer } = await import('../starmap/Renderer')
       if (disposed) return
@@ -123,7 +124,7 @@ export function PrivateUniverseView() {
       onGenesisEnd: () => {
         setGenesisDone(true)
         setHint(true)
-        setTimeout(() => setHint(false), 6000)
+        hintTimer = setTimeout(() => setHint(false), 6000)
       },
       })
       if (disposed) {
@@ -144,6 +145,7 @@ export function PrivateUniverseView() {
       disposed = true
       window.removeEventListener('resize', onResize)
       instance?.destroy()
+      if (hintTimer !== null) clearTimeout(hintTimer)
       if (rendererRef.current === instance) rendererRef.current = null
     }
     // Renderer lifecycle follows the immutable universe index. Current mode is applied on mount
@@ -305,8 +307,9 @@ export function PrivateUniverseView() {
   }
 
   const m = universe.meta
-  const y0 = new Date(m.span[0] * 1000).getFullYear()
-  const y1 = new Date(m.span[1] * 1000).getFullYear()
+  const hasSpan = m.span[0] > 0 && m.span[1] > 0
+  const y0 = hasSpan ? new Date(m.span[0] * 1000).getFullYear() : null
+  const y1 = hasSpan ? new Date(m.span[1] * 1000).getFullYear() : null
 
   return (
     <>
@@ -325,14 +328,18 @@ export function PrivateUniverseView() {
         </div>
         <h1>好奇心星图</h1>
         <p className="uv-sub">
-          {y0}–{y1}，<b>{m.items}</b> 条真实的知乎收藏与创作，坍缩成 <b>{m.clusters}</b> 个星群。
+          {m.source === 'seed' ? <>
+            {hasSpan && <>{y0}–{y1}，</>}<b>{m.items}</b> 条公开样本内容，坍缩成 <b>{m.clusters}</b> 个方向星群。
+          </> : <>
+            {hasSpan && <>{y0}–{y1}，</>}<b>{m.items}</b> 条{m.source === 'mock' ? '示例收藏与创作' : '真实的知乎收藏与创作'}，坍缩成 <b>{m.clusters}</b> 个星群。
+          </>}
           每一颗星都能点开，看到它由哪几条内容构成。
         </p>
       </header>
 
       {m.source === 'seed' && (
         <div className="uv-filtered" style={{ color: 'var(--amber)' }}>
-          这是按你现场挑选的方向生成的宇宙，不是你的知乎历史
+          这是按现场选择的方向生成的公开样本宇宙，不对应任何个人知乎历史
         </div>
       )}
       {filtered > 0 && m.source !== 'seed' && (

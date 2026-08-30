@@ -2,9 +2,7 @@ package zhihu
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,7 +27,7 @@ type OAuth struct {
 
 // AuthorizeURL 构造授权页地址。
 //
-// state 按标准 OAuth 传出，但实测回调不一定带回 —— 见 VerifyState。
+// state 是必填的会话绑定防重放值。
 func (o *OAuth) AuthorizeURL(state string) (string, error) {
 	if o.RedirectURI == "" {
 		return "", fmt.Errorf("本地地址无法完成知乎登录，请先部署并配置公网 HTTPS 回调")
@@ -45,9 +43,10 @@ func (o *OAuth) AuthorizeURL(state string) (string, error) {
 	q.Set("redirect_uri", o.RedirectURI)
 	q.Set("app_id", o.AppID)
 	q.Set("response_type", "code")
-	if state != "" {
-		q.Set("state", state)
+	if state == "" {
+		return "", fmt.Errorf("OAuth state 未配置")
 	}
+	q.Set("state", state)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
@@ -65,12 +64,10 @@ func CodeFromCallback(q url.Values) string {
 
 // VerifyState 比较回调带回的 state 与会话中存的 state。
 //
-// 返回 (通过, 是否真的校验了)。实测回调可能完全不返回 state，
-// 此时 checked=false —— 界面必须显示「仅适合黑客松联调」，
-// 不得宣称通过了标准 OAuth CSRF 校验。
+// 返回 (通过, 是否真的校验了)。缺失 state 必须拒绝。
 func VerifyState(returned, expected string) (ok bool, checked bool) {
-	if returned == "" {
-		return true, false
+	if returned == "" || expected == "" {
+		return false, true
 	}
 	if len(returned) != len(expected) {
 		return false, true
@@ -168,50 +165,23 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-func fingerprint(s string) string {
-	if s == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])[:12]
-}
-
-// CredentialDiagnostic 是可安全外发的凭证诊断，只含长度与哈希前缀。
-type CredentialDiagnostic struct {
-	Source       string `json:"source"`
-	Configured   bool   `json:"configured"`
-	Length       int    `json:"length"`
-	SHA256Prefix string `json:"sha256Prefix"`
-}
-
 // CredentialWarning 指出凭证串位风险。
 type CredentialWarning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// Diagnose 生成脱敏诊断与串位告警。
-//
-// 绝不输出完整 App Key、Access Secret、authorization code 或 access token。
-func Diagnose(appID, appKey, accessSecret string) (appKeyDiag, secretDiag CredentialDiagnostic, warns []CredentialWarning) {
-	appKeyDiag = CredentialDiagnostic{
-		Source: "env:ZHIHU_OAUTH_APP_KEY", Configured: appKey != "",
-		Length: len(appKey), SHA256Prefix: fingerprint(appKey),
-	}
-	secretDiag = CredentialDiagnostic{
-		Source: "env:ZHIHU_ACCESS_SECRET", Configured: accessSecret != "",
-		Length: len(accessSecret), SHA256Prefix: fingerprint(accessSecret),
-	}
-	if appKeyDiag.Configured && appKeyDiag.Length <= 8 {
+// CredentialWarnings 只返回可操作告警，不暴露长度、哈希或来源等凭证诊断。
+func CredentialWarnings(appID, appKey, accessSecret string) (warns []CredentialWarning) {
+	if appKey != "" && len(appKey) <= 8 {
 		warns = append(warns, CredentialWarning{"APP_KEY_TOO_SHORT",
 			"ZHIHU_OAUTH_APP_KEY 看起来过短，请确认没有填成 App ID。"})
 	}
-	if appKeyDiag.Configured && appID != "" && appKeyDiag.SHA256Prefix == fingerprint(appID) {
+	if appKey != "" && appID != "" && appKey == appID {
 		warns = append(warns, CredentialWarning{"APP_ID_USED_AS_APP_KEY",
 			"OAuth app_key 看起来等于 App ID。"})
 	}
-	if appKeyDiag.Configured && secretDiag.Configured &&
-		appKeyDiag.SHA256Prefix == secretDiag.SHA256Prefix {
+	if appKey != "" && accessSecret != "" && appKey == accessSecret {
 		warns = append(warns, CredentialWarning{"APP_KEY_USED_AS_ACCESS_SECRET",
 			"ZHIHU_ACCESS_SECRET 看起来等于 OAuth App Key。"})
 	}

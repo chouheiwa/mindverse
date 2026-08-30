@@ -451,6 +451,7 @@ func TestWipeInvalidatesOAuthCallbackCommit(t *testing.T) {
 	s.mu.Unlock()
 	sess.mu.Lock()
 	sess.state = "expected-state"
+	sess.stateExpiresAt = time.Now().Add(oauthStateTTL)
 	sess.mu.Unlock()
 
 	callbackDone := make(chan *httptest.ResponseRecorder, 1)

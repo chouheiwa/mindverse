@@ -522,10 +522,10 @@ func TestCodeFromCallbackPrefersAuthorizationCode(t *testing.T) {
 }
 
 func TestVerifyStateHandlesMissingState(t *testing.T) {
-	// 实测回调可能完全不返回 state：此时放行但标记未校验。
+	// 缺失 state 不得为联调便利而放行。
 	ok, checked := VerifyState("", "expected")
-	if !ok || checked {
-		t.Fatalf("缺失 state 应放行且标记未校验，实际 ok=%v checked=%v", ok, checked)
+	if ok || !checked {
+		t.Fatalf("缺失 state 必须拒绝，实际 ok=%v checked=%v", ok, checked)
 	}
 	if ok, checked := VerifyState("wrong", "expected"); ok || !checked {
 		t.Fatalf("state 不匹配必须拒绝，实际 ok=%v checked=%v", ok, checked)
@@ -533,11 +533,11 @@ func TestVerifyStateHandlesMissingState(t *testing.T) {
 }
 
 func TestDiagnoseCatchesCredentialSwaps(t *testing.T) {
-	_, _, warns := Diagnose("12345", "12345", "secret-value-long-enough")
+	warns := CredentialWarnings("12345", "12345", "secret-value-long-enough")
 	if len(warns) == 0 {
 		t.Fatal("App ID 被当成 App Key 时必须告警")
 	}
-	_, _, warns = Diagnose("12345", "same-value", "same-value")
+	warns = CredentialWarnings("12345", "same-value", "same-value")
 	found := false
 	for _, w := range warns {
 		if w.Code == "APP_KEY_USED_AS_ACCESS_SECRET" {
@@ -546,10 +546,5 @@ func TestDiagnoseCatchesCredentialSwaps(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("App Key 与 Access Secret 相同时必须告警")
-	}
-	// 诊断不得泄露原值。
-	d, _, _ := Diagnose("1", "super-secret-app-key", "s")
-	if len(d.SHA256Prefix) != 12 {
-		t.Fatalf("哈希前缀长度应为 12，实际 %d", len(d.SHA256Prefix))
 	}
 }

@@ -4,6 +4,7 @@ dist/
 .superpowers/
 .worktrees/
 data/snapshots/*.json
+data/snapshots/.sessions
 .env
 .env.*
 !.env.example

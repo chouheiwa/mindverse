@@ -1,10 +1,15 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useRef, useState } from 'react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import { QuestionEntryShell } from './QuestionEntryShell'
 
 afterEach(cleanup)
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) { this.setAttribute('open', '') })
+  HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) { this.removeAttribute('open') })
+})
 
 const planet = {
   question: { id: 'question:7', questionId: '7', title: '真实问题标题', url: 'https://www.zhihu.com/question/7', answerIds: ['answer:8'] },
@@ -20,6 +25,8 @@ const planet = {
 describe('QuestionEntryShell', () => {
   test('is a real question destination with referenced answer evidence and honest availability', () => {
     render(<QuestionEntryShell planet={planet} onBack={() => {}} />)
+    expect(screen.getByRole('dialog')).toBeInstanceOf(HTMLDialogElement)
+    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledOnce()
     expect(screen.getByRole('heading', { name: '真实问题标题' })).toBeVisible()
     expect(screen.getByText(/1 个已收录回答卫星/)).toBeVisible()
     expect(screen.getByRole('link', { name: '知乎原问题' })).toHaveAttribute('href', planet.question.url)
@@ -29,18 +36,47 @@ describe('QuestionEntryShell', () => {
     expect(screen.getByText(/深度观察模式尚未生成/)).toBeVisible()
   })
 
-  test('supports Back and Escape and focuses the shell heading on entry', async () => {
+  test('traps Tab inside the native modal while it is open', async () => {
+    const user = userEvent.setup()
+    render(<><QuestionEntryShell planet={planet} onBack={() => {}} /><button>背景动作</button></>)
+    const dialog = screen.getByRole('dialog')
+    for (let index = 0; index < 8; index += 1) {
+      await user.tab()
+      expect(dialog).toContainElement(document.activeElement as HTMLElement)
+      expect(screen.getByRole('button', { name: '背景动作' })).not.toHaveFocus()
+    }
+  })
+
+  test('supports native cancel and Back and restores its originating focus', async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      const trigger = useRef<HTMLButtonElement>(null)
+      return <>
+        <button ref={trigger} onClick={() => setOpen(true)}>打开问题</button>
+        {open && <QuestionEntryShell planet={planet} onBack={() => setOpen(false)} getReturnFocus={() => trigger.current} />}
+      </>
+    }
     const onBack = vi.fn()
     const user = userEvent.setup()
-    render(<QuestionEntryShell planet={planet} onBack={onBack} />)
+    const direct = render(<QuestionEntryShell planet={planet} onBack={onBack} />)
     expect(screen.getByRole('heading', { name: '真实问题标题' })).toHaveFocus()
-    await user.keyboard('{Escape}')
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
     expect(onBack).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('button', { name: '返回问题航道' }))
     expect(onBack).toHaveBeenCalledTimes(2)
+    direct.unmount()
+
+    render(<Harness />)
+    const trigger = screen.getByRole('button', { name: '打开问题' })
+    await user.click(trigger)
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    await waitFor(() => expect(trigger).toHaveFocus())
+    await user.click(trigger)
+    await user.click(screen.getByRole('button', { name: '返回问题航道' }))
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 
-  test('removes its Escape listener when the destination is left', async () => {
+  test('does not react to Escape after the destination is left', async () => {
     const onBack = vi.fn()
     const user = userEvent.setup()
     const view = render(<QuestionEntryShell planet={planet} onBack={onBack} />)

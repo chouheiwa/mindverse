@@ -4,7 +4,7 @@ import type { Mode, Star, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
 import { orbit } from './projection'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
-import { makeStars, modeDim, type StarLayer } from './gl/stars'
+import { makeStars, modeDim, renderDim, type StarLayer } from './gl/stars'
 import { makeBodies, type BodyLayer, type PlanetDatum } from './gl/bodies'
 import { starData, type StarDatum } from './gl/starData'
 import { makeDust, type DustLayer } from './gl/dust'
@@ -584,7 +584,7 @@ export class Renderer {
     let bestD = Infinity
 
     for (const p of this.bodies.planetsForStar(this.focusStar)) {
-      const dim = modeDim(p.star.s, this.mode, this.u, this.wormIdx)
+      const dim = renderDim(p.star.s, this.mode, this.u, this.wormIdx)
       this.planetWorld(p, A, this.tmp)
       this.tmp2.copy(this.tmp).applyMatrix4(this.camera.matrixWorldInverse)
       const planetViewZ = Math.max(1, -this.tmp2.z)
@@ -597,7 +597,7 @@ export class Renderer {
       if (!planetPickVisible({
         starPx,
         convergence: this.convergence,
-        modeDim: dim,
+        renderDim: dim,
         viewZ: planetViewZ,
         near: this.depthNear,
         far: this.depthFar,

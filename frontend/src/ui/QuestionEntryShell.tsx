@@ -7,19 +7,57 @@ const publicDate = (seconds: number | undefined) => seconds === undefined
   : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai' })
     .format(new Date(seconds * 1000))
 
-export function QuestionEntryShell({ planet, onBack }: { planet: PlanetDatum; onBack: () => void }) {
+export function QuestionEntryShell({ planet, onBack, getReturnFocus }: {
+  planet: PlanetDatum
+  onBack: () => void
+  getReturnFocus?: () => HTMLElement | null
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const nativeModalRef = useRef(false)
   useEffect(() => {
-    headingRef.current?.focus()
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onBack()
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const returnFocus = getReturnFocus?.()
+    if (typeof dialog.showModal === 'function') {
+      if (!dialog.open) dialog.showModal()
+      nativeModalRef.current = true
+    } else {
+      dialog.setAttribute('open', '')
     }
-    window.addEventListener('keydown', escape)
-    return () => window.removeEventListener('keydown', escape)
-  }, [onBack])
+    headingRef.current?.focus()
+    return () => {
+      if (dialog.open && typeof dialog.close === 'function') dialog.close()
+      else dialog.removeAttribute('open')
+      if (returnFocus?.isConnected) returnFocus.focus()
+    }
+  }, [getReturnFocus])
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDialogElement>) => {
+    if (event.key === 'Escape' && !nativeModalRef.current) {
+      event.preventDefault()
+      onBack()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
 
   return (
-    <section className="qes" role="dialog" aria-modal="true" aria-labelledby="qes-title">
+    <dialog ref={dialogRef} className="qes" aria-labelledby="qes-title" onKeyDown={onKeyDown}
+      onCancel={(event) => { event.preventDefault(); onBack() }} onClose={onBack}>
       <header className="qes-head">
         <button type="button" className="qes-back" onClick={onBack} aria-label="返回问题航道">← 返回问题航道</button>
         <span>QUESTION OBSERVATORY · ORBIT {String(planet.orbitIndex).padStart(2, '0')}</span>
@@ -56,6 +94,6 @@ export function QuestionEntryShell({ planet, onBack }: { planet: PlanetDatum; on
           <p>目前可核验问题与已收录回答原文；立场对照、证据标注和判断工作区将在后续阶段提供。</p>
         </aside>
       </main>
-    </section>
+    </dialog>
   )
 }

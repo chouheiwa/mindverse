@@ -181,8 +181,12 @@ export function UniverseView() {
 
   const leaveQuestionEntry = useCallback(() => {
     setQuestionEntry(null)
-    restoreLaneFocus()
-  }, [restoreLaneFocus])
+  }, [])
+
+  const getQuestionReturnFocus = useCallback(
+    () => focusReturnRef.current ?? canvasRef.current,
+    [],
+  )
 
   const panelOpen = star !== null || mode !== 'all'
 
@@ -285,7 +289,8 @@ export function UniverseView() {
         onClose={closePlanet} />
       {questionEntry && (
         <Suspense fallback={<div className="uv-entry-loading" role="status">正在建立问题航道…</div>}>
-          <QuestionEntryShell planet={questionEntry} onBack={leaveQuestionEntry} />
+          <QuestionEntryShell planet={questionEntry} onBack={leaveQuestionEntry}
+            getReturnFocus={getQuestionReturnFocus} />
         </Suspense>
       )}
       <Panel universe={universe} star={star} shared={shared}

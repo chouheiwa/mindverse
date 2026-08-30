@@ -13,7 +13,7 @@ export const smoothstep = (low: number, high: number, value: number): number => 
 export interface PlanetVisibilityInput {
   starPx: number
   convergence: number
-  modeDim: number
+  renderDim: number
   viewZ: number
   near: number
   far: number
@@ -22,7 +22,7 @@ export interface PlanetVisibilityInput {
 
 export function planetVisualAlpha(input: PlanetVisibilityInput): number {
   const depth = clamp((input.far - input.viewZ) / Math.max(1e-3, input.far - input.near), 0, 1)
-  return input.modeDim
+  return input.renderDim
     * smoothstep(PLANET_STAR_LOD_START_PX, PLANET_STAR_LOD_END_PX, input.starPx)
     * smoothstep(PLANET_CONVERGENCE_START, 1, input.convergence)
     * depth * depth

@@ -1,5 +1,7 @@
-.qes { position: fixed; inset: 0; z-index: 30; overflow: auto; background: rgba(4, 6, 15, .985); color: var(--ink);
+.qes { position: fixed; inset: 0; z-index: 30; width: auto; height: auto; max-width: none; max-height: none; margin: 0;
+  padding: 0; overflow: auto; border: 0; background: rgba(4, 6, 15, .985); color: var(--ink);
   animation: qes-in var(--t-space) var(--e-enter) both }
+.qes::backdrop { background: var(--ground) }
 @keyframes qes-in { from { opacity: 0; transform: translateY(10px) } }
 .qes-head { position: sticky; top: 0; z-index: 1; min-height: 68px; display: grid; grid-template-columns: 1fr auto 1fr;
   align-items: center; gap: 20px; padding: 10px clamp(18px, 4vw, 58px); border-bottom: 1px solid var(--rule);

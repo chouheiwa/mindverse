@@ -300,7 +300,8 @@ export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] 
 /**
  * 模式压暗：这颗星在当前模式下是不是被强调的对象。
  *
- * 拾取用这个而不是 renderDim —— 暗物质概念在画面上是黑的，但依然该点得开。
+ * 恒星拾取用这个，保留暗物质概念的可达性；问题行星必须用 renderDim，
+ * 以便 CPU 拾取与行星 shader 的可见性完全一致。
  */
 export function modeDim(s: Star, mode: Mode, u: Universe, wormIdx: number): number {
   switch (mode) {
@@ -336,5 +337,4 @@ export function renderDim(s: Star, mode: Mode, u: Universe, wormIdx: number): nu
   const d = modeDim(s, mode, u, wormIdx)
   return u.dark.some((x) => x.c === s.c) ? Math.min(d, 0.3) : d
 }
-
 

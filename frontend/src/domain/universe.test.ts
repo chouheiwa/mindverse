@@ -11,7 +11,6 @@ import {
   questionsForStar,
   selectPlanetData,
   UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT,
-  UNIVERSE_PROBE_REFS_PER_STAR_LIMIT,
 } from './universe'
 
 const evidence = { t: 'private evidence', u: 'https://example.test/private', o: 1, y: '26.08' }
@@ -79,13 +78,19 @@ describe('current universe indexes', () => {
     expect(() => parseUniverse(changed)).toThrow(/stars\[0\]\.questionIds.*rendering limit/)
   })
 
-  test('rejects a star probe-reference fanout before resolving references', () => {
+  test('accepts a large valid server probe-reference fanout for paginated rendering', () => {
     const changed = clone(fixture) as CurrentUniverse
-    changed.stars![0].probeIds = Array.from(
-      { length: UNIVERSE_PROBE_REFS_PER_STAR_LIMIT + 1 },
-      (_, index) => `article:${index + 1000}`,
-    )
-    expect(() => parseUniverse(changed)).toThrow(/stars\[0\]\.probeIds.*rendering limit/)
+    changed.probes = Array.from({ length: 300 }, (_, index) => ({
+      ...changed.probes![0], id: `article:${index + 1000}`,
+      url: `https://zhuanlan.zhihu.com/p/${index + 1000}`,
+    }))
+    changed.stars![0].probeIds = changed.probes.map(({ id }) => id)
+    changed.stars![1].probeIds = []
+
+    const parsed = parseUniverse(changed)
+    const parsedStar = parsed.stars![0]
+    expect('probeIds' in parsedStar && parsedStar.probeIds).toHaveLength(300)
+    expect(probesForStar(indexUniverse(parsed), parsedStar)).toHaveLength(300)
   })
 
   test('rejects a million primitive edges before allocating a complete normalized copy', () => {

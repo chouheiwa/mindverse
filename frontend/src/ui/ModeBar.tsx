@@ -12,7 +12,10 @@ const MODES: { k: Mode; t: string; warm?: boolean }[] = [
   { k: 'me', t: '好奇心结构' },
 ]
 
-export function ModeBar({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }) {
+export function ModeBar({ mode, onMode }: {
+  mode: Mode
+  onMode: (m: Mode, trigger: HTMLButtonElement) => void
+}) {
   return (
     <div className="seg" role="group" aria-label="视图">
       {MODES.map((m) => (
@@ -20,7 +23,7 @@ export function ModeBar({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => voi
           key={m.k}
           className={`sg${mode === m.k ? ' on' : ''}${m.warm ? ' warm' : ''}`}
           aria-pressed={mode === m.k}
-          onClick={() => onMode(m.k)}
+          onClick={(event) => onMode(m.k, event.currentTarget)}
         >
           {m.t}
         </button>

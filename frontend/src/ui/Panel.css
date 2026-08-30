@@ -93,7 +93,7 @@
   background: rgba(24, 33, 58, .72) }
 .entry-status { display: block; margin-top: 8px; font-family: var(--f-m); font-size: 10px;
   color: var(--dim); font-variant-numeric: tabular-nums }
-.entry-empty, .entry-note { margin: 0; padding: 12px 0; font-size: 12px; line-height: 1.7; color: var(--mute) }
+.entry-empty, .entry-note { margin: 0; padding: 12px 0; font-size: 12px; line-height: 1.7; color: var(--dim) }
 .entry-note { padding-bottom: 0 }
 
 /* 模式面板（虫洞 / 暗物质 / 星云 / 边缘微光）仍用这一套 */

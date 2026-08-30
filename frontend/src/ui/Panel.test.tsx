@@ -50,6 +50,7 @@ describe('Panel semantic entries', () => {
     expect(onEnterQuestion).toHaveBeenCalledWith('question:7', trigger)
 
     const probes = screen.getByRole('region', { name: '文章探测器 · 旁轨材料' })
+    expect(screen.getByRole('complementary')).not.toHaveAttribute('aria-live')
     expect(within(probes).getAllByText('真实文章标题')).toHaveLength(1)
     expect(within(probes).getByRole('link', { name: '查看知乎原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
     expect(within(probes).getByText(/Alice/)).toBeInTheDocument()

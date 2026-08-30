@@ -17,8 +17,6 @@ const UNIVERSE_EDGE_LIMIT = 250_000
 const UNIVERSE_PRIMITIVE_LIMIT = 250_000
 /** Rendering cap: one star system must remain navigable and GPU-safe. */
 export const UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT = 512
-/** Article rows are DOM-only and must remain bounded before reference resolution. */
-export const UNIVERSE_PROBE_REFS_PER_STAR_LIMIT = 256
 const validatedWires = new WeakSet<object>()
 const normalizedByWire = new WeakMap<object, Universe>()
 const sanitizedArrays = new WeakSet<object>()
@@ -436,9 +434,6 @@ function validateCurrent(universe: NormalizedCurrentUniverse): void {
   universe.stars.forEach((item, index) => {
     if (item.questionIds.length > UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT) {
       fail('stars[' + index + '].questionIds', 'rendering limit exceeded')
-    }
-    if (item.probeIds.length > UNIVERSE_PROBE_REFS_PER_STAR_LIMIT) {
-      fail('stars[' + index + '].probeIds', 'rendering limit exceeded')
     }
     validateRefs(item.questionIds, questions, 'stars[' + index + '].questionIds')
     validateRefs(item.probeIds, probes, 'stars[' + index + '].probeIds')

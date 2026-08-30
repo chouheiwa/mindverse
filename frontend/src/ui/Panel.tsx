@@ -219,7 +219,7 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
   if (!star || shared) return null
 
   return (
-    <aside className="pnl open" aria-live="polite">
+    <aside className="pnl open">
       <button className="pnl-close" onClick={onClose} aria-label="关闭">×</button>
       <div className="stagger">
           <div>

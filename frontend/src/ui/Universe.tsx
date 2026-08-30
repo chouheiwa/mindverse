@@ -37,6 +37,7 @@ export function UniverseView() {
   const cardRef = useRef<HTMLDivElement>(null)
   const cardSizeRef = useRef({ width: 332, height: 180 })
   const focusReturnRef = useRef<HTMLButtonElement | null>(null)
+  const panelFocusReturnRef = useRef<HTMLElement | null>(null)
   const focusCardFromLaneRef = useRef(false)
   const [mode, setMode] = useState<Mode>('all')
   const [wormIdx, setWormIdx] = useState(0)
@@ -81,6 +82,12 @@ export function UniverseView() {
     if (!universeIndex || !canvasRef.current || !labelRef.current) return
     const r = new Renderer(canvasRef.current, labelRef.current, universeIndex, reduceMotion(), {
       onPick: (s) => {
+        if (s) {
+          const active = document.activeElement
+          panelFocusReturnRef.current = active instanceof HTMLElement && active.matches(
+            'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          ) ? active : canvasRef.current
+        }
         setQuestionEntry(null)
         setPlanet(null)
         focusReturnRef.current = null
@@ -171,7 +178,17 @@ export function UniverseView() {
     }
   }, [universe])
 
-  const onMode = useCallback((m: Mode) => {
+  const restorePanelFocus = useCallback(() => {
+    const target = panelFocusReturnRef.current
+    panelFocusReturnRef.current = null
+    requestAnimationFrame(() => {
+      const destination = target?.isConnected ? target : canvasRef.current
+      destination?.focus({ preventScroll: true })
+    })
+  }, [])
+
+  const onMode = useCallback((m: Mode, trigger: HTMLButtonElement) => {
+    if (m !== 'all') panelFocusReturnRef.current = trigger
     setStar(null)
     setPlanet(null)
     setQuestionEntry(null)
@@ -257,7 +274,7 @@ export function UniverseView() {
 
   return (
     <>
-      <canvas ref={canvasRef} className="uv-canvas" tabIndex={-1} aria-label="认知宇宙三维星图" />
+      <canvas ref={canvasRef} className="uv-canvas" tabIndex={0} aria-label="认知宇宙三维星图" />
       <canvas ref={labelRef} className="uv-canvas uv-labels" />
       <div className="vignette" />
       <div className="grain" />
@@ -338,14 +355,14 @@ export function UniverseView() {
           getReturnFocus={getQuestionReturnFocus} />
       )}
       <Panel universe={universe} index={universeIndex} star={star} shared={shared}
-        onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView() }}
+        onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView(); restorePanelFocus() }}
         highlight={undefined}
         onEnterQuestion={enterQuestionFromPanel}
         onPickConcept={pickConcept} />
       <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
         shared={shared}
         onWorm={(index) => { setQuestionEntry(null); setPlanet(null); setWormIdx(index) }}
-        onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all') }} />
+        onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />
     </>
   )
 }

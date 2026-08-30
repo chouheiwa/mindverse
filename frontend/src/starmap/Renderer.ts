@@ -516,6 +516,8 @@ export class Renderer {
   }
 
   private onDown = (e: PointerEvent) => {
+    // Canvas picking owns the star-panel focus return path.
+    this.canvas.focus({ preventScroll: true })
     this.lastTouch = performance.now()
     this.dragging = true
     this.moved = 0

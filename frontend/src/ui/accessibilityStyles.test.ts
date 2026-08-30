@@ -27,4 +27,8 @@ describe('question navigation accessibility styles', () => {
     expect(lane).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\[data-desktop-question-lane\]\s*\{[^}]*display:\s*none/)
     expect(panel).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.pnl\.open\s*\{[^}]*padding-bottom:\s*calc\(var\(--bar-h\) \+ 32px\)/)
   })
+
+  test('uses the AA text token for panel empty and note copy', () => {
+    expect(css('./Panel.css')).toMatch(/\.entry-empty, \.entry-note\s*\{[^}]*color:\s*var\(--dim\)/s)
+  })
 })

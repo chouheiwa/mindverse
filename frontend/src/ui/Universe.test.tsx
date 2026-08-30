@@ -105,6 +105,30 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
+  test('restores focus to the mode button after its panel closes', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    const opener = screen.getByRole('button', { name: /灭的星$/ })
+    await user.click(opener)
+    await user.click(screen.getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(opener).toHaveFocus())
+    expect(document.activeElement).not.toBe(document.body)
+  })
+
+  test('restores focus to the accessible star map after a canvas-picked panel closes', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    const canvas = screen.getByLabelText('认知宇宙三维星图')
+    canvas.focus()
+    act(() => testState.callbacks?.onPick?.(star))
+    await user.click(await screen.findByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(canvas).toHaveFocus())
+    expect(canvas).toHaveAttribute('tabindex', '0')
+    expect(document.activeElement).not.toBe(document.body)
+  })
+
   test('enters directly from the panel and restores focus to its trigger', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)

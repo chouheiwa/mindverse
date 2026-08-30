@@ -15,9 +15,10 @@ export function InfoPanel({ universe, mode, wormIdx, onWorm, onClose, shared }: 
   const open = mode !== 'all'
   const u = universe
   const w = u.wormholes[wormIdx]
+  if (!open) return null
 
   return (
-    <aside className={`pnl${open ? ' open' : ''}`} aria-live="polite">
+    <aside className="pnl open">
       <button className="pnl-close" onClick={onClose} aria-label="关闭">×</button>
       {mode === 'worm' && w && (
         <div className="stagger">

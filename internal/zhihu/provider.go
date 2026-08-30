@@ -44,7 +44,8 @@ type Item struct {
 	CommentCount   int64           `json:"commentCount,omitempty"`
 	FavoriteCount  int64           `json:"favoriteCount,omitempty"`
 
-	authorIdentityConflict bool
+	authorDisplayNames map[string]struct{}
+	authorIdentities   map[string]AuthorIdentity
 }
 
 func (i Item) hasDomainTruth() bool {
@@ -386,34 +387,62 @@ func mergeAuthorObservation(item *Item, author *ContentAuthor) {
 	if author == nil {
 		return
 	}
-	identity := ResolveAuthorIdentity(author)
-	if item.authorIdentityConflict {
-		item.Author = deterministicDisplayName(item.Author, author.Name)
-		return
+	if author.Name != "" {
+		if item.authorDisplayNames == nil {
+			item.authorDisplayNames = map[string]struct{}{}
+		}
+		item.authorDisplayNames[author.Name] = struct{}{}
 	}
-	if identity == nil {
-		if item.AuthorIdentity == nil {
-			item.Author = deterministicDisplayName(item.Author, author.Name)
+	identity := ResolveAuthorIdentity(author)
+	if identity != nil {
+		if item.authorIdentities == nil {
+			item.authorIdentities = map[string]AuthorIdentity{}
+		}
+		if current, exists := item.authorIdentities[identity.ID]; exists {
+			item.authorIdentities[identity.ID] = preferredAuthorIdentity(current, *identity)
+		} else {
+			item.authorIdentities[identity.ID] = *identity
+		}
+	}
+	finalizeAuthorIdentity(item)
+}
+
+// URLToken is the API's direct stable discriminator, so it takes precedence
+// over an equivalent profile URL observation. The selected name stays attached
+// to the selected provenance instead of being independently mixed.
+func preferredAuthorIdentity(current, candidate AuthorIdentity) AuthorIdentity {
+	rank := func(source AuthorIdentitySource) int {
+		if source == AuthorIdentityURLToken {
+			return 0
+		}
+		return 1
+	}
+	if rank(candidate.Source) < rank(current.Source) {
+		return candidate
+	}
+	if rank(candidate.Source) > rank(current.Source) {
+		return current
+	}
+	current.Name = deterministicDisplayName(current.Name, candidate.Name)
+	return current
+}
+
+func finalizeAuthorIdentity(item *Item) {
+	item.AuthorID = ""
+	item.AuthorIdentity = nil
+	if len(item.authorIdentities) == 1 {
+		for _, identity := range item.authorIdentities {
+			selected := identity
+			item.AuthorIdentity = &selected
+			item.AuthorID = selected.ID
+			item.Author = selected.Name
 		}
 		return
 	}
-	if item.AuthorIdentity == nil {
-		copyIdentity := *identity
-		item.AuthorIdentity = &copyIdentity
-		item.AuthorID = identity.ID
-		item.Author = identity.Name
-		return
+	item.Author = ""
+	for name := range item.authorDisplayNames {
+		item.Author = deterministicDisplayName(item.Author, name)
 	}
-	if item.AuthorIdentity.ID != identity.ID {
-		item.Author = deterministicDisplayName(item.AuthorIdentity.Name, identity.Name)
-		item.AuthorIdentity = nil
-		item.AuthorID = ""
-		item.authorIdentityConflict = true
-		return
-	}
-	item.AuthorIdentity.Name = deterministicDisplayName(item.AuthorIdentity.Name, identity.Name)
-	item.Author = item.AuthorIdentity.Name
-	item.AuthorID = item.AuthorIdentity.ID
 }
 
 func deterministicDisplayName(current, candidate string) string {
@@ -541,6 +570,16 @@ func cloneItem(item Item) Item {
 		identity := *item.AuthorIdentity
 		item.AuthorIdentity = &identity
 	}
+	if item.authorDisplayNames != nil {
+		item.authorDisplayNames = cloneStringSet(item.authorDisplayNames)
+	}
+	if item.authorIdentities != nil {
+		identities := make(map[string]AuthorIdentity, len(item.authorIdentities))
+		for id, identity := range item.authorIdentities {
+			identities[id] = identity
+		}
+		item.authorIdentities = identities
+	}
 	item.Bindings = append([]UserContentBinding(nil), item.Bindings...)
 	for i := range item.Bindings {
 		item.Bindings[i].Folders = append([]string(nil), item.Bindings[i].Folders...)
@@ -549,6 +588,14 @@ func cloneItem(item Item) Item {
 	item.ConceptHints = append([]string(nil), item.ConceptHints...)
 	item.Folders = append([]string(nil), item.Folders...)
 	return item
+}
+
+func cloneStringSet(values map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for value := range values {
+		out[value] = struct{}{}
+	}
+	return out
 }
 
 func appendUniq(xs []string, v string) []string {

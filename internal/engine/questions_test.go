@@ -134,6 +134,16 @@ func TestStarValidationRejectsPrivateExternalQuery(t *testing.T) {
 	}
 }
 
+func TestUniverseValidationChecksEveryStar(t *testing.T) {
+	u := Universe{Stars: []Star{
+		{ID: "star:v1:public:one", Scope: ScopePublic, ExternalQueryAllowed: true},
+		{ID: "star:v1:private:two", Scope: ScopePrivate, ExternalQueryAllowed: true},
+	}}
+	if err := u.Validate(); err == nil || !strings.Contains(err.Error(), "star 1") {
+		t.Fatalf("Universe.Validate did not identify invalid star: %v", err)
+	}
+}
+
 func TestProjectKnowledgeObjectsDeduplicatesQuestions(t *testing.T) {
 	in := Input{
 		Items:    []zhihu.Item{admittedAnswer("8", "7", "Real question"), admittedAnswer("9", "7", "Real question")},
@@ -295,6 +305,41 @@ func TestConflictingVerifiedAuthorsAreQuarantinedIndependentOfOrder(t *testing.T
 		}
 		if len(u.Answers) != 1 || u.Answers[0].AuthorID != "" || u.Answers[0].AuthorName != "Alice" {
 			t.Fatalf("case %d: conflicting authors not quarantined deterministically: %+v", i, u.Answers)
+		}
+	}
+}
+
+func TestProjectedAuthorConflictIsOrderIndependentAcrossAllObservations(t *testing.T) {
+	alice := admittedAnswer("8", "7", "Question")
+	alice.Author, alice.AuthorID = "Alice", "author:alice"
+	alice.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Alice", URLToken: "alice"})
+	bob := alice
+	bob.Author, bob.AuthorID = "Bob", "author:bob"
+	bob.AuthorIdentity = zhihu.ResolveAuthorIdentity(&zhihu.ContentAuthor{Name: "Bob", URLToken: "bob"})
+	unverified := alice
+	unverified.Author, unverified.AuthorID, unverified.AuthorIdentity = "Aardvark", "author:aardvark", nil
+	permutations := [][]zhihu.Item{
+		{unverified, alice, bob}, {unverified, bob, alice},
+		{alice, unverified, bob}, {alice, bob, unverified},
+		{bob, unverified, alice}, {bob, alice, unverified},
+	}
+	var want []byte
+	for i, items := range permutations {
+		u, err := Run(Input{Items: items, Concepts: [][]string{{"Concept"}, {"Concept"}, {"Concept"}}}, smallOptions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(u.Answers) != 1 || u.Answers[0].AuthorID != "" || u.Answers[0].AuthorName != "Aardvark" {
+			t.Fatalf("permutation %d did not quarantine deterministically: %+v", i, u.Answers)
+		}
+		encoded, err := json.Marshal(u.Answers[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			want = encoded
+		} else if !reflect.DeepEqual(encoded, want) {
+			t.Fatalf("permutation %d changed projected JSON:\n%s\n%s", i, want, encoded)
 		}
 	}
 }

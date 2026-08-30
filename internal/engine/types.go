@@ -269,3 +269,20 @@ type Universe struct {
 	Answers         []AnswerSatellite `json:"answers"`
 	Probes          []ArticleProbe    `json:"probes"`
 }
+
+func (u Universe) Validate() error {
+	seenStarIDs := map[string]struct{}{}
+	for i, star := range u.Stars {
+		if err := star.Validate(); err != nil {
+			return fmt.Errorf("star %d: %w", i, err)
+		}
+		if star.ID == "" {
+			continue
+		}
+		if _, exists := seenStarIDs[star.ID]; exists {
+			return fmt.Errorf("star %d: duplicate ID %q", i, star.ID)
+		}
+		seenStarIDs[star.ID] = struct{}{}
+	}
+	return nil
+}

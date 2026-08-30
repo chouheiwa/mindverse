@@ -129,6 +129,53 @@ func TestMergerNeverPairsVerifiedIDWithUnverifiedName(t *testing.T) {
 	}
 }
 
+func TestAuthorConflictDisplayIsOrderIndependentAcrossAllObservations(t *testing.T) {
+	base := CollectionItem{ContentID: "8", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/7/answer/8", Title: "Question"}
+	unverified, alice, bob := base, base, base
+	unverified.Author = &ContentAuthor{Name: "Aardvark"}
+	alice.Author = &ContentAuthor{Name: "Alice", URLToken: "alice"}
+	bob.Author = &ContentAuthor{Name: "Bob", URLToken: "bob"}
+	permutations := [][]CollectionItem{
+		{unverified, alice, bob}, {unverified, bob, alice},
+		{alice, unverified, bob}, {alice, bob, unverified},
+		{bob, unverified, alice}, {bob, alice, unverified},
+	}
+	var want []byte
+	for i, observations := range permutations {
+		m := newMerger(999)
+		m.addCollections(observations, "")
+		got := m.result()
+		if len(got) != 1 || got[0].AuthorIdentity != nil || got[0].AuthorID != "" || got[0].Author != "Aardvark" {
+			t.Fatalf("permutation %d did not deterministically quarantine author: %+v", i, got)
+		}
+		encoded, err := json.Marshal(got[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			want = encoded
+		} else if !reflect.DeepEqual(encoded, want) {
+			t.Fatalf("permutation %d changed Item JSON:\n%s\n%s", i, want, encoded)
+		}
+	}
+}
+
+func TestEqualAuthorIDPrefersURLTokenSourceIndependentOfOrder(t *testing.T) {
+	base := CollectionItem{ContentID: "8", ContentType: TypeAnswer, URL: "https://www.zhihu.com/question/7/answer/8", Title: "Question"}
+	token, profile := base, base
+	token.Author = &ContentAuthor{Name: "Token Alice", URLToken: "alice"}
+	profile.Author = &ContentAuthor{Name: "Profile Alice", URL: "https://www.zhihu.com/people/alice"}
+	for i, observations := range [][]CollectionItem{{profile, token}, {token, profile}} {
+		m := newMerger(999)
+		m.addCollections(observations, "")
+		got := m.result()
+		if len(got) != 1 || got[0].AuthorIdentity == nil || got[0].AuthorIdentity.ID != "author:alice" ||
+			got[0].AuthorIdentity.Source != AuthorIdentityURLToken || got[0].AuthorIdentity.Name != "Token Alice" || got[0].Author != "Token Alice" {
+			t.Fatalf("case %d: URLToken provenance did not win coherently: %+v", i, got)
+		}
+	}
+}
+
 func TestMockProviderLoadsRealSample(t *testing.T) {
 	p := &MockProvider{Path: "../../testdata/corpus_sample.json"}
 	c, err := p.Fetch(context.Background())

@@ -168,7 +168,7 @@ function parseArtifact(value: unknown, path: string): ArticleProbe {
     url: text(item.url, path + '.url'),
     bindings: (item.bindings === undefined ? [] : list(item.bindings, path + '.bindings'))
       .map((entry, index) => parseBinding(entry, path + '.bindings[' + index + ']')),
-    discoverySources: textList(item.discoverySources, path + '.discoverySources').map((source, index) => {
+    discoverySources: optionalTextList(item.discoverySources, path + '.discoverySources').map((source, index) => {
       if (!discoveries.includes(source as DiscoverySource)) fail(path + '.discoverySources[' + index + ']', 'unsupported source ' + source)
       return source as DiscoverySource
     }),

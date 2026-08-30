@@ -30,6 +30,7 @@ export interface Wormhole {
   ev: WormholeEvidence[]
 }
 export interface Solo { c: string; n: number; t: string; u: string; g: string[]; p: [number, number, number] }
+export type WireSolo = Omit<Solo, 'g'> & { g: NullableSlice<string> }
 export interface Dark {
   c: string; n: number; f: number; o: number; gap: number
   first: string; last: string; ev: Evidence[]
@@ -95,7 +96,7 @@ interface WireUniverseCore<S extends WireLegacyStar> {
   stars: NullableSlice<S>
   particles: NullableSlice<[number, number, number, number, number]>
   wormholes: NullableSlice<Omit<Wormhole, 'ev'> & { ev: NullableSlice<WormholeEvidence> }>
-  solo: NullableSlice<Solo>
+  solo: NullableSlice<WireSolo>
   dark: NullableSlice<Omit<Dark, 'ev'> & { ev: NullableSlice<Evidence> }>
   nebula: NullableSlice<Nebula>
 }

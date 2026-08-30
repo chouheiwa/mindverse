@@ -2,7 +2,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
-import type { CurrentUniverse, LegacyUniverse } from '../types'
+import type { CurrentUniverse, LegacyUniverse, WireSolo } from '../types'
 import {
   indexUniverse,
   parseUniverse,
@@ -107,6 +107,45 @@ describe('compatibility and validation', () => {
     expect(parsed.wormholes).toBeNull()
     expect('questionIds' in parsed.stars![0]).toBe(false)
     expect('probeIds' in parsed.stars![0]).toBe(false)
+  })
+
+  test('omitted discovery sources roundtrip absent and normalize to frozen empty arrays', () => {
+    const current = clone(fixture) as CurrentUniverse
+    delete current.answers![0].discoverySources
+    delete current.probes![0].discoverySources
+
+    const parsed = parseUniverse(current)
+    if (parsed.schemaVersion !== 'universe.v1') throw new Error('expected current universe')
+    expect('discoverySources' in parsed.answers![0]).toBe(false)
+    expect('discoverySources' in parsed.probes![0]).toBe(false)
+    expect(JSON.parse(JSON.stringify(parsed))).toEqual(current)
+
+    const index = indexUniverse(parsed)
+    const answerSources = index.answersById.get('answer:8')!.discoverySources
+    const probeSources = index.probesById.get('article:21')!.discoverySources
+    expect(answerSources).toEqual([])
+    expect(probeSources).toEqual([])
+    expect(Object.isFrozen(answerSources)).toBe(true)
+    expect(Object.isFrozen(probeSources)).toBe(true)
+  })
+
+  test('nullable wire Solo clusters roundtrip as null and normalize to a frozen empty array', () => {
+    const nullableSolo: WireSolo = {
+      c: 'Edge',
+      n: 1,
+      t: 'Edge case',
+      u: 'https://example.test/edge',
+      g: null,
+      p: [1, 2, 3],
+    }
+    const current = { ...clone(fixture), solo: [nullableSolo] }
+    const parsed = parseUniverse(current)
+    expect(parsed.solo![0].g).toBeNull()
+    expect(JSON.parse(JSON.stringify(parsed))).toEqual(current)
+
+    const normalizedSolo = indexUniverse(parsed).universe.solo[0]
+    expect(normalizedSolo.g).toEqual([])
+    expect(Object.isFrozen(normalizedSolo.g)).toBe(true)
   })
 
   test.each([

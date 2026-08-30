@@ -1,10 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
+import { ApiError } from '../apiCore'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { CurrentUniverse, SharePreview as Preview } from '../types'
 
 const api = vi.hoisted(() => ({ previewShare: vi.fn(), createShare: vi.fn(), deleteShare: vi.fn() }))
-vi.mock('../api', () => api)
+vi.mock('../shareApi', () => api)
 import { SharePreview } from './SharePreview'
 
 const universe = {
@@ -40,6 +42,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) { this.setAttribute('open', '') })
   HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) { this.removeAttribute('open') })
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
 })
 afterEach(cleanup)
 
@@ -51,7 +54,29 @@ describe('SharePreview explicit consent', () => {
     expect(screen.getAllByRole('checkbox').every((box) => !(box as HTMLInputElement).checked)).toBe(true)
     expect(screen.getByRole('button', { name: '创建公开链接' })).toBeDisabled()
     expect(screen.getByText(/文章探测器.*不会.*公开/)).toBeVisible()
+    expect(screen.getByText(/本页刷新后无法找回管理入口.*会话清除会级联撤销/)).toBeVisible()
     expect(api.previewShare).not.toHaveBeenCalled()
+    expect(screen.getByTestId('share-public-preview')).not.toHaveAttribute('aria-live')
+  })
+
+  test('paginates a maximum-size candidate list and moves focus to the first revealed question', async () => {
+    const questions = Array.from({ length: 1_000 }, (_, index) => {
+      const questionId = String(index + 1)
+      return { id: `question:${questionId}`, questionId, title: `问题 ${questionId}`, url: `https://www.zhihu.com/question/${questionId}`, answerIds: [] }
+    })
+    const large = {
+      ...universe,
+      questions,
+      stars: [{ ...universe.stars![0], questionIds: questions.map(({ id }) => id) }],
+    } satisfies CurrentUniverse
+    const user = userEvent.setup()
+    render(<SharePreview universe={large} onClose={() => {}} />)
+    expect(screen.getAllByRole('checkbox')).toHaveLength(20)
+    const more = screen.getByRole('button', { name: /再显示20个问题.*20\/1000/ })
+    await user.click(more)
+    expect(screen.getAllByRole('checkbox')).toHaveLength(40)
+    expect(screen.getAllByRole('checkbox')[20]).toHaveFocus()
+    expect(screen.getByRole('status')).toHaveTextContent('已显示40个候选问题')
   })
 
   test('deduplicates questions, preserves local star context, and previews exact sorted IDs', async () => {
@@ -103,7 +128,7 @@ describe('SharePreview explicit consent', () => {
 
   test('requires a fresh preview after create conflict', async () => {
     api.previewShare.mockResolvedValue(preview())
-    api.createShare.mockRejectedValue(new Error('分享预览已过期，请重新预览'))
+    api.createShare.mockRejectedValue(new ApiError(409, '分享预览已过期，请重新预览'))
     const user = userEvent.setup()
     render(<SharePreview universe={universe} onClose={() => {}} />)
     await user.click(screen.getByRole('checkbox', { name: /问题七/ }))
@@ -112,19 +137,82 @@ describe('SharePreview explicit consent', () => {
     expect(screen.getByRole('button', { name: '创建公开链接' })).toBeDisabled()
   })
 
-  test('does not expose a link created for an obsolete selection', async () => {
-    api.previewShare.mockImplementation(async (ids: string[]) => preview(ids))
+  test('locks selection and close while creation is pending', async () => {
+    api.previewShare.mockResolvedValue(preview())
     const pendingCreate = deferred<{ id: string; url: string; expiresAt: string }>()
     api.createShare.mockReturnValue(pendingCreate.promise)
-    api.deleteShare.mockResolvedValue({ ok: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(<SharePreview universe={universe} onClose={onClose} />)
+    await user.click(screen.getByRole('checkbox', { name: /问题七/ }))
+    await user.click(await screen.findByRole('button', { name: '创建公开链接' }))
+    expect(screen.getAllByRole('checkbox').every((box) => (box as HTMLInputElement).disabled)).toBe(true)
+    expect(screen.getByRole('button', { name: '关闭分享选择' })).toBeDisabled()
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    expect(onClose).not.toHaveBeenCalled()
+    pendingCreate.resolve({ id: 'share_1', url: '/s/share_1', expiresAt: '2026-09-07T00:00:00Z' })
+    expect(await screen.findByRole('link', { name: '打开公开页' })).toBeVisible()
+    expect(screen.getAllByRole('checkbox').every((box) => (box as HTMLInputElement).disabled)).toBe(true)
+  })
+
+  test('preserves a created owner link while the persistent dialog closes and reopens', async () => {
+    api.previewShare.mockResolvedValue(preview())
+    api.createShare.mockResolvedValue({ id: 'share_1', url: '/s/share_1', expiresAt: '2026-09-07T00:00:00Z' })
+    const user = userEvent.setup()
+    function Harness() {
+      const [open, setOpen] = useState(true)
+      return <><button onClick={() => setOpen(true)}>再次打开</button><SharePreview open={open} universe={universe} onClose={() => setOpen(false)} /></>
+    }
+    render(<Harness />)
+    await user.click(screen.getByRole('checkbox', { name: /问题七/ }))
+    await user.click(await screen.findByRole('button', { name: '创建公开链接' }))
+    await user.click(await screen.findByRole('button', { name: '关闭分享选择' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '再次打开' }))
+    expect(await screen.findByRole('link', { name: '打开公开页' })).toHaveAttribute('href', '/s/share_1')
+    expect(api.createShare).toHaveBeenCalledTimes(1)
+  })
+
+  test('keeps the link on revoke failure, prevents double submit, then revokes and allows recreation', async () => {
+    api.previewShare.mockResolvedValue(preview())
+    api.createShare.mockResolvedValue({ id: 'share_1', url: '/s/share_1', expiresAt: '2026-09-07T00:00:00Z' })
+    const revoke = deferred<{ ok: true }>()
+    api.deleteShare.mockReturnValueOnce(revoke.promise).mockResolvedValueOnce({ ok: true })
     const user = userEvent.setup()
     render(<SharePreview universe={universe} onClose={() => {}} />)
     await user.click(screen.getByRole('checkbox', { name: /问题七/ }))
     await user.click(await screen.findByRole('button', { name: '创建公开链接' }))
-    await user.click(screen.getByRole('checkbox', { name: /问题九/ }))
-    pendingCreate.resolve({ id: 'stale_1', url: '/s/stale_1', expiresAt: '2026-09-07T00:00:00Z' })
-    await waitFor(() => expect(api.deleteShare).toHaveBeenCalledWith('stale_1'))
-    expect(screen.queryByRole('link', { name: '打开公开页' })).not.toBeInTheDocument()
+    const revokeButton = await screen.findByRole('button', { name: '撤销这个链接' })
+    await user.click(revokeButton)
+    expect(revokeButton).toBeDisabled()
+    await user.click(revokeButton)
+    expect(api.deleteShare).toHaveBeenCalledTimes(1)
+    revoke.reject(new Error('撤销失败'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('撤销失败')
+    expect(screen.getByRole('link', { name: '打开公开页' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重试撤销' }))
+    expect(await screen.findByText('链接已撤销')).toBeVisible()
+    expect(screen.getAllByRole('checkbox').every((box) => !(box as HTMLInputElement).disabled)).toBe(true)
+    expect(screen.getByRole('button', { name: '创建公开链接' })).toBeEnabled()
+  })
+
+  test('reports clipboard success and fallback failure', async () => {
+    api.previewShare.mockResolvedValue(preview())
+    api.createShare.mockResolvedValue({ id: 'share_1', url: '/s/share_1', expiresAt: '2026-09-07T00:00:00Z' })
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<SharePreview universe={universe} onClose={() => {}} />)
+    await user.click(screen.getByRole('checkbox', { name: /问题七/ }))
+    await user.click(await screen.findByRole('button', { name: '创建公开链接' }))
+    await user.click(screen.getByRole('button', { name: '复制链接' }))
+    expect(await screen.findByText('链接已复制')).toBeVisible()
+    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/s\/share_1$/))
+
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) })
+    await user.click(screen.getByRole('button', { name: '复制链接' }))
+    expect(await screen.findByText('复制失败，请手动打开后复制')).toBeVisible()
   })
 
   test('closes with Escape/cancel and restores focus to the opener', async () => {

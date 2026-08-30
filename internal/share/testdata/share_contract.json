@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "share.v1",
+  "questions": [
+    {
+      "id": "question:7",
+      "questionId": "7",
+      "title": "Public question",
+      "url": "https://www.zhihu.com/question/7",
+      "answerIds": [
+        "answer:8"
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "id": "answer:8",
+      "questionId": "question:7",
+      "title": "Public answer",
+      "url": "https://www.zhihu.com/question/7/answer/8",
+      "authorId": "author:alice",
+      "authorName": "Alice",
+      "publishedAt": 10,
+      "updatedAt": 20,
+      "likeCount": 4,
+      "commentCount": 5,
+      "favoriteCount": 6
+    }
+  ]
+}

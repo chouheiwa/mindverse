@@ -17,8 +17,7 @@ const testState = vi.hoisted(() => ({
 }))
 
 const apiState = vi.hoisted(() => ({
-  pollUntilDone: vi.fn(), shareIdFromPath: vi.fn(), getShare: vi.fn(),
-  previewShare: vi.fn(), createShare: vi.fn(), deleteShare: vi.fn(),
+  pollUntilDone: vi.fn(),
 }))
 
 vi.mock('../api', () => apiState)
@@ -89,8 +88,6 @@ beforeEach(() => {
   testState.suspendCalls = 0
   testState.resumeCalls = 0
   apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
-  apiState.shareIdFromPath.mockReturnValue(null)
-  apiState.getShare.mockResolvedValue({ schemaVersion: 'share.v1', questions: [], answers: [] })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
     matches: true,
     addEventListener: vi.fn(),
@@ -110,19 +107,6 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
-  test('uses a dedicated public route without polling or mounting a private renderer', async () => {
-    apiState.shareIdFromPath.mockReturnValue('public_1')
-    apiState.getShare.mockResolvedValue({
-      schemaVersion: 'share.v1', questions: [{ id: 'question:7', questionId: '7', title: '公开问题', url: 'https://www.zhihu.com/question/7', answerIds: [] }], answers: [],
-    })
-    render(<UniverseView />)
-    expect(await screen.findByRole('heading', { name: '公开问题' })).toBeVisible()
-    expect(apiState.getShare).toHaveBeenCalledWith('public_1', expect.any(AbortSignal))
-    expect(apiState.pollUntilDone).not.toHaveBeenCalled()
-    expect(testState.callbacks).toBeNull()
-    expect(screen.queryByLabelText('认知宇宙三维星图')).not.toBeInTheDocument()
-  })
-
   test('opens the only public sharing action and restores focus after close', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)
@@ -152,7 +136,8 @@ describe('Universe question keyboard integration', () => {
     await screen.findByRole('heading', { name: '好奇心星图' })
     const canvas = screen.getByLabelText('认知宇宙三维星图')
     canvas.focus()
-    act(() => testState.callbacks?.onPick?.(star))
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    act(() => testState.callbacks!.onPick?.(star))
     await user.click(await screen.findByRole('button', { name: '关闭' }))
     await waitFor(() => expect(canvas).toHaveFocus())
     expect(canvas).toHaveAttribute('tabindex', '0')

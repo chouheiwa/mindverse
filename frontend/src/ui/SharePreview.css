@@ -19,6 +19,9 @@
 .sp-selection label b { font-size: 14px; font-weight: 400; line-height: 1.5 }
 .sp-selection label small { color: var(--dim); font: 10px/1.5 var(--f-m) }
 .sp-scope { padding-top: 18px; border-top: 1px solid var(--rule) }
+.sp-more { min-height: 44px; padding: 9px 12px; background: transparent; font: 11px/1.4 var(--f-m) }
+.sp-more span { margin-left: 8px; color: var(--dim) }
+.sp-status { color: var(--dim); font: 11px/1.5 var(--f-m) }
 .sp-preview > h2 { position: sticky; top: -26px; z-index: 1; padding: 20px 0 12px; background: #080c1a }
 .sp-actions { min-height: 80px; display: flex; align-items: center; gap: 16px; padding: 14px 26px; border-top: 1px solid var(--rule); color: var(--dim); font: 11px/1.5 var(--f-m) }
 .sp-actions > button.primary { margin-left: auto; min-height: 44px }

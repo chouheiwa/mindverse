@@ -2,7 +2,9 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { createShare, deleteShare, getGeneration, getShare, previewShare, shareIdFromPath } from './api'
+import { getGeneration } from './api'
+import { createShare, deleteShare, getShare, previewShare } from './shareApi'
+import { shareIdFromPath } from './shareRoute'
 import { shareFixture } from './domain/share.test'
 
 const goldenPath = new URL('../../internal/engine/testdata/universe_contract.json', import.meta.url)
@@ -41,6 +43,11 @@ describe('/api/universe boundary', () => {
 
     await expect(getGeneration()).rejects.toThrow(/unknown key renamedQuestions/)
   })
+
+  test('rejects every non-2xx response even when it carries a generation state', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ state: 'failed', error: 'generation failed' }), { status: 500 })))
+    await expect(getGeneration()).rejects.toThrow('generation failed')
+  })
 })
 
 describe('share API boundary', () => {
@@ -62,6 +69,7 @@ describe('share API boundary', () => {
     ])
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ questionIds: ['question:7'] })
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ questionIds: ['question:7'], digest: 'd'.repeat(64) })
+    expect(fetchMock.mock.calls[2][1].credentials).toBe('omit')
     expect(fetchMock.mock.calls[3][1].method).toBe('DELETE')
   })
 
@@ -80,6 +88,11 @@ describe('share API boundary', () => {
     await expect(createShare(['question:7'], 'd'.repeat(64))).rejects.toThrow(/invalid created share/)
   })
 
+  test('rejects any delete response other than the exact success envelope', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, owner: 'private' }), { status: 200 })))
+    await expect(deleteShare('public_1')).rejects.toThrow(/invalid share deletion/)
+  })
+
   test.each([
     ['/s/abc_123-Z', 'abc_123-Z'],
     ['/s/abc/', null],
@@ -88,7 +101,6 @@ describe('share API boundary', () => {
     ['/prefix/s/abc', null],
     ['/s/', null],
   ])('parses an anchored public route %s', (path, expected) => {
-    vi.stubGlobal('location', { pathname: path })
-    expect(shareIdFromPath()).toBe(expected)
+    expect(shareIdFromPath(path)).toBe(expected)
   })
 })

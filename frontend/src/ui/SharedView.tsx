@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getShare } from '../api'
+import { getShare } from '../shareApi'
 import type { ShareView } from '../types'
 import { PublicShareContent } from './PublicShareContent'
 import './SharedView.css'

@@ -1,0 +1,1 @@
+var e=class extends Error{status;constructor(e,t){super(t),this.name=`ApiError`,this.status=e}};async function t(t,n){let r=await fetch(t,{credentials:`same-origin`,...n}),i=await r.json().catch(()=>({}));if(!r.ok){let t=typeof i==`object`&&i&&`error`in i&&typeof i.error==`string`?i.error:`请求失败 ${r.status}`;throw new e(r.status,t)}return i}export{t as n,e as t};

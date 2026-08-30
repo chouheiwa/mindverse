@@ -16,6 +16,16 @@ import (
 
 const ViewSchemaVersion = "share.v1"
 
+// share.v1 wire limits are mirrored by frontend/src/domain/share.ts. They
+// keep public snapshots JSON-safe and incrementally renderable in browsers.
+const (
+	MaxViewQuestions   = 1_000
+	MaxViewAnswers     = 10_000
+	MaxQuestionAnswers = 10_000
+	MaxJSONInteger     = int64(9_007_199_254_740_991)
+	MaxPublicTimestamp = int64(253_402_300_799) // 9999-12-31T23:59:59Z
+)
+
 type ShareSelection struct {
 	QuestionIDs []string `json:"questionIds"`
 }
@@ -75,6 +85,9 @@ func BuildView(u *engine.Universe, selection ShareSelection) (ShareView, error) 
 		return view, fmt.Errorf("universe unavailable")
 	}
 	requested := append([]string(nil), selection.QuestionIDs...)
+	if len(requested) > MaxViewQuestions {
+		return view, fmt.Errorf("share question selection exceeds limit %d", MaxViewQuestions)
+	}
 	sort.Strings(requested)
 	for i := 1; i < len(requested); i++ {
 		if requested[i] == requested[i-1] {
@@ -117,6 +130,9 @@ func BuildView(u *engine.Universe, selection ShareSelection) (ShareView, error) 
 	for _, id := range requested {
 		q := questions[id]
 		answerIDs := append([]string(nil), q.AnswerIDs...)
+		if len(answerIDs) > MaxQuestionAnswers {
+			return view, fmt.Errorf("question %q answer references exceed limit %d", q.ID, MaxQuestionAnswers)
+		}
 		sort.Strings(answerIDs)
 		for i := 1; i < len(answerIDs); i++ {
 			if answerIDs[i] == answerIDs[i-1] {
@@ -134,6 +150,9 @@ func BuildView(u *engine.Universe, selection ShareSelection) (ShareView, error) 
 				continue
 			}
 			seenAnswers[a.ID] = struct{}{}
+			if len(view.Answers) >= MaxViewAnswers {
+				return view, fmt.Errorf("share answers exceed limit %d", MaxViewAnswers)
+			}
 			public := Answer{
 				ID: a.ID, QuestionID: a.QuestionID, Title: a.Title, URL: a.URL,
 				PublishedAt: a.PublishedAt, UpdatedAt: a.UpdatedAt, LikeCount: a.LikeCount,
@@ -183,6 +202,9 @@ func (v ShareView) Validate() error {
 	if v.SchemaVersion != ViewSchemaVersion || v.Legacy {
 		return fmt.Errorf("invalid share view schema")
 	}
+	if len(v.Questions) > MaxViewQuestions || len(v.Answers) > MaxViewAnswers {
+		return fmt.Errorf("share view collection limit exceeded")
+	}
 	questions := make(map[string]Question, len(v.Questions))
 	for i, question := range v.Questions {
 		if !canonicalShareQuestion(question) {
@@ -199,7 +221,9 @@ func (v ShareView) Validate() error {
 	answers := make(map[string]Answer, len(v.Answers))
 	for i, answer := range v.Answers {
 		if !canonicalShareAnswer(answer) || answer.PublishedAt < 0 || answer.UpdatedAt < 0 ||
-			answer.LikeCount < 0 || answer.CommentCount < 0 || answer.FavoriteCount < 0 {
+			answer.PublishedAt > MaxPublicTimestamp || answer.UpdatedAt > MaxPublicTimestamp ||
+			answer.LikeCount < 0 || answer.CommentCount < 0 || answer.FavoriteCount < 0 ||
+			answer.LikeCount > MaxJSONInteger || answer.CommentCount > MaxJSONInteger || answer.FavoriteCount > MaxJSONInteger {
 			return fmt.Errorf("answer %d: invalid public shape", i)
 		}
 		if answer.AuthorID == "" && answer.AuthorName != "" {
@@ -221,6 +245,9 @@ func (v ShareView) Validate() error {
 	}
 	seenAnswers := make(map[string]struct{}, len(answers))
 	for _, question := range v.Questions {
+		if len(question.AnswerIDs) > MaxQuestionAnswers {
+			return fmt.Errorf("question %q: answer reference limit exceeded", question.ID)
+		}
 		for i, answerID := range question.AnswerIDs {
 			if i > 0 && question.AnswerIDs[i-1] >= answerID {
 				return fmt.Errorf("question %q: answer references are not strictly sorted", question.ID)

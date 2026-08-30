@@ -127,6 +127,64 @@ func TestBuildShareViewRejectsUnavailableNonCanonicalQuestion(t *testing.T) {
 	}
 }
 
+func TestShareV1ContractLimits(t *testing.T) {
+	valid, err := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ShareView)
+	}{
+		{"questions", func(v *ShareView) { v.Questions = make([]Question, MaxViewQuestions+1) }},
+		{"answers", func(v *ShareView) { v.Answers = make([]Answer, MaxViewAnswers+1) }},
+		{"question answer refs", func(v *ShareView) { v.Questions[0].AnswerIDs = make([]string, MaxQuestionAnswers+1) }},
+		{"unsafe interaction count", func(v *ShareView) { v.Answers[0].LikeCount = MaxJSONInteger + 1 }},
+		{"unsafe publication time", func(v *ShareView) { v.Answers[0].PublishedAt = MaxPublicTimestamp + 1 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			view := valid
+			view.Questions = append([]Question(nil), valid.Questions...)
+			view.Answers = append([]Answer(nil), valid.Answers...)
+			view.Questions[0].AnswerIDs = append([]string(nil), valid.Questions[0].AnswerIDs...)
+			tc.mutate(&view)
+			if err := view.Validate(); err == nil {
+				t.Fatal("out-of-contract view passed validation")
+			}
+		})
+	}
+}
+
+func TestBuildShareViewRejectsSelectionAboveContractLimit(t *testing.T) {
+	ids := make([]string, MaxViewQuestions+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("question:%d", i+1)
+	}
+	if _, err := BuildView(shareUniverse(), ShareSelection{QuestionIDs: ids}); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("oversized selection should fail at the public contract: %v", err)
+	}
+}
+
+func TestShareContractGolden(t *testing.T) {
+	view, err := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.MarshalIndent(view, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	want, err := os.ReadFile(filepath.Join("testdata", "share_contract.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("share.v1 golden drifted; update it from the Go DTO:\n%s", got)
+	}
+}
+
 func TestShareStorePersistsHashedOwnerAndRestoresOwnership(t *testing.T) {
 	dir := t.TempDir()
 	owner := "high-entropy-session-id"

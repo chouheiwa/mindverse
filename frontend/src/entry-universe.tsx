@@ -1,8 +1,17 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { UniverseView } from './ui/Universe'
+import { universeRoute } from './shareRoute'
 import './theme.css'
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode><UniverseView /></StrictMode>,
-)
+const root = createRoot(document.getElementById('root')!)
+const route = universeRoute()
+
+if (route.kind === 'share') {
+  import('./ui/SharedView').then(({ SharedView }) => {
+    root.render(<StrictMode><SharedView shareId={route.id} /></StrictMode>)
+  })
+} else {
+  import('./ui/Universe').then(({ PrivateUniverseView }) => {
+    root.render(<StrictMode><PrivateUniverseView /></StrictMode>)
+  })
+}

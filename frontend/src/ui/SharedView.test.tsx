@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { ShareView } from '../types'
 
 const api = vi.hoisted(() => ({ getShare: vi.fn() }))
-vi.mock('../api', () => api)
+vi.mock('../shareApi', () => api)
 import { SharedView } from './SharedView'
+import { PublicShareContent } from './PublicShareContent'
 
 const view: ShareView = {
   schemaVersion: 'share.v1',
@@ -56,5 +57,54 @@ describe('read-only public ShareView', () => {
     const { rerender } = render(<SharedView shareId="first" />)
     rerender(<SharedView shareId="second" />)
     await waitFor(() => expect(api.getShare.mock.calls[0][1].aborted).toBe(true))
+  })
+
+  test('bounds a maximum legal view and incrementally reveals questions and answers with focus continuity', async () => {
+    const questionIds = Array.from({ length: 1_000 }, (_, index) => String(index + 1))
+      .sort((left, right) => `question:${left}`.localeCompare(`question:${right}`))
+    const answerNumbers = Array.from({ length: 10_000 }, (_, index) => String(index + 1))
+      .sort((left, right) => `answer:${left}`.localeCompare(`answer:${right}`))
+    const large: ShareView = {
+      schemaVersion: 'share.v1',
+      questions: questionIds.map((questionId, index) => ({
+        id: `question:${questionId}`, questionId, title: `Q ${index + 1}`,
+        url: `https://www.zhihu.com/question/${questionId}`,
+        answerIds: index === 0 ? answerNumbers.map((id) => `answer:${id}`) : [],
+      })),
+      answers: answerNumbers.map((id) => ({
+        id: `answer:${id}`, questionId: `question:${questionIds[0]}`, title: `A ${id}`,
+        url: `https://www.zhihu.com/question/${questionIds[0]}/answer/${id}`,
+      })),
+    }
+    const user = userEvent.setup()
+    render(<PublicShareContent view={large} />)
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(20)
+    expect(screen.getAllByRole('article')).toHaveLength(50)
+    const moreAnswers = screen.getByRole('button', { name: /再显示50个答案.*50\/10000/ })
+    await user.click(moreAnswers)
+    expect(screen.getAllByRole('article')).toHaveLength(100)
+    expect(screen.getAllByRole('article')[50]).toHaveFocus()
+    const moreQuestions = screen.getByRole('button', { name: /再显示20个问题.*20\/1000/ })
+    await user.click(moreQuestions)
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(40)
+    expect(screen.getAllByRole('heading', { level: 2 })[20]).toHaveFocus()
+    expect(screen.getAllByRole('status').some((node) => node.textContent === '已显示40个问题')).toBe(true)
+  })
+
+  test('resets pagination when the public view changes', async () => {
+    const many: ShareView = {
+      schemaVersion: 'share.v1', answers: [],
+      questions: Array.from({ length: 25 }, (_, index) => ({
+        id: `question:${index + 1}`, questionId: String(index + 1), title: `Old ${index + 1}`,
+        url: `https://www.zhihu.com/question/${index + 1}`, answerIds: [],
+      })),
+    }
+    const user = userEvent.setup()
+    const { rerender } = render(<PublicShareContent view={many} />)
+    await user.click(screen.getByRole('button', { name: /再显示/ }))
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(25)
+    rerender(<PublicShareContent view={{ ...many, questions: many.questions.map((question) => ({ ...question, title: `New ${question.questionId}` })) }} />)
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(20)
+    expect(screen.queryByText('Old 1')).not.toBeInTheDocument()
   })
 })

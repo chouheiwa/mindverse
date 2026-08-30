@@ -1,3 +1,6 @@
+// @vitest-environment node
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import { indexShareView, parseShareView } from './share'
 
@@ -16,6 +19,10 @@ export const shareFixture = {
 } as const
 
 describe('share.v1 public boundary', () => {
+  test('parses the canonical fixture emitted by the Go share DTO', () => {
+    const golden = JSON.parse(readFileSync(new URL('../../../internal/share/testdata/share_contract.json', import.meta.url), 'utf8'))
+    expect(parseShareView(golden)).toMatchObject({ schemaVersion: 'share.v1', questions: [{ id: 'question:7' }], answers: [{ id: 'answer:8' }] })
+  })
   test('parses, freezes, and indexes the exact public whitelist', () => {
     const view = parseShareView(structuredClone(shareFixture))
     const index = indexShareView(view)
@@ -86,5 +93,13 @@ describe('share.v1 public boundary', () => {
       }
     })
     expect(() => parseShareView({ schemaVersion: 'share.v1', questions, answers: [] })).toThrow(/edge budget/)
+  })
+
+  test('enforces the Go share.v1 question collection limit', () => {
+    const questions = Array.from({ length: 1_001 }, (_, index) => {
+      const questionId = String(index + 1).padStart(4, '0').replace(/^0+/, '')
+      return { id: `question:${questionId}`, questionId, title: 'Q', url: `https://www.zhihu.com/question/${questionId}`, answerIds: [] }
+    })
+    expect(() => parseShareView({ schemaVersion: 'share.v1', questions, answers: [] })).toThrow(/question limit/)
   })
 })

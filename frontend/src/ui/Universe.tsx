@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
-import { pollUntilDone, shareIdFromPath } from '../api'
+import { pollUntilDone } from '../api'
 import { Renderer } from '../starmap/Renderer'
 import { Loading } from './Loading'
 import { Panel } from './Panel'
@@ -12,7 +12,6 @@ import { QuestionLane } from './QuestionLane'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import { Seed } from './Seed'
 import { QuestionWorkspaceGate } from './QuestionWorkspaceGate'
-import { SharedView } from './SharedView'
 import { SharePreview } from './SharePreview'
 import './Universe.css'
 
@@ -20,11 +19,10 @@ const reduceMotion = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export function UniverseView() {
-  const shareId = shareIdFromPath()
-  return shareId ? <SharedView shareId={shareId} /> : <PrivateUniverseView />
+  return <PrivateUniverseView />
 }
 
-function PrivateUniverseView() {
+export function PrivateUniverseView() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // 标签单独一层 2D 画布：文字该用文字渲染器画，也不该被 bloom 糊掉
   const labelRef = useRef<HTMLCanvasElement>(null)
@@ -354,7 +352,7 @@ function PrivateUniverseView() {
           <button className="uv-act" onClick={(event) => { shareReturnFocusRef.current = event.currentTarget; setSharing(true) }}>选择分享</button>
         </div>
       </div>
-      {sharing && <SharePreview universe={universe} onClose={() => setSharing(false)} getReturnFocus={() => shareReturnFocusRef.current} />}
+      <SharePreview open={sharing} universe={universe} onClose={() => setSharing(false)} getReturnFocus={() => shareReturnFocusRef.current} />
       {star && <QuestionLane planets={questionPlanets} selectedId={planet?.question.id ?? null} onSelect={selectQuestionFromLane} />}
       <QuestionPlanetCard ref={cardRef} planet={planet} onEnter={onEnterQuestion}
         onClose={closePlanet} />

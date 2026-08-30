@@ -1,8 +1,12 @@
 import type { ShareAnswer, ShareQuestion, ShareView } from '../types'
 
 type ObjectValue = Record<string, unknown>
-const COLLECTION_LIMIT = 10_000
-const EDGE_LIMIT = 250_000
+export const SHARE_MAX_QUESTIONS = 1_000
+export const SHARE_MAX_ANSWERS = 10_000
+export const SHARE_MAX_QUESTION_ANSWERS = 10_000
+export const SHARE_MAX_JSON_INTEGER = 9_007_199_254_740_991
+export const SHARE_MAX_PUBLIC_TIMESTAMP = 253_402_300_799
+const EDGE_LIMIT = SHARE_MAX_ANSWERS
 interface ParseBudget { edges: number }
 
 const fail = (path: string, message: string): never => {
@@ -25,10 +29,11 @@ const shape = (value: unknown, path: string, required: readonly string[], option
   for (const key of required) if (!Object.hasOwn(item, key)) fail(path, `missing required key ${key}`)
   return item
 }
-const array = (value: unknown, path: string): unknown[] => {
+const array = (value: unknown, path: string, limit: number, label = 'collection'): unknown[] => {
   if (!Array.isArray(value)) return fail(path, 'expected array')
   const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
-  if (!Number.isSafeInteger(length) || length < 0 || length > COLLECTION_LIMIT) fail(path, 'invalid collection length')
+  if (!Number.isSafeInteger(length) || length < 0) fail(path, 'invalid collection length')
+  if (length > limit) fail(path, `${label} limit exceeded`)
   const result = new Array<unknown>(length)
   let count = 0
   for (const key of Reflect.ownKeys(value)) {
@@ -54,7 +59,7 @@ const optionalCount = (value: unknown, path: string) => {
   return parsed >= 0 ? parsed : fail(path, 'must not be negative')
 }
 const stringList = (value: unknown, path: string, budget: ParseBudget) => {
-  const values = array(value, path)
+  const values = array(value, path, SHARE_MAX_QUESTION_ANSWERS, 'answer reference')
   budget.edges += values.length
   if (budget.edges > EDGE_LIMIT) fail(path, 'edge budget exceeded')
   return values.map((entry, index) => text(entry, `${path}[${index}]`))
@@ -98,7 +103,7 @@ function parseAnswer(value: unknown, path: string): ShareAnswer {
     const parsed = optionalCount(item[key], `${path}.${key}`)
     if (parsed !== undefined) {
       if (parsed === 0) fail(`${path}.${key}`, 'zero value must be omitted')
-      if ((key === 'publishedAt' || key === 'updatedAt') && parsed > 8_640_000_000_000) fail(`${path}.${key}`, 'timestamp is outside display range')
+      if ((key === 'publishedAt' || key === 'updatedAt') && parsed > SHARE_MAX_PUBLIC_TIMESTAMP) fail(`${path}.${key}`, 'timestamp is outside share.v1 range')
       result[key] = parsed
     }
   }
@@ -116,8 +121,8 @@ export function parseShareView(value: unknown): ShareView {
   if (root.schemaVersion !== 'share.v1') fail('share.schemaVersion', 'unsupported version')
   if (Object.hasOwn(root, 'legacy') && root.legacy !== true) fail('share.legacy', 'false must be omitted')
   const budget: ParseBudget = { edges: 0 }
-  const questions = array(root.questions, 'share.questions').map((item, index) => parseQuestion(item, `share.questions[${index}]`, budget))
-  const answers = array(root.answers, 'share.answers').map((item, index) => parseAnswer(item, `share.answers[${index}]`))
+  const questions = array(root.questions, 'share.questions', SHARE_MAX_QUESTIONS, 'question').map((item, index) => parseQuestion(item, `share.questions[${index}]`, budget))
+  const answers = array(root.answers, 'share.answers', SHARE_MAX_ANSWERS, 'answer').map((item, index) => parseAnswer(item, `share.answers[${index}]`))
   if (root.legacy === true && (questions.length !== 0 || answers.length !== 0)) fail('share.legacy', 'legacy view cannot expose content')
   const questionsById = new Map<string, ShareQuestion>()
   questions.forEach((question, index) => {

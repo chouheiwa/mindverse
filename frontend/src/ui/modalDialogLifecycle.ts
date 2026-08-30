@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type
 const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 interface ModalDialogLifecycleOptions {
+  active?: boolean
   getReturnFocus?: () => HTMLElement | null
   initialFocusRef?: RefObject<HTMLElement | null>
   restoreFocusOnCleanupRef?: RefObject<boolean>
@@ -23,9 +24,10 @@ export function useModalDialogLifecycle(
 ) {
   const nativeModalRef = useRef(false)
   const generationRef = useRef(0)
-  const { getReturnFocus, initialFocusRef, restoreFocusOnCleanupRef } = options
+  const { active = true, getReturnFocus, initialFocusRef, restoreFocusOnCleanupRef } = options
 
   useLayoutEffect(() => {
+    if (!active) return
     const dialog = dialogRef.current
     if (!dialog) return
     const generation = ++generationRef.current
@@ -65,7 +67,7 @@ export function useModalDialogLifecycle(
       if (!shouldRestoreFocus(restoreFocusOnCleanupRef)) return
       scheduleFocusRestore(generationRef, generation, returnFocus)
     }
-  }, [dialogRef, getReturnFocus, initialFocusRef, restoreFocusOnCleanupRef])
+  }, [active, dialogRef, getReturnFocus, initialFocusRef, restoreFocusOnCleanupRef])
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDialogElement>) => {
     if (event.key !== 'Tab') return

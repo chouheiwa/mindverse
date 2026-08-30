@@ -134,6 +134,14 @@ describe('QuestionWorkspace', () => {
     expect(screen.getByText('首发时间未知').tagName).toBe('SPAN')
   })
 
+  test('displays publication dates in Asia/Shanghai', async () => {
+    const user = userEvent.setup()
+    const nearMidnight = answer('answer:timezone', { publishedAt: Date.UTC(2025, 11, 31, 16, 30) / 1000 })
+    render(<QuestionWorkspace index={index([nearMidnight])} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
+    await user.click(screen.getByRole('tab', { name: '回溯' }))
+    expect(screen.getByText(/2026年1月1日/).closest('time')).toHaveAttribute('datetime', '2026-01-01')
+  })
+
   test('paginates large original lists by 50 without dropping source access', async () => {
     const user = userEvent.setup()
     const answers = Array.from({ length: 120 }, (_, i) => answer(`answer:${i + 1}`, {
@@ -149,6 +157,7 @@ describe('QuestionWorkspace', () => {
     expect(screen.getAllByRole('link', { name: /查看原回答/ })).toHaveLength(120)
     expect(screen.queryByRole('button', { name: '加载更多' })).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('已显示全部 120 条')
+    expect(screen.getByRole('status')).toHaveFocus()
   })
 
   test('reacts to mobile media changes and cleans up the orientation listener', () => {

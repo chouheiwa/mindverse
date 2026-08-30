@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { RendererCallbacks } from '../starmap/Renderer'
@@ -105,6 +105,24 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
+  test('enters directly from the panel and restores focus to its trigger', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    act(() => testState.callbacks?.onPick?.(star))
+    const trigger = await screen.findByRole('button', { name: '进入问题行星' })
+    trigger.focus()
+    await user.click(trigger)
+    expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
+    expect(screen.queryByRole('button', { name: '关闭问题行星入口' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
+    expect(testState.suspendCalls).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: '返回问题航道' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
+    expect(trigger).toHaveFocus()
+  })
+
   test('hands lane focus to the card, enters and leaves the workspace, and clears stale entry state', async () => {
     const user = userEvent.setup()
     render(<StrictMode><UniverseView /></StrictMode>)
@@ -114,7 +132,8 @@ describe('Universe question keyboard integration', () => {
     const canvas = screen.getByLabelText('认知宇宙三维星图')
     canvas.focus()
     act(() => testState.callbacks?.onPickPlanet?.(selectedPlanet))
-    expect(await screen.findByRole('button', { name: '进入问题行星' })).not.toHaveFocus()
+    const planetCard = await screen.findByRole('complementary', { name: '问题行星入口' })
+    expect(within(planetCard).getByRole('button', { name: '进入问题行星' })).not.toHaveFocus()
     expect(canvas).toHaveFocus()
     act(() => testState.callbacks?.onPickPlanet?.(null))
 
@@ -122,13 +141,15 @@ describe('Universe question keyboard integration', () => {
     laneButton.focus()
     await user.keyboard('{Enter}')
     expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
-    const enter = await screen.findByRole('button', { name: '进入问题行星' })
+    const enter = within(await screen.findByRole('complementary', { name: '问题行星入口' }))
+      .getByRole('button', { name: '进入问题行星' })
     await waitFor(() => expect(enter).toHaveFocus())
 
     await user.click(screen.getByRole('button', { name: '关闭问题行星入口' }))
     await waitFor(() => expect(laneButton).toHaveFocus())
     await user.keyboard('{Enter}')
-    await waitFor(() => expect(screen.getByRole('button', { name: '进入问题行星' })).toHaveFocus())
+    await waitFor(() => expect(within(screen.getByRole('complementary', { name: '问题行星入口' }))
+      .getByRole('button', { name: '进入问题行星' })).toHaveFocus())
 
     await user.keyboard('{Enter}')
     expect(testState.suspendCalls).toBeGreaterThan(0)
@@ -143,12 +164,14 @@ describe('Universe question keyboard integration', () => {
     expect(laneButton).toHaveFocus()
 
     await user.click(laneButton)
-    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    await user.click(within(await screen.findByRole('complementary', { name: '问题行星入口' }))
+      .getByRole('button', { name: '进入问题行星' }))
     await user.click(await screen.findByRole('button', { name: '返回问题航道' }))
     await waitFor(() => expect(laneButton).toHaveFocus())
 
     await user.click(laneButton)
-    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    await user.click(within(await screen.findByRole('complementary', { name: '问题行星入口' }))
+      .getByRole('button', { name: '进入问题行星' }))
     expect(await screen.findByRole('dialog')).toBeVisible()
     act(() => testState.callbacks?.onPick?.(null))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -156,7 +179,8 @@ describe('Universe question keyboard integration', () => {
     act(() => testState.callbacks?.onPick?.(star))
     const resetLaneButton = await screen.findByRole('button', { name: /轨道 1.*真实问题标题/ })
     await user.click(resetLaneButton)
-    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    await user.click(within(await screen.findByRole('complementary', { name: '问题行星入口' }))
+      .getByRole('button', { name: '进入问题行星' }))
     expect(await screen.findByRole('dialog')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '熄灭的星' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())

@@ -534,7 +534,13 @@ export function indexUniverse(input: WireUniverse | Universe): UniverseIndex {
 
 export function questionsForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly QuestionPlanet[] {
   if (!('questionIds' in star) || !star.questionIds?.length) return EMPTY_RESULT
-  return Object.freeze(star.questionIds.map((id) => index.questionsById.get(id)).filter((item): item is QuestionPlanet => item !== undefined))
+  const seen = new Set<string>()
+  return Object.freeze(star.questionIds.flatMap((id) => {
+    if (seen.has(id)) return []
+    seen.add(id)
+    const question = index.questionsById.get(id)
+    return question ? [question] : []
+  }))
 }
 
 /**
@@ -601,7 +607,13 @@ export function selectPlanetData(
 }
 export function probesForStar(index: UniverseIndex, star: Star | WireCurrentStar | WireLegacyStar): readonly ArticleProbe[] {
   if (!('probeIds' in star) || !star.probeIds?.length) return EMPTY_RESULT
-  return Object.freeze(star.probeIds.map((id) => index.probesById.get(id)).filter((item): item is ArticleProbe => item !== undefined))
+  const seen = new Set<string>()
+  return Object.freeze(star.probeIds.flatMap((id) => {
+    if (seen.has(id)) return []
+    seen.add(id)
+    const probe = index.probesById.get(id)
+    return probe ? [probe] : []
+  }))
 }
 export function publicStarsForShare(index: UniverseIndex): readonly CurrentStar[] {
   return Object.freeze([...index.starsById.values()]

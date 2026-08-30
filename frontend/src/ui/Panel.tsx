@@ -1,15 +1,102 @@
-import { useMemo } from 'react'
-import type { Dark, Evidence, Meta, Star, Universe } from '../types'
+import { useMemo, useState } from 'react'
+import { probesForStar, questionsForStar, type UniverseIndex } from '../domain/universe'
+import type { ArticleProbe, Dark, Evidence, Meta, Star, Universe } from '../types'
 import './Panel.css'
 
 interface Props {
   universe: Universe
+  index: UniverseIndex
   star: Star | null
   onClose: () => void
   onPickConcept: (concept: string) => void
   shared: boolean
+  onEnterQuestion: (questionId: string, trigger: HTMLButtonElement) => void
   /** 当前选中行星对应内容的链接，用来在列表里标出「就是这一条」 */
   highlight?: string
+}
+
+const ENTRY_LIMIT = 8
+const PUBLIC_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai',
+})
+
+function publicDate(seconds: number | undefined): string | null {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return null
+  const date = new Date(seconds * 1000)
+  return Number.isFinite(date.getTime()) ? PUBLIC_DATE_FORMATTER.format(date) : null
+}
+
+function ProbeRelation({ probe, shared }: { probe: ArticleProbe; shared: boolean }) {
+  if (shared) return null
+  const created = probe.bindings.some(({ relation }) => relation === 'created')
+  const collected = probe.bindings.some(({ relation }) => relation === 'collected')
+  if (created || collected) return <span className="entry-relations">
+    {created && <span>我创作</span>}{collected && <span>我收藏</span>}
+  </span>
+  return <span className="entry-relation-neutral">
+    {probe.discoverySources.includes('public_search') ? '公开发现' : '无个人关系'}
+  </span>
+}
+
+function SemanticEntries({ index, star, shared, onEnterQuestion }: {
+  index: UniverseIndex
+  star: Star
+  shared: boolean
+  onEnterQuestion: Props['onEnterQuestion']
+}) {
+  const questions = questionsForStar(index, star)
+  const probes = probesForStar(index, star)
+  const [questionLimit, setQuestionLimit] = useState(ENTRY_LIMIT)
+  const [probeLimit, setProbeLimit] = useState(ENTRY_LIMIT)
+  return <>
+    <section className="entry-section" aria-labelledby="panel-questions">
+      <h3 id="panel-questions">问题行星</h3>
+      {!questions.length && <p className="entry-empty">尚无已收录的问题行星。</p>}
+      <ol className="entry-list">
+        {questions.slice(0, questionLimit).map((question) => {
+          const orbit = 'questionIds' in star ? star.questionIds.indexOf(question.id) + 1 : 0
+          return <li className="entry-row" key={question.id}>
+            <span className="entry-index">{orbit ? `轨道 ${String(orbit).padStart(2, '0')}` : '已收录'}</span>
+            <strong>{question.title}</strong>
+            <span className="entry-meta">{question.answerIds.length} 个已收录回答</span>
+            <div className="entry-actions">
+              <button type="button" onClick={(event) => onEnterQuestion(question.id, event.currentTarget)}>进入问题行星</button>
+              <a href={question.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原问题">原问题 ↗</a>
+            </div>
+          </li>
+        })}
+      </ol>
+      {questionLimit < questions.length && <button className="entry-more" type="button" onClick={() => setQuestionLimit(questions.length)}>
+        展开全部 {questions.length} 个问题
+      </button>}
+    </section>
+
+    <section className="entry-section" aria-labelledby="panel-probes">
+      <h3 id="panel-probes">文章探测器 · 旁轨材料</h3>
+      {!probes.length && <p className="entry-empty">尚无已收录的文章探测器。</p>}
+      <ol className="entry-list probes">
+        {probes.slice(0, probeLimit).map((probe, position) => {
+          const date = publicDate(probe.publishedAt)
+          const counts = [
+            probe.likeCount === undefined ? null : `${probe.likeCount} 赞同`,
+            probe.commentCount === undefined ? null : `${probe.commentCount} 评论`,
+            probe.favoriteCount === undefined ? null : `${probe.favoriteCount} 收藏`,
+          ].filter((item): item is string => item !== null)
+          return <li className="entry-row" key={probe.id}>
+            <span className="entry-index">旁轨 {String(position + 1).padStart(2, '0')}</span>
+            <strong>{probe.title}</strong>
+            <span className="entry-meta">{[probe.authorName || '作者未标注', date, ...counts].filter(Boolean).join(' · ')}</span>
+            <div className="entry-provenance"><ProbeRelation probe={probe} shared={shared} /></div>
+            <a className="entry-original" href={probe.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原文章">查看原文章 ↗</a>
+          </li>
+        })}
+      </ol>
+      {probeLimit < probes.length && <button className="entry-more" type="button" onClick={() => setProbeLimit(probes.length)}>
+        展开全部 {probes.length} 篇文章
+      </button>}
+      {!!probes.length && !shared && <p className="entry-note">创作或收藏只说明内容绑定关系，不代表赞同文章立场。</p>}
+    </section>
+  </>
 }
 
 /** "2019.03" 与 "26.08" 两种写法都要吃得下 —— 前者来自 Star，后者来自 Evidence。 */
@@ -76,7 +163,7 @@ function EvidenceList({ items, shared, highlight, fresh }: {
   )
 }
 
-export function Panel({ universe, star, onClose, onPickConcept, shared, highlight }: Props) {
+export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQuestion, shared, highlight }: Props) {
   const cluster = star ? universe.clusters.find((c) => c.g === star.g) : null
   const dark: Dark | undefined = star ? universe.dark.find((d) => d.c === star.c) : undefined
   const nebula = star ? universe.nebula.find((n) => n.c === star.c) : undefined
@@ -116,6 +203,9 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
             <SpanRail star={star} meta={universe.meta} />
           </div>
 
+          <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star}
+            shared={shared} onEnterQuestion={onEnterQuestion} />
+
           <div>
             <h3>构成它的个人内容档案</h3>
             <div className="lgd">
@@ -131,7 +221,7 @@ export function Panel({ universe, star, onClose, onPickConcept, shared, highligh
               <h3>同星群的其他天体</h3>
               <div className="chips">
                 {cluster.mem.filter((m) => m !== star.c).map((m) => (
-                  <i key={m} onClick={() => onPickConcept(m)}>{m}</i>
+                  <button type="button" key={m} onClick={() => onPickConcept(m)}>{m}</button>
                 ))}
               </div>
             </div>

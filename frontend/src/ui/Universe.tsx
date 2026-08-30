@@ -209,6 +209,19 @@ export function UniverseView() {
     }
   }, [])
 
+  const enterQuestionFromPanel = useCallback((questionId: string, trigger: HTMLButtonElement) => {
+    if (!star || !('id' in star)) return
+    const selected = rendererRef.current?.selectQuestionPlanet(star.id, questionId)
+    if (!selected) return
+    focusReturnRef.current = trigger
+    focusCardFromLaneRef.current = false
+    rendererRef.current?.setWorkspaceOpen(true)
+    rendererRef.current?.suspend()
+    setPlanet(null)
+    rendererRef.current?.clearPlanet()
+    setQuestionEntry(selected)
+  }, [star])
+
   const leaveQuestionEntry = useCallback(() => {
     setQuestionEntry(null)
   }, [])
@@ -328,9 +341,10 @@ export function UniverseView() {
           onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
           getReturnFocus={getQuestionReturnFocus} />
       )}
-      <Panel universe={universe} star={star} shared={shared}
+      <Panel universe={universe} index={universeIndex} star={star} shared={shared}
         onClose={() => { setStar(null); setPlanet(null); setQuestionEntry(null); focusReturnRef.current = null; focusCardFromLaneRef.current = false; rendererRef.current?.resetView() }}
         highlight={undefined}
+        onEnterQuestion={enterQuestionFromPanel}
         onPickConcept={pickConcept} />
       <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
         shared={shared}

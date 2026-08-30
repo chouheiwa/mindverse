@@ -8,14 +8,18 @@ type Mode = 'personal' | 'retrospective' | 'prism'
 const PAGE_SIZE = 50
 const MOBILE_QUERY = '(max-width: 760px)'
 const PUBLIC_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
-  year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC',
+  year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Shanghai',
+})
+const PUBLIC_DATE_KEY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Shanghai',
 })
 
 const formatDate = (seconds: number | undefined) => {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return null
   const date = new Date(seconds * 1000)
   if (!Number.isFinite(date.getTime())) return null
-  return { label: PUBLIC_DATE_FORMATTER.format(date), dateTime: date.toISOString().slice(0, 10) }
+  const parts = Object.fromEntries(PUBLIC_DATE_KEY_FORMATTER.formatToParts(date).map(({ type, value }) => [type, value]))
+  return { label: PUBLIC_DATE_FORMATTER.format(date), dateTime: `${parts.year}-${parts.month}-${parts.day}` }
 }
 
 function OriginalAnswer({ answer }: { answer: WorkspaceAnswer }) {
@@ -41,11 +45,21 @@ function PaginatedOriginals({ answers, className = 'qw-originals' }: {
 }) {
   const [visible, setVisible] = useState(PAGE_SIZE)
   const shown = Math.min(visible, answers.length)
+  const statusRef = useRef<HTMLSpanElement>(null)
+  const focusStatusRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!focusStatusRef.current) return
+    focusStatusRef.current = false
+    statusRef.current?.focus()
+  }, [shown])
   return <>
     <ol className={className}>{answers.slice(0, shown).map((answer) => <OriginalAnswer key={answer.id} answer={answer} />)}</ol>
     <div className="qw-page">
-      <span role="status">{shown === answers.length ? `已显示全部 ${answers.length} 条` : `已显示 ${shown} / ${answers.length} 条`}</span>
-      {shown < answers.length && <button type="button" className="qw-more" onClick={() => setVisible((count) => count + PAGE_SIZE)}>加载更多</button>}
+      <span ref={statusRef} role="status" tabIndex={-1}>{shown === answers.length ? `已显示全部 ${answers.length} 条` : `已显示 ${shown} / ${answers.length} 条`}</span>
+      {shown < answers.length && <button type="button" className="qw-more" onClick={() => {
+        focusStatusRef.current = true
+        setVisible((count) => count + PAGE_SIZE)
+      }}>加载更多</button>}
     </div>
   </>
 }

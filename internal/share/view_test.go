@@ -318,3 +318,94 @@ func TestShareStoreEnforcesPerOwnerQuota(t *testing.T) {
 		t.Fatalf("over-quota create should return ErrQuota: %v", err)
 	}
 }
+
+func TestPruneReadFailurePreservesOwnerIndex(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	first, _ := store.Create("owner", view)
+	realRead := store.readFile
+	store.readFile = func(path string) ([]byte, error) {
+		if strings.HasSuffix(path, first.ID+".json") {
+			return nil, errors.New("transient read")
+		}
+		return realRead(path)
+	}
+	if _, err := store.Create("owner", view); err == nil {
+		t.Fatal("create ignored transient prune read failure")
+	}
+	if _, exists := store.byOwner[ownerKey("owner")][first.ID]; !exists {
+		t.Fatal("transient read orphaned owner index")
+	}
+}
+
+func TestPruneParseFailurePreservesOwnerIndex(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	first, _ := store.Create("owner", view)
+	store.readFile = func(string) ([]byte, error) { return []byte("{"), nil }
+	if _, err := store.Create("owner", view); err == nil {
+		t.Fatal("create ignored transient prune parse failure")
+	}
+	if _, exists := store.byOwner[ownerKey("owner")][first.ID]; !exists {
+		t.Fatal("transient parse failure orphaned owner index")
+	}
+}
+
+func TestCreateReturnsCommittedRecordWhenDirectorySyncFails(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	store.syncDir = func(string) error { return errors.New("sync failed") }
+	record, err := store.Create("owner", view)
+	if err != nil || record == nil {
+		t.Fatalf("committed create became ambiguous: record=%v err=%v", record, err)
+	}
+	if _, exists := store.byOwner[ownerKey("owner")][record.ID]; !exists {
+		t.Fatal("committed record missing owner index")
+	}
+}
+
+func TestStoreEnforcesGlobalActiveShareCeiling(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.maxFiles = 1
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	if _, err := store.Create("owner-a", view); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create("owner-b", view); !errors.Is(err, ErrQuota) {
+		t.Fatalf("global quota not enforced: %v", err)
+	}
+}
+
+func TestCreateRetriesIDCollisionWithoutOverwrite(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	view, _ := BuildView(shareUniverse(), ShareSelection{QuestionIDs: []string{"question:7"}})
+	first, _ := store.Create("owner-a", view)
+	ids := []string{first.ID, "unique_id"}
+	store.newID = func() (string, error) { id := ids[0]; ids = ids[1:]; return id, nil }
+	second, err := store.Create("owner-b", view)
+	if err != nil || second.ID != "unique_id" {
+		t.Fatalf("collision retry failed: record=%v err=%v", second, err)
+	}
+	loaded, err := store.Load(first.ID)
+	if err != nil || !sameOwner(loaded.OwnerKey, ownerKey("owner-a")) {
+		t.Fatal("collision overwrote existing share")
+	}
+}
+
+func TestNewStoreRemovesExpiredQuarantineFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.corrupt")
+	if err := os.WriteFile(path, []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-quarantineTTL - time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expired quarantine retained: %v", err)
+	}
+}

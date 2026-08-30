@@ -1,4 +1,4 @@
-import type { Generation, OAuthStatus, Universe } from './types'
+import type { Generation, OAuthStatus } from './types'
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { credentials: 'same-origin', ...init })
@@ -13,12 +13,7 @@ export const getOAuthStatus = () => json<OAuthStatus>('/api/oauth/status')
 export const getGeneration = () => json<Generation>('/api/universe')
 export const startGeneration = () => json<Generation>('/api/universe', { method: 'POST' })
 export const wipeSession = () => json<{ ok: boolean }>('/api/session/data', { method: 'DELETE' })
-export const createShare = () => json<{ id: string; url: string; expiresAt: string }>('/api/share', { method: 'POST' })
-
-export const getShare = (id: string) =>
-  json<{ id: string; createdAt: string; expiresAt: string; universe: Universe }>(`/api/share/${id}`)
-
-/** 分享路由 /s/{id}；命中时星图由快照重建，证据只剩链接。 */
+/** 分享路由 /s/{id}；Task 8 将接入新的逐项公开视图。 */
 export function shareIdFromPath(): string | null {
   const m = location.pathname.match(/^\/s\/([A-Za-z0-9_-]+)/)
   return m ? m[1] : null

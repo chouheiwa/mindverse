@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -223,6 +224,21 @@ func TestSessionOwnershipCookieLastsThroughShareTTL(t *testing.T) {
 	}
 }
 
+func TestSessionLookupEvictsIdleSessionsBeyondShareTTL(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	oldID, _ := randomToken()
+	s.mu.Lock()
+	s.sess[oldID] = &session{id: oldID, lastSeen: time.Now().Add(-share.TTL - time.Minute)}
+	s.mu.Unlock()
+	_ = startSession(t, s)
+	s.mu.Lock()
+	_, exists := s.sess[oldID]
+	s.mu.Unlock()
+	if exists {
+		t.Fatal("idle session beyond ownership TTL was not evicted")
+	}
+}
+
 type blockingProvider struct{ corpus *zhihu.Corpus }
 
 func (p blockingProvider) Fetch(context.Context) (*zhihu.Corpus, error) { return p.corpus, nil }
@@ -289,8 +305,9 @@ func TestWipeInvalidatesRunningGeneration(t *testing.T) {
 }
 
 type blockingOAuthTransport struct {
-	entered chan struct{}
-	release chan struct{}
+	entered  chan struct{}
+	release  chan struct{}
+	profiles atomic.Int32
 }
 
 func (b *blockingOAuthTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -299,6 +316,7 @@ func (b *blockingOAuthTransport) RoundTrip(request *http.Request) (*http.Respons
 		<-b.release
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"secret","expires_in":3600}`)), Request: request}, nil
 	}
+	b.profiles.Add(1)
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":{"name":"Alice"}}`)), Request: request}, nil
 }
 
@@ -329,6 +347,9 @@ func TestWipeInvalidatesOAuthCallbackCommit(t *testing.T) {
 	}
 	close(transport.release)
 	callback := <-callbackDone
+	if got := transport.profiles.Load(); got != 0 {
+		t.Fatalf("wipe allowed %d authenticated profile calls after exchange", got)
+	}
 	if callback.Code != http.StatusConflict {
 		t.Fatalf("stale callback status=%d body=%s", callback.Code, callback.Body.String())
 	}

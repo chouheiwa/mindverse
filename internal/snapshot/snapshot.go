@@ -20,6 +20,7 @@ import (
 
 // TTL 是快照的存活期。用户也可以随时销毁。
 const TTL = 30 * 24 * time.Hour
+const maxClockSkew = 5 * time.Minute
 
 // Snapshot is a private, version-aware universe snapshot.
 type Snapshot struct {
@@ -32,15 +33,16 @@ type Snapshot struct {
 
 // Store 是快照存储。
 type Store struct {
-	dir string
-	mu  sync.RWMutex
+	dir     string
+	mu      sync.RWMutex
+	syncDir func(string) error
 }
 
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建快照目录失败: %w", err)
 	}
-	return &Store{dir: dir}, nil
+	return &Store{dir: dir, syncDir: syncDir}, nil
 }
 
 func newID() (string, error) {
@@ -95,38 +97,42 @@ func (s *Store) Save(u *engine.Universe) (*Snapshot, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := atomicWrite(s.path(id), b); err != nil {
+	committed, err := atomicWrite(s.path(id), b, s.syncDir)
+	if err != nil && !committed {
 		return nil, fmt.Errorf("写入快照失败: %w", err)
 	}
 	return snap, nil
 }
 
-func atomicWrite(path string, data []byte) error {
+func atomicWrite(path string, data []byte, syncDirectory func(string) error) (bool, error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".snapshot-*.tmp")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		return err
+		return false, err
 	}
-	return syncDir(filepath.Dir(path))
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // Load 读取快照；过期即视为不存在。
@@ -160,6 +166,11 @@ func (s *Store) Load(id string) (*Snapshot, error) {
 	}
 	snap.Legacy = !hasSchema && !hasAnalysis
 	if snap.Legacy {
+		now := time.Now()
+		if snap.CreatedAt.IsZero() || snap.ExpiresAt.IsZero() || snap.CreatedAt.After(now.Add(maxClockSkew)) ||
+			!snap.ExpiresAt.After(snap.CreatedAt) || snap.ExpiresAt.Sub(snap.CreatedAt) > TTL {
+			return nil, fmt.Errorf("快照已损坏")
+		}
 		// Compatibility is deliberately one-way: old evidence is never inferred
 		// to be a public question, answer, or article probe.
 		snap.Universe.Questions = []engine.QuestionPlanet{}

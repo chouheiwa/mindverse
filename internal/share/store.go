@@ -22,7 +22,9 @@ import (
 const (
 	TTL               = 30 * 24 * time.Hour
 	MaxActivePerOwner = 20
+	MaxActiveShares   = 1000
 	maxClockSkew      = 5 * time.Minute
+	quarantineTTL     = 7 * 24 * time.Hour
 )
 
 var (
@@ -40,21 +42,34 @@ type Record struct {
 }
 
 type Store struct {
-	dir     string
-	mu      sync.RWMutex
-	byOwner map[string]map[string]struct{}
+	dir         string
+	mu          sync.RWMutex
+	byOwner     map[string]map[string]struct{}
+	activeFiles int
+	maxFiles    int
+	readFile    func(string) ([]byte, error)
+	syncDir     func(string) error
+	newID       func() (string, error)
 }
 
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create share directory: %w", err)
 	}
-	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}}
+	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}, maxFiles: MaxActiveShares, readFile: os.ReadFile, syncDir: syncDir, newID: newID}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	for _, entry := range entries {
+		if !entry.IsDir() && strings.Contains(entry.Name(), ".corrupt") {
+			if info, infoErr := entry.Info(); infoErr == nil && time.Since(info.ModTime()) > quarantineTTL {
+				if err := removeAndSyncWith(filepath.Join(dir, entry.Name()), s.syncDir); err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
@@ -72,6 +87,7 @@ func NewStore(dir string) (*Store, error) {
 			continue
 		}
 		if legacy && decodeErr == nil {
+			s.activeFiles++
 			continue
 		}
 		if decodeErr != nil {
@@ -81,6 +97,7 @@ func NewStore(dir string) (*Store, error) {
 			continue
 		}
 		s.addOwner(record.OwnerKey, record.ID)
+		s.activeFiles++
 	}
 	return s, nil
 }
@@ -92,17 +109,8 @@ func (s *Store) Create(ownerSession string, view ShareView) (*Record, error) {
 	if err := view.Validate(); err != nil {
 		return nil, err
 	}
-	id, err := newID()
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now()
 	key := ownerKey(ownerSession)
-	record := &Record{ID: id, CreatedAt: now, ExpiresAt: now.Add(TTL), OwnerKey: key, View: view}
-	b, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.pruneExpiredOwned(key, now); err != nil {
@@ -111,11 +119,31 @@ func (s *Store) Create(ownerSession string, view ShareView) (*Record, error) {
 	if len(s.byOwner[key]) >= MaxActivePerOwner {
 		return nil, ErrQuota
 	}
-	if err := atomicWrite(s.path(id), b); err != nil {
+	if s.activeFiles >= s.maxFiles {
+		return nil, ErrQuota
+	}
+	for attempts := 0; attempts < 8; attempts++ {
+		id, err := s.newID()
+		if err != nil {
+			return nil, err
+		}
+		record := &Record{ID: id, CreatedAt: now, ExpiresAt: now.Add(TTL), OwnerKey: key, View: view}
+		b, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		committed, err := atomicWrite(s.path(id), b, s.syncDir)
+		if committed {
+			s.addOwner(key, id)
+			s.activeFiles++
+			return record, nil
+		}
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
 		return nil, err
 	}
-	s.addOwner(key, id)
-	return record, nil
+	return nil, fmt.Errorf("share ID collision limit exceeded")
 }
 
 func (s *Store) Load(id string) (*Record, error) {
@@ -133,23 +161,29 @@ func (s *Store) Load(id string) (*Record, error) {
 	if errors.Is(err, errExpired) {
 		_ = removeAndSync(path)
 		s.removeIDFromOwners(id)
+		s.activeFiles--
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		_ = quarantine(path)
 		s.removeIDFromOwners(id)
+		s.activeFiles--
 		return nil, ErrNotFound
 	}
 	return record, nil
 }
 
 func (s *Store) DeleteOwned(id, ownerSession string) error {
-	record, err := s.Load(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := s.readFile(s.path(id))
+	if err != nil {
+		return ErrNotFound
+	}
+	record, _, err := decodeRecord(id, b, time.Now())
 	if err != nil || record.OwnerKey == "" || !sameOwner(record.OwnerKey, ownerKey(ownerSession)) {
 		return ErrNotFound
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := removeAndSync(s.path(id)); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
@@ -157,6 +191,7 @@ func (s *Store) DeleteOwned(id, ownerSession string) error {
 		return err
 	}
 	s.removeOwner(record.OwnerKey, id)
+	s.activeFiles--
 	return nil
 }
 
@@ -173,8 +208,9 @@ func (s *Store) DeleteAllOwned(ownerSession string) error {
 		if err := removeAndSync(s.path(id)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		s.removeOwner(key, id)
+		s.activeFiles--
 	}
-	delete(s.byOwner, key)
 	return nil
 }
 
@@ -301,10 +337,14 @@ func consumeJSONValue(decoder *json.Decoder) error {
 
 func (s *Store) pruneExpiredOwned(key string, now time.Time) error {
 	for id := range s.byOwner[key] {
-		b, err := os.ReadFile(s.path(id))
+		b, err := s.readFile(s.path(id))
 		if err != nil {
-			s.removeOwner(key, id)
-			continue
+			if os.IsNotExist(err) {
+				s.removeOwner(key, id)
+				s.activeFiles--
+				continue
+			}
+			return err
 		}
 		_, _, err = decodeRecord(id, b, now)
 		if errors.Is(err, errExpired) {
@@ -312,6 +352,11 @@ func (s *Store) pruneExpiredOwned(key string, now time.Time) error {
 				return err
 			}
 			s.removeOwner(key, id)
+			s.activeFiles--
+			continue
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -371,33 +416,43 @@ func validID(id string) bool {
 	return true
 }
 
-func atomicWrite(path string, data []byte) error {
+func atomicWrite(path string, data []byte, syncDirectory func(string) error) (bool, error) {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".share-*.tmp")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Link(tmpName, path); err != nil {
+		return false, err
+	}
+	if err := syncDirectory(dir); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func removeAndSyncWith(path string, syncDirectory func(string) error) error {
+	if err := os.Remove(path); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return syncDir(dir)
+	return syncDirectory(filepath.Dir(path))
 }
 
 func removeAndSync(path string) error {

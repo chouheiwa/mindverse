@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
-import { getShare, pollUntilDone, shareIdFromPath } from '../api'
+import { pollUntilDone, shareIdFromPath } from '../api'
 import { Renderer } from '../starmap/Renderer'
 import { Loading } from './Loading'
 import { Panel } from './Panel'
@@ -51,9 +51,7 @@ export function UniverseView() {
       try {
         if (id) {
           setShared(true)
-          setGen({ stage: '正在打开这张星图', progress: 40 })
-          const snap = await getShare(id)
-          setUniverse(snap.universe)
+          setError('这是新版逐项分享。问题行星阅读界面即将接入，当前版本不会将它误当成私有星图打开。')
           return
         }
         const g = await pollUntilDone((p) => setGen({ stage: p.stage, progress: p.progress }), ac.signal)
@@ -212,7 +210,7 @@ export function UniverseView() {
           <button className="uv-act" onClick={() => setCard(true)}>宇宙身份证</button>
         </div>
       </div>
-      {card && <Card universe={universe} canShare={!shared} onClose={() => setCard(false)} />}
+      {card && <Card universe={universe} onClose={() => setCard(false)} />}
       <PlanetCard ref={cardRef} planet={planet} shared={shared}
         onClose={() => { setPlanet(null); rendererRef.current?.clearPlanet() }} />
       <Panel universe={universe} star={star} shared={shared}

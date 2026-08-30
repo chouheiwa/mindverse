@@ -51,6 +51,7 @@ func TestLegacySnapshotRemainsReadableWithoutUpgradingEvidence(t *testing.T) {
 	}{{name: "both missing"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			now := time.Now()
 			universe := map[string]any{
 				"stars":     []any{map[string]any{"c": "legacy", "questionIds": []string{"question:7"}, "probeIds": []string{"article:9"}, "ev": []any{map[string]any{"t": "old", "u": "https://www.zhihu.com/question/7"}}}},
 				"questions": []any{map[string]any{"id": "question:7"}},
@@ -64,7 +65,7 @@ func TestLegacySnapshotRemainsReadableWithoutUpgradingEvidence(t *testing.T) {
 				universe["analysisVersion"] = tc.analysis
 			}
 			legacy := map[string]any{
-				"id": "legacy_1", "createdAt": "2026-08-01T00:00:00Z", "expiresAt": "2099-08-01T00:00:00Z",
+				"id": "legacy_1", "createdAt": now.Add(-time.Hour), "expiresAt": now.Add(TTL - time.Hour),
 				"universe": universe,
 			}
 			b, _ := json.Marshal(legacy)
@@ -84,6 +85,32 @@ func TestLegacySnapshotRemainsReadableWithoutUpgradingEvidence(t *testing.T) {
 			}
 			if len(got.Universe.Stars[0].QuestionIDs) != 0 || len(got.Universe.Stars[0].ProbeIDs) != 0 {
 				t.Fatalf("legacy star retained new public references: %+v", got.Universe.Stars[0])
+			}
+		})
+	}
+}
+
+func TestLegacySnapshotRejectsInvalidLifetime(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name      string
+		createdAt time.Time
+		expiresAt time.Time
+	}{
+		{"future", now.Add(10 * time.Minute), now.Add(time.Hour)},
+		{"over ttl", now.Add(-time.Hour), now.Add(-time.Hour).Add(TTL + time.Second)},
+		{"reversed", now, now.Add(-time.Second)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			snap := map[string]any{"id": "legacy_bad", "createdAt": tc.createdAt, "expiresAt": tc.expiresAt, "universe": map[string]any{}}
+			b, _ := json.Marshal(snap)
+			if err := os.WriteFile(filepath.Join(dir, "legacy_bad.json"), b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store, _ := NewStore(dir)
+			if _, err := store.Load("legacy_bad"); err == nil {
+				t.Fatal("invalid legacy lifetime was accepted")
 			}
 		})
 	}
@@ -249,6 +276,18 @@ func TestSaveDoesNotMutateCaller(t *testing.T) {
 	}
 	if ContainsProse(live) != true {
 		t.Fatal("第二次保存后调用方的数据被清空了")
+	}
+}
+
+func TestSaveReturnsCommittedSnapshotWhenDirectorySyncFails(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.syncDir = func(string) error { return os.ErrInvalid }
+	snap, err := store.Save(sample())
+	if err != nil || snap == nil || snap.ID == "" {
+		t.Fatalf("committed save became ambiguous: snap=%v err=%v", snap, err)
+	}
+	if _, statErr := os.Stat(store.path(snap.ID)); statErr != nil {
+		t.Fatalf("committed snapshot missing: %v", statErr)
 	}
 }
 

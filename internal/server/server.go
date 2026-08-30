@@ -54,6 +54,8 @@ type session struct {
 	id           string
 	epoch        uint64
 	genCancel    context.CancelFunc
+	authCancel   context.CancelFunc
+	authOp       uint64
 	state        string
 	token        *zhihu.Token
 	stateChecked bool
@@ -143,6 +145,7 @@ func fromCtx(r *http.Request) *session {
 }
 
 func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
+	s.evictIdleSessions(time.Now())
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
@@ -167,6 +170,19 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) *session {
 	s.mu.Unlock()
 	s.setSessionCookie(w, id)
 	return sess
+}
+
+func (s *Server) evictIdleSessions(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, sess := range s.sess {
+		sess.mu.Lock()
+		idle := now.Sub(sess.lastSeen) > share.TTL
+		sess.mu.Unlock()
+		if idle {
+			delete(s.sess, id)
+		}
+	}
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {
@@ -285,11 +301,42 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
+	sess.opMu.Lock()
+	sess.mu.Lock()
+	if sess.epoch != epoch || sess.state != expected || sess.authCancel != nil {
+		sess.mu.Unlock()
+		sess.opMu.Unlock()
+		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
+		return
+	}
+	sess.authCancel = cancel
+	sess.authOp++
+	authOp := sess.authOp
+	sess.mu.Unlock()
+	sess.opMu.Unlock()
+	defer func() {
+		sess.opMu.Lock()
+		sess.mu.Lock()
+		if sess.authOp == authOp {
+			sess.authCancel = nil
+		}
+		sess.mu.Unlock()
+		sess.opMu.Unlock()
+	}()
 	tok, err := s.oauth.Exchange(ctx, code)
 	if err != nil {
 		// 不回显 code / app_key / token 的任何片段
 		log.Printf("token 交换失败: %v", err)
 		writeErr(w, 502, "换取授权失败，请重试")
+		return
+	}
+	sess.opMu.Lock()
+	sess.mu.Lock()
+	stale := sess.epoch != epoch || sess.state != expected || sess.authOp != authOp
+	sess.mu.Unlock()
+	sess.opMu.Unlock()
+	if stale {
+		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
 		return
 	}
 	cl := zhihu.NewClient(s.cfg.AccessSecret, tok.AccessToken)
@@ -298,7 +345,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	sess.opMu.Lock()
 	defer sess.opMu.Unlock()
 	sess.mu.Lock()
-	if sess.epoch != epoch || sess.state != expected {
+	if sess.epoch != epoch || sess.state != expected || sess.authOp != authOp {
 		sess.mu.Unlock()
 		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
 		return
@@ -318,6 +365,11 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 		sess.genCancel()
 		sess.genCancel = nil
 	}
+	if sess.authCancel != nil {
+		sess.authCancel()
+		sess.authCancel = nil
+	}
+	sess.authOp++
 	sess.token, sess.profile, sess.state, sess.stateChecked = nil, nil, "", false
 	sess.gen = generation{}
 	sess.mu.Unlock()
@@ -704,6 +756,11 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 		sess.genCancel()
 		sess.genCancel = nil
 	}
+	if sess.authCancel != nil {
+		sess.authCancel()
+		sess.authCancel = nil
+	}
+	sess.authOp++
 	sess.gen = generation{}
 	sess.token, sess.profile, sess.seedCorpus = nil, nil, nil
 	sess.state, sess.stateChecked = "", false

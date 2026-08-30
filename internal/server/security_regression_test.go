@@ -14,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chouheiwa/mindverse/internal/config"
+	"github.com/chouheiwa/mindverse/internal/share"
 )
 
 type countingOAuthTransport struct {
@@ -33,7 +36,7 @@ func (c *countingOAuthTransport) RoundTrip(req *http.Request) (*http.Response, e
 }
 
 func configureOAuth(s *Server, transport http.RoundTripper) {
-	s.cfg.AppID, s.cfg.AppKey, s.cfg.RedirectURI = "1", "key", "https://example.com/auth/callback"
+	s.cfg.AppID, s.cfg.AppKey, s.cfg.AccessSecret, s.cfg.RedirectURI = "1", "key", "access-secret", "https://example.com/auth/callback"
 	s.oauth.AppID, s.oauth.AppKey, s.oauth.RedirectURI = s.cfg.AppID, s.cfg.AppKey, s.cfg.RedirectURI
 	s.oauth.HTTP = &http.Client{Transport: transport}
 }
@@ -159,27 +162,223 @@ func TestAttackerChosenFormatValidCookieGetsFreshServerID(t *testing.T) {
 	if adopted {
 		t.Fatal("attacker-chosen ID became a server session")
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, ".sessions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), cookies[0].Value) {
-		t.Fatal("persistent session registry stored the bearer cookie in plaintext")
+	if _, err := os.Stat(filepath.Join(dir, ".sessions")); !os.IsNotExist(err) {
+		t.Fatalf("anonymous request persisted a registry: %v", err)
 	}
 }
 
-func TestPersistentSessionRegistryIsCapacityBounded(t *testing.T) {
-	r := &sessionRegistry{path: filepath.Join(t.TempDir(), ".sessions"), records: map[string]sessionRecord{}, maxRecords: 1}
-	a, _ := randomToken()
-	b, _ := randomToken()
-	if err := r.put(a, "owner-a", time.Now().Add(time.Hour)); err != nil {
+func TestTenThousandAnonymousStatusesNeverPersistOwnerRegistry(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	s.maxSessions = 10_001
+	writes := 0
+	s.registry.onPersist = func() { writes++ }
+	for range 10_000 {
+		if rr := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil); rr.Code != http.StatusOK {
+			t.Fatalf("anonymous status=%d", rr.Code)
+		}
+	}
+	if writes != 0 || len(s.registry.records) != 0 {
+		t.Fatalf("anonymous statuses persisted owners: writes=%d records=%d", writes, len(s.registry.records))
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".sessions")); !os.IsNotExist(err) {
+		t.Fatalf("anonymous statuses created registry file: %v", err)
+	}
+}
+
+func TestOwnerRegistryPromotesOnShareAndDemotesAfterLastDelete(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	writes := 0
+	s.registry.onPersist = func() { writes++ }
+	cookie := startSession(t, s)
+	for range 20 {
+		if rr := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, cookie); rr.Code != http.StatusOK {
+			t.Fatal(rr.Code)
+		}
+	}
+	if writes != 0 {
+		t.Fatalf("ordinary GET persisted registry %d times", writes)
+	}
+	installUniverse(t, s, cookie, serverUniverse())
+	id := createShare(t, s, cookie, "question:7")
+	if writes == 0 || len(s.registry.records) != 1 {
+		t.Fatalf("share owner not promoted: writes=%d records=%d", writes, len(s.registry.records))
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".sessions")); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.put(b, "owner-b", time.Now().Add(time.Hour)); !errors.Is(err, errSessionCapacity) {
-		t.Fatalf("second registry entry error=%v, want capacity", err)
+	if rr := doRequest(t, s.Routes(), http.MethodDelete, "/api/share/"+id, nil, cookie); rr.Code != http.StatusOK {
+		t.Fatal(rr.Code)
 	}
-	if len(r.records) != 1 {
-		t.Fatalf("registry exceeded bound: %d", len(r.records))
+	if len(s.registry.records) != 0 {
+		t.Fatalf("last share deletion retained owner: %d", len(s.registry.records))
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".sessions")); !os.IsNotExist(err) {
+		t.Fatalf("empty registry file survived: %v", err)
+	}
+}
+
+func TestMissingRegistryQuarantinesPreRegistryShares(t *testing.T) {
+	dir := t.TempDir()
+	store, err := share.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := share.BuildView(serverUniverse(), share.ShareSelection{QuestionIDs: []string{"question:7"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Create("81fb-owner-session", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(&config.Config{SnapshotDir: dir, WebDir: t.TempDir()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := doRequest(t, s.Routes(), http.MethodGet, "/api/share/"+record.ID, nil, nil); rr.Code != http.StatusNotFound {
+		t.Fatalf("unprovable pre-registry share stayed public: %d", rr.Code)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, record.ID+".owner-proof-missing*"))
+	if len(matches) != 1 {
+		t.Fatalf("missing auditable quarantine: %v", matches)
+	}
+}
+
+func TestPreOwnerRegistryFormatQuarantines81fbShare(t *testing.T) {
+	dir := t.TempDir()
+	store, err := share.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := share.BuildView(serverUniverse(), share.ShareSelection{QuestionIDs: []string{"question:7"}})
+	record, err := store.Create("81fb-owner-session", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 81fb257 persisted a bare session-hash map without a version envelope.
+	oldRegistry := `{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"owner":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","expiresAt":"2099-01-01T00:00:00Z"}}`
+	if err := os.WriteFile(filepath.Join(dir, ".sessions"), []byte(oldRegistry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(&config.Config{SnapshotDir: dir, WebDir: t.TempDir()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := doRequest(t, s.Routes(), http.MethodGet, "/api/share/"+record.ID, nil, nil); rr.Code != http.StatusNotFound {
+		t.Fatalf("81fb share survived unverifiable migration: %d", rr.Code)
+	}
+	registryQuarantine, _ := filepath.Glob(filepath.Join(dir, ".sessions.registry-invalid*"))
+	shareQuarantine, _ := filepath.Glob(filepath.Join(dir, record.ID+".owner-proof-missing*"))
+	if len(registryQuarantine) != 1 || len(shareQuarantine) != 1 {
+		t.Fatalf("old-format migration was not auditable: registry=%v share=%v", registryQuarantine, shareQuarantine)
+	}
+}
+
+func TestCorruptRegistryStartsFailClosedAndQuarantinesShares(t *testing.T) {
+	dir := t.TempDir()
+	store, err := share.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := share.BuildView(serverUniverse(), share.ShareSelection{QuestionIDs: []string{"question:7"}})
+	record, err := store.Create("owner", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".sessions"), []byte(`{"version":"broken"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(&config.Config{SnapshotDir: dir, WebDir: t.TempDir()}, nil)
+	if err != nil {
+		t.Fatalf("corrupt registry prevented safe startup: %v", err)
+	}
+	if rr := doRequest(t, s.Routes(), http.MethodGet, "/api/share/"+record.ID, nil, nil); rr.Code != http.StatusNotFound {
+		t.Fatal(rr.Code)
+	}
+	registryQuarantine, _ := filepath.Glob(filepath.Join(dir, ".sessions.registry-invalid*"))
+	shareQuarantine, _ := filepath.Glob(filepath.Join(dir, record.ID+".owner-proof-missing*"))
+	if len(registryQuarantine) != 1 || len(shareQuarantine) != 1 {
+		t.Fatalf("missing corrupt migration audit files: registry=%v share=%v", registryQuarantine, shareQuarantine)
+	}
+}
+
+func TestRegistryPersistenceFailuresRollbackMemoryAndBlockShareCreation(t *testing.T) {
+	dir := t.TempDir()
+	r := newSessionRegistry(dir)
+	id, _ := randomToken()
+	owner, _ := randomToken()
+	r.renameFile = func(string, string) error { return errors.New("rename failed") }
+	if err := r.promote(id, owner, time.Now().Add(time.Hour)); err == nil {
+		t.Fatal("rename failure accepted")
+	}
+	if len(r.records) != 0 {
+		t.Fatalf("rename failure mutated memory: %v", r.records)
+	}
+
+	s := testServer(t, t.TempDir())
+	cookie := startSession(t, s)
+	installUniverse(t, s, cookie, serverUniverse())
+	digest := previewDigest(t, s, cookie, "question:7")
+	s.registry.renameFile = func(string, string) error { return errors.New("rename failed") }
+	rr := doRequest(t, s.Routes(), http.MethodPost, "/api/share", map[string]any{"questionIds": []string{"question:7"}, "digest": digest}, cookie)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("share created without owner proof: %d %s", rr.Code, rr.Body.String())
+	}
+	entries, _ := filepath.Glob(filepath.Join(s.cfg.SnapshotDir, "*.json"))
+	if len(entries) != 0 {
+		t.Fatalf("owner persistence failure created public share: %v", entries)
+	}
+}
+
+func TestRegistryUsesDurablePrivateFileAndRollsBackOnDirectorySyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	r := newSessionRegistry(dir)
+	id, _ := randomToken()
+	owner, _ := randomToken()
+	if err := r.promote(id, owner, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, ".sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("registry permissions=%o", info.Mode().Perm())
+	}
+
+	r2 := newSessionRegistry(t.TempDir())
+	r2.syncDir = func(string) error { return errors.New("dir sync failed") }
+	if err := r2.promote(id, owner, time.Now().Add(time.Hour)); err == nil {
+		t.Fatal("directory sync failure accepted")
+	}
+	if len(r2.records) != 0 {
+		t.Fatalf("directory sync failure mutated memory: %v", r2.records)
+	}
+}
+
+func TestRegistryLoadRepairsFileAndDirectoryPermissions(t *testing.T) {
+	dir := t.TempDir()
+	r := newSessionRegistry(dir)
+	id, _ := randomToken()
+	owner, _ := randomToken()
+	if err := r.promote(id, owner, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, ".sessions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, err := loadSessionRegistry(dir, time.Now()); err != nil || state != registryCurrent {
+		t.Fatalf("reload state=%q err=%v", state, err)
+	}
+	dirInfo, _ := os.Stat(dir)
+	fileInfo, _ := os.Stat(filepath.Join(dir, ".sessions"))
+	if dirInfo.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("unsafe repaired permissions: dir=%o registry=%o", dirInfo.Mode().Perm(), fileInfo.Mode().Perm())
 	}
 }
 
@@ -293,23 +492,24 @@ func TestStateChangingRoutesRejectCrossOriginBrowsersBeforeCreatingSession(t *te
 
 func TestOAuthStatusDoesNotExposeCredentialDiagnostics(t *testing.T) {
 	s := testServer(t, t.TempDir())
-	s.cfg.AppKey = "super-secret-app-key"
-	s.cfg.AccessSecret = "super-secret-access-secret"
-	rr := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil)
-	body := rr.Body.String()
-	for _, forbidden := range []string{"credentials", "sha256Prefix", "length", "ZHIHU_OAUTH_APP_KEY", "ZHIHU_ACCESS_SECRET", "super-secret"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("OAuth status leaked %q: %s", forbidden, body)
+	for _, credentials := range [][2]string{{"x", "different"}, {"same-secret", "same-secret"}, {"super-secret-app-key", "super-secret-access-secret"}} {
+		s.cfg.AppKey, s.cfg.AccessSecret = credentials[0], credentials[1]
+		rr := doRequest(t, s.Routes(), http.MethodGet, "/api/oauth/status", nil, nil)
+		body := rr.Body.String()
+		for _, forbidden := range []string{"credentials", "sha256Prefix", "length", "ZHIHU_OAUTH_APP_KEY", "ZHIHU_ACCESS_SECRET", "APP_KEY_TOO_SHORT", "APP_KEY_USED", "super-secret", "same-secret"} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("OAuth status leaked %q: %s", forbidden, body)
+			}
 		}
-	}
-	var response map[string]json.RawMessage
-	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	allowed := map[string]bool{"configured": true, "localOnly": true, "authorized": true, "appId": true, "redirectUri": true, "profile": true, "stateVerified": true, "csrfClaimAllowed": true, "source": true, "warnings": true}
-	for key := range response {
-		if !allowed[key] {
-			t.Fatalf("unexpected OAuth status field %q", key)
+		var response map[string]json.RawMessage
+		if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		allowed := map[string]bool{"configured": true, "localOnly": true, "authorized": true, "appId": true, "redirectUri": true, "profile": true, "stateVerified": true, "csrfClaimAllowed": true, "source": true, "warnings": true}
+		for key := range response {
+			if !allowed[key] {
+				t.Fatalf("unexpected OAuth status field %q", key)
+			}
 		}
 	}
 }

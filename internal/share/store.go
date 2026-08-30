@@ -61,6 +61,9 @@ func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create share directory: %w", err)
 	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("secure share directory: %w", err)
+	}
 	s := &Store{dir: dir, byOwner: map[string]map[string]struct{}{}, legacyIDs: map[string]struct{}{}, maxFiles: MaxActiveShares, readFile: os.ReadFile, syncDir: syncDir, newID: newID, removeFile: removeAndSync, quarantineFile: quarantine, warn: func(message string, err error) { log.Printf("%s: %v", message, err) }}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -229,6 +232,68 @@ func (s *Store) DeleteAllOwned(ownerSession string) error {
 			return err
 		}
 		s.removeOwner(key, id)
+		s.activeFiles--
+	}
+	return nil
+}
+
+// OwnerKeys returns the current persisted owner hashes. It never exposes the
+// owner capability itself and is used to reconcile the separate revocation registry.
+func (s *Store) OwnerKeys() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := make([]string, 0, len(s.byOwner))
+	for key := range s.byOwner {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *Store) HasOwner(ownerSession string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.byOwner[ownerKey(ownerSession)]) > 0
+}
+
+// QuarantineUnproven moves every share whose revocation owner cannot be proven
+// by the current registry out of the public .json namespace. Legacy shares have
+// no owner proof and are always quarantined.
+func (s *Store) QuarantineUnproven(proven map[string]struct{}, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := make([]string, 0, len(s.byOwner))
+	for key := range s.byOwner {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, ok := proven[key]; ok {
+			continue
+		}
+		ids := make([]string, 0, len(s.byOwner[key]))
+		for id := range s.byOwner[key] {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if err := quarantineReason(s.path(id), reason); err != nil {
+				return err
+			}
+			s.removeOwner(key, id)
+			s.activeFiles--
+		}
+	}
+	legacy := make([]string, 0, len(s.legacyIDs))
+	for id := range s.legacyIDs {
+		legacy = append(legacy, id)
+	}
+	sort.Strings(legacy)
+	for _, id := range legacy {
+		if err := quarantineReason(s.path(id), reason); err != nil {
+			return err
+		}
+		delete(s.legacyIDs, id)
 		s.activeFiles--
 	}
 	return nil
@@ -546,6 +611,17 @@ func removeAndSync(path string) error {
 
 func quarantine(path string) error {
 	target := strings.TrimSuffix(path, ".json") + ".corrupt"
+	if _, err := os.Stat(target); err == nil {
+		target += fmt.Sprintf("-%d", time.Now().UnixNano())
+	}
+	if err := os.Rename(path, target); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func quarantineReason(path, reason string) error {
+	target := strings.TrimSuffix(path, ".json") + "." + reason
 	if _, err := os.Stat(target); err == nil {
 		target += fmt.Sprintf("-%d", time.Now().UnixNano())
 	}

@@ -8,8 +8,10 @@ const normalizeGeneration = ({ universe, ...generation }: WireGeneration): Gener
   const parsed = parseUniverse(universe)
   return { ...generation, universe: indexUniverse(parsed).universe }
 }
-export const getGeneration = () => json<WireGeneration>('/api/universe').then(normalizeGeneration)
-export const startGeneration = () => json<WireGeneration>('/api/universe', { method: 'POST' }).then(normalizeGeneration)
+export const getGeneration = (signal?: AbortSignal) =>
+  json<WireGeneration>('/api/universe', { signal }).then(normalizeGeneration)
+export const startGeneration = (signal?: AbortSignal) =>
+  json<WireGeneration>('/api/universe', { method: 'POST', signal }).then(normalizeGeneration)
 export const wipeSession = () => json<{ ok: boolean }>('/api/session/data', { method: 'DELETE' })
 
 /** 生成是异步的（要跑模型），轮询直到完成。 */
@@ -17,16 +19,34 @@ export async function pollUntilDone(
   onProgress: (g: Generation) => void,
   signal?: AbortSignal,
 ): Promise<Generation> {
-  let g = await getGeneration()
+  const aborted = () => new DOMException('已取消', 'AbortError')
+  const wait = (milliseconds: number) => new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(aborted())
+      return
+    }
+    const timer = setTimeout(done, milliseconds)
+    function done() {
+      signal?.removeEventListener('abort', cancel)
+      resolve()
+    }
+    function cancel() {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', cancel)
+      reject(aborted())
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
+  })
+  let g = await getGeneration(signal)
+  if (signal?.aborted) throw aborted()
   if (g.state === 'done' && g.universe) return g
   if (g.state !== 'running') {
-    g = await startGeneration()
+    g = await startGeneration(signal)
     if (g.error) throw new Error(g.error)
   }
   for (let i = 0; i < 400; i++) {
-    if (signal?.aborted) throw new Error('已取消')
-    await new Promise((r) => setTimeout(r, 1200))
-    g = await getGeneration()
+    await wait(1200)
+    g = await getGeneration(signal)
     if (g.state === 'failed') throw new Error(g.error || '生成失败')
     if (g.state === 'done' && g.universe) return g
     onProgress(g)

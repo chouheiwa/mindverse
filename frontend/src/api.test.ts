@@ -2,7 +2,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { getGeneration } from './api'
+import { getGeneration, pollUntilDone, startGeneration } from './api'
 import { createShare, deleteShare, getShare, previewShare } from './shareApi'
 import { shareIdFromPath } from './shareRoute'
 import { shareFixture } from './domain/share.test'
@@ -23,6 +23,43 @@ const response = (universe: unknown) => new Response(JSON.stringify({
 afterEach(() => vi.unstubAllGlobals())
 
 describe('/api/universe boundary', () => {
+  test('propagates AbortSignal and never starts generation after an aborted initial GET', async () => {
+    let resolveGet!: (response: Response) => void
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { resolveGet = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const pending = pollUntilDone(() => {}, controller.signal)
+    controller.abort()
+    resolveGet(new Response(JSON.stringify({ state: 'idle', stage: '', progress: 0, filtered: 0, source: 'mock', calls: 0 }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal)
+
+    fetchMock.mockResolvedValue(response(golden))
+    await getGeneration(controller.signal).catch(() => undefined)
+    await startGeneration(controller.signal).catch(() => undefined)
+    expect(fetchMock.mock.calls.at(-2)?.[1].signal).toBe(controller.signal)
+    expect(fetchMock.mock.calls.at(-1)?.[1].signal).toBe(controller.signal)
+  })
+
+  test('aborts the polling delay without issuing another GET', async () => {
+    const wire = (state: 'idle' | 'running') => new Response(JSON.stringify({
+      state, stage: '', progress: 0, filtered: 0, source: 'mock', calls: 0,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(wire('idle'))
+      .mockResolvedValueOnce(wire('running'))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const pending = pollUntilDone(() => {}, controller.signal)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   test('normalizes the actual Go golden before returning data to the UI', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(golden)))
 

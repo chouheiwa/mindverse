@@ -26,7 +26,7 @@ const (
 //   - Authorization: Bearer <Access Secret>  鉴权开放平台调用方，每次必带
 //   - X-OAuth-Token: <OAuth access token>    指明当前代表哪个用户，仅代他人访问时带
 //
-// 两者职责不同，混填是官方文档专门警告的高频错误，见 credentialWarnings。
+// 两者职责不同，混填是官方文档专门警告的高频错误。
 type Client struct {
 	AccessSecret string        // 开放平台 Access Secret
 	OAuthToken   string        // 用户 OAuth token；为空时读取 Access Secret 所属账号本人数据

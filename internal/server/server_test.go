@@ -493,6 +493,43 @@ func (b *blockingShareStore) DeleteOwned(id, owner string) error {
 	return b.real.DeleteOwned(id, owner)
 }
 func (b *blockingShareStore) DeleteAllOwned(owner string) error { return b.real.DeleteAllOwned(owner) }
+func (b *blockingShareStore) OwnerKeys() []string               { return b.real.OwnerKeys() }
+func (b *blockingShareStore) HasOwner(owner string) bool        { return b.real.HasOwner(owner) }
+
+func TestPublicExpiryReconciliationSerializesAgainstOwnerPromotion(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	cookie := startSession(t, s)
+	installUniverse(t, s, cookie, serverUniverse())
+	digest := previewDigest(t, s, cookie, "question:7")
+	real := s.store.(*share.Store)
+	blocking := &blockingShareStore{real: real, entered: make(chan struct{}), release: make(chan struct{})}
+	s.store = blocking
+
+	created := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		created <- doRequest(t, s.Routes(), http.MethodPost, "/api/share", map[string]any{"questionIds": []string{"question:7"}, "digest": digest}, cookie)
+	}()
+	<-blocking.entered
+
+	reconciled := make(chan *httptest.ResponseRecorder, 1)
+	go func() { reconciled <- doRequest(t, s.Routes(), http.MethodGet, "/api/share/missing", nil, nil) }()
+	select {
+	case <-reconciled:
+		t.Fatal("public reconciliation crossed an in-flight owner promotion")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(blocking.release)
+	if rr := <-created; rr.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := <-reconciled; rr.Code != http.StatusNotFound {
+		t.Fatalf("missing share status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(s.registry.records) != 1 {
+		t.Fatalf("successful share lost revocation proof: %+v", s.registry.records)
+	}
+}
 
 func TestWipeSerializesAgainstShareCreate(t *testing.T) {
 	dir := t.TempDir()

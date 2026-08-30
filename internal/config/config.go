@@ -9,6 +9,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -99,11 +101,61 @@ func Load(path string) (*Config, error) {
 // 官方文档明确：localhost / 127.0.0.1 只能预览页面，无法完成知乎登录。
 // 真实联调必须部署到公网 HTTPS。界面据此显示「等待部署」而不是假装能登录。
 func (c *Config) LocalOnly() bool {
-	u := strings.ToLower(c.RedirectURI)
-	return u == "" || strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")
+	if strings.TrimSpace(c.RedirectURI) == "" {
+		return true
+	}
+	u, ok := parsedRedirect(c.RedirectURI)
+	return ok && u.Scheme == "http" && isLoopbackHost(u.Hostname())
 }
 
 // OAuthReady 报告 OAuth 是否具备真实登录条件。
 func (c *Config) OAuthReady() bool {
-	return c.AppID != "" && c.AppKey != "" && c.AccessSecret != "" && !c.LocalOnly()
+	u, ok := parsedRedirect(c.RedirectURI)
+	return c.AppID != "" && c.AppKey != "" && c.AccessSecret != "" && ok &&
+		u.Scheme == "https" && !isLoopbackHost(u.Hostname())
+}
+
+func parsedRedirect(raw string) (*url.URL, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" || u.User != nil ||
+		u.Fragment != "" || u.Opaque != "" || (u.Scheme != "http" && u.Scheme != "https") ||
+		!validRedirectHost(u.Hostname()) {
+		return nil, false
+	}
+	return u, true
+}
+
+func validRedirectHost(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if strings.Trim(host, "0123456789.") == "" {
+		// Reject browser-specific shorthand/integer IPv4 spellings that net.ParseIP
+		// does not classify, instead of risking a loopback address looking public.
+		return false
+	}
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := range len(label) {
+			c := label[i]
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

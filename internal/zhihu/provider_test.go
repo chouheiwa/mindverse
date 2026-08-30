@@ -531,20 +531,3 @@ func TestVerifyStateHandlesMissingState(t *testing.T) {
 		t.Fatalf("state 不匹配必须拒绝，实际 ok=%v checked=%v", ok, checked)
 	}
 }
-
-func TestDiagnoseCatchesCredentialSwaps(t *testing.T) {
-	warns := CredentialWarnings("12345", "12345", "secret-value-long-enough")
-	if len(warns) == 0 {
-		t.Fatal("App ID 被当成 App Key 时必须告警")
-	}
-	warns = CredentialWarnings("12345", "same-value", "same-value")
-	found := false
-	for _, w := range warns {
-		if w.Code == "APP_KEY_USED_AS_ACCESS_SECRET" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("App Key 与 Access Secret 相同时必须告警")
-	}
-}

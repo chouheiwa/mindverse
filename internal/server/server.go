@@ -81,6 +81,11 @@ type shareStore interface {
 	DeleteAllOwned(string) error
 }
 
+type shareOwnerLifecycle interface {
+	OwnerKeys() []string
+	HasOwner(string) bool
+}
+
 // Server 是应用主体。
 type Server struct {
 	cfg      *config.Config
@@ -91,6 +96,7 @@ type Server struct {
 	seed     *seed.Builder
 
 	mu                 sync.Mutex
+	ownerMu            sync.Mutex
 	sess               map[string]*session
 	lastSessionCleanup time.Time
 	maxSessions        int
@@ -104,9 +110,23 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	registry, err := loadSessionRegistry(cfg.SnapshotDir, time.Now())
+	registry, registryState, err := loadSessionRegistry(cfg.SnapshotDir, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("load session registry: %w", err)
+	}
+	proven := map[string]struct{}{}
+	if registryState == registryCurrent {
+		proven = registry.provenOwnerKeys()
+	}
+	if err := store.QuarantineUnproven(proven, "owner-proof-missing"); err != nil {
+		return nil, fmt.Errorf("quarantine shares without revocation proof: %w", err)
+	}
+	remaining := map[string]struct{}{}
+	for _, key := range store.OwnerKeys() {
+		remaining[key] = struct{}{}
+	}
+	if err := registry.retainOwners(remaining); err != nil {
+		return nil, fmt.Errorf("reconcile session registry: %w", err)
 	}
 	return &Server{
 		cfg: cfg, store: store, ext: ext,
@@ -228,7 +248,6 @@ func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*sessio
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.mu.Lock()
 		sess, ok := s.sess[c.Value]
-		var refreshErr error
 		owner, issued := s.registry.lookup(c.Value, now)
 		if !ok && validSessionID(c.Value) && issued {
 			if s.ensureSessionCapacityLocked() {
@@ -239,14 +258,9 @@ func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*sessio
 		}
 		if ok {
 			sess.active++
-			refreshErr = s.registry.put(sess.id, sessionOwner(sess), now.Add(share.TTL))
 		}
 		s.mu.Unlock()
 		if ok {
-			if refreshErr != nil {
-				s.releaseSession(sess)
-				return nil, refreshErr
-			}
 			s.setSessionCookie(w, sess.id)
 			return sess, nil
 		}
@@ -267,11 +281,6 @@ func (s *Server) acquireSession(w http.ResponseWriter, r *http.Request) (*sessio
 	}
 	sess.active = 1
 	s.sess[id] = sess
-	if err := s.registry.put(id, ownerID, now.Add(share.TTL)); err != nil {
-		delete(s.sess, id)
-		s.mu.Unlock()
-		return nil, err
-	}
 	s.mu.Unlock()
 	s.setSessionCookie(w, id)
 	return sess, nil
@@ -304,7 +313,6 @@ func (s *Server) evictIdleSessions(now time.Time) {
 		sess.mu.Unlock()
 		if idle {
 			delete(s.sess, id)
-			_ = s.registry.remove(id)
 		}
 	}
 	hook := s.onSessionCleanup
@@ -367,6 +375,42 @@ func (s *Server) currentSession(sess *session) bool {
 	return s.sess[sess.id] == sess
 }
 
+func (s *Server) promoteShareOwner(sess *session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registry.promote(sess.id, sessionOwner(sess), time.Now().Add(share.TTL))
+}
+
+func (s *Server) cleanupShareOwner(sess *session) {
+	lifecycle, ok := s.store.(shareOwnerLifecycle)
+	if !ok || lifecycle.HasOwner(sessionOwner(sess)) {
+		return
+	}
+	s.mu.Lock()
+	err := s.registry.removeOwner(sessionOwner(sess))
+	s.mu.Unlock()
+	if err != nil {
+		log.Printf("remove orphan share owner: %v", err)
+	}
+}
+
+func (s *Server) reconcileShareOwners() {
+	lifecycle, ok := s.store.(shareOwnerLifecycle)
+	if !ok {
+		return
+	}
+	keys := map[string]struct{}{}
+	for _, key := range lifecycle.OwnerKeys() {
+		keys[key] = struct{}{}
+	}
+	s.mu.Lock()
+	err := s.registry.retainOwners(keys)
+	s.mu.Unlock()
+	if err != nil {
+		log.Printf("reconcile orphan share owners: %v", err)
+	}
+}
+
 func randomToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -393,7 +437,7 @@ func (s *Server) rotateAuthenticatedSession(w http.ResponseWriter, old *session,
 	old.mu.Lock()
 	defer old.mu.Unlock()
 	owner := sessionOwner(old)
-	if err := s.registry.rotate(old.id, newID, owner, now.Add(share.TTL)); err != nil {
+	if _, err := s.registry.rotateIfPromoted(old.id, newID, owner, now.Add(share.TTL)); err != nil {
 		return err
 	}
 	if old.genCancel != nil {
@@ -443,7 +487,10 @@ func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 	profile := sess.profile
 	sess.mu.Unlock()
 
-	warns := zhihu.CredentialWarnings(s.cfg.AppID, s.cfg.AppKey, s.cfg.AccessSecret)
+	warns := []map[string]string{}
+	if s.cfg.RedirectURI != "" && !s.cfg.LocalOnly() && !s.cfg.OAuthReady() {
+		warns = append(warns, map[string]string{"code": "OAUTH_NOT_READY", "message": "OAuth 配置尚未满足安全登录要求。"})
+	}
 	writeJSON(w, 200, map[string]any{
 		"configured":       s.cfg.OAuthReady(),
 		"localOnly":        s.cfg.LocalOnly(),
@@ -461,6 +508,10 @@ func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authStart(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.LocalOnly() {
 		writeErr(w, 409, "本地地址只能预览页面，无法完成知乎登录。请先部署到公网 HTTPS 再配置回调。")
+		return
+	}
+	if !s.cfg.OAuthReady() {
+		writeErr(w, http.StatusConflict, "OAuth 配置尚未满足安全登录要求")
 		return
 	}
 	sess := fromCtx(r)
@@ -865,8 +916,19 @@ func (s *Server) shareCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "分享预览已过期，请重新预览")
 		return
 	}
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
+	if err := s.promoteShareOwner(sess); err != nil {
+		if errors.Is(err, errSessionCapacity) {
+			writeErr(w, http.StatusTooManyRequests, "可撤销分享所有者已达上限")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "无法安全记录分享所有权")
+		}
+		return
+	}
 	record, err := s.store.Create(owner, view)
 	if err != nil {
+		s.cleanupShareOwner(sess)
 		if errors.Is(err, share.ErrQuota) {
 			writeErr(w, http.StatusTooManyRequests, "有效分享数已达上限")
 			return
@@ -968,8 +1030,11 @@ func shareRequestError(w http.ResponseWriter, err error) (shareRequest, bool) {
 }
 
 func (s *Server) shareGet(w http.ResponseWriter, r *http.Request) {
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
 	record, err := s.store.Load(r.PathValue("id"))
 	if err != nil {
+		s.reconcileShareOwners()
 		log.Printf("public share load failed for %q: %v", r.PathValue("id"), err)
 		writeErr(w, http.StatusNotFound, "分享不存在或已过期")
 		return
@@ -995,10 +1060,13 @@ func (s *Server) shareDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "会话已旋转")
 		return
 	}
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
 	if err := s.store.DeleteOwned(r.PathValue("id"), sessionOwner(sess)); err != nil {
 		writeErr(w, http.StatusNotFound, "分享不存在或已过期")
 		return
 	}
+	s.cleanupShareOwner(sess)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -1011,10 +1079,13 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "会话已旋转")
 		return
 	}
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
 	if err := s.store.DeleteAllOwned(sessionOwner(sess)); err != nil {
 		writeErr(w, http.StatusInternalServerError, "删除分享失败")
 		return
 	}
+	s.cleanupShareOwner(sess)
 	sess.mu.Lock()
 	sess.epoch++
 	if sess.genCancel != nil {

@@ -5,6 +5,8 @@ dist/
 .worktrees/
 data/snapshots/*.json
 data/snapshots/.sessions
+data/snapshots/.sessions.registry-invalid*
+data/snapshots/*.owner-proof-missing*
 .env
 .env.*
 !.env.example

@@ -164,26 +164,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
-
-// CredentialWarning 指出凭证串位风险。
-type CredentialWarning struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-// CredentialWarnings 只返回可操作告警，不暴露长度、哈希或来源等凭证诊断。
-func CredentialWarnings(appID, appKey, accessSecret string) (warns []CredentialWarning) {
-	if appKey != "" && len(appKey) <= 8 {
-		warns = append(warns, CredentialWarning{"APP_KEY_TOO_SHORT",
-			"ZHIHU_OAUTH_APP_KEY 看起来过短，请确认没有填成 App ID。"})
-	}
-	if appKey != "" && appID != "" && appKey == appID {
-		warns = append(warns, CredentialWarning{"APP_ID_USED_AS_APP_KEY",
-			"OAuth app_key 看起来等于 App ID。"})
-	}
-	if appKey != "" && accessSecret != "" && appKey == accessSecret {
-		warns = append(warns, CredentialWarning{"APP_KEY_USED_AS_ACCESS_SECRET",
-			"ZHIHU_ACCESS_SECRET 看起来等于 OAuth App Key。"})
-	}
-	return
-}

@@ -307,6 +307,17 @@ export class Renderer {
     return planet
   }
 
+  /** Re-establish the selected planet and camera after leaving its reading workspace. */
+  restoreQuestionPlanet(starId: string, questionId: string): PlanetDatum | null {
+    return this.selectQuestionPlanet(starId, questionId)
+  }
+
+  /** Keep the live scene visible but quiet and non-interactive behind the reading workspace. */
+  setWorkspaceOpen(open: boolean) {
+    this.canvas.style.pointerEvents = open ? 'none' : ''
+    this.canvas.style.filter = open ? 'brightness(.55) saturate(.72)' : ''
+  }
+
   skipGenesis() {
     if (this.skipAt === null) this.skipAt = performance.now()
   }

@@ -10,6 +10,8 @@ const testState = vi.hoisted(() => ({
   callbacks: null as RendererCallbacks | null,
   planet: null as PlanetDatum | null,
   selectCalls: [] as Array<[string, string]>,
+  restoreCalls: [] as Array<[string, string]>,
+  workspaceCalls: [] as boolean[],
 }))
 
 vi.mock('../api', () => ({
@@ -30,8 +32,14 @@ vi.mock('../starmap/Renderer', () => ({
     resetView() { testState.callbacks?.onPick?.(null) }
     skipGenesis() {}
     clearPlanet() { testState.callbacks?.onPickPlanet?.(null) }
+    setWorkspaceOpen(open: boolean) { testState.workspaceCalls.push(open) }
     selectQuestionPlanet(starId: string, questionId: string) {
       testState.selectCalls.push([starId, questionId])
+      testState.callbacks?.onPickPlanet?.(testState.planet)
+      return testState.planet
+    }
+    restoreQuestionPlanet(starId: string, questionId: string) {
+      testState.restoreCalls.push([starId, questionId])
       testState.callbacks?.onPickPlanet?.(testState.planet)
       return testState.planet
     }
@@ -70,6 +78,8 @@ beforeEach(() => {
   testState.callbacks = null
   testState.planet = selectedPlanet
   testState.selectCalls = []
+  testState.restoreCalls = []
+  testState.workspaceCalls = []
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
   vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { callback(0); return 1 }))
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
@@ -83,7 +93,7 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
-  test('hands lane focus to the card, enters and leaves the shell, and clears stale entry state', async () => {
+  test('hands lane focus to the card, enters and leaves the workspace, and clears stale entry state', async () => {
     const user = userEvent.setup()
     render(<StrictMode><UniverseView /></StrictMode>)
     await screen.findByRole('heading', { name: '好奇心星图' })
@@ -110,8 +120,12 @@ describe('Universe question keyboard integration', () => {
 
     await user.keyboard('{Enter}')
     const dialog = await screen.findByRole('dialog')
+    expect(screen.getByRole('tab', { name: '个人轨道' })).toBeVisible()
+    expect(testState.workspaceCalls).toContain(true)
     fireEvent(dialog, new Event('cancel', { cancelable: true }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
+    expect(testState.workspaceCalls.at(-1)).toBe(false)
     expect(laneButton).toHaveFocus()
 
     await user.click(laneButton)

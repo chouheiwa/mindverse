@@ -10,14 +10,14 @@ describe('question navigation accessibility styles', () => {
     const card = css('./QuestionPlanetCard.css')
     expect(card).toMatch(/\.qpc-close[^}]*width:\s*44px[^}]*height:\s*44px/s)
     expect(card).toMatch(/\.qpc-enter[^}]*min-height:\s*44px/s)
-    expect(css('./QuestionEntryShell.css')).toMatch(/\.qes-back[^}]*min-height:\s*44px/s)
+    expect(css('./QuestionWorkspace.css')).toMatch(/\.qw-back[^}]*min-height:\s*44px/s)
   })
 
   test('defines focus-visible and reduced-motion treatments', () => {
     const card = css('./QuestionPlanetCard.css')
     expect(card).toMatch(/:focus-visible/)
     expect(card).toMatch(/prefers-reduced-motion:\s*reduce/)
-    expect(css('./QuestionEntryShell.css')).toMatch(/prefers-reduced-motion:\s*reduce/)
+    expect(css('./QuestionWorkspace.css')).toMatch(/prefers-reduced-motion:\s*reduce/)
   })
 
   test('uses a bounded horizontal question dock on mobile and preserves panel scroll clearance', () => {

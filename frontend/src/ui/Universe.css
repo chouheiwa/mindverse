@@ -1,4 +1,5 @@
-.uv-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none }
+.uv-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none;
+  transition: filter var(--t-space) var(--e-enter) }
 .uv-canvas:active { cursor: grabbing }
 /* 标签层盖在 WebGL 之上、暗角之下；指针事件一律穿透到星图 */
 .uv-labels { pointer-events: none; cursor: default; z-index: 3 }
@@ -97,3 +98,4 @@
   .uv-hint, .uv-filtered { bottom: 232px }
   .uv-filtered { left: 18px; right: 18px }
 }
+@media (prefers-reduced-motion: reduce) { .uv-canvas { transition: none } }

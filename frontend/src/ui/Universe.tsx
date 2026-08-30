@@ -14,7 +14,7 @@ import type { PlanetDatum } from '../starmap/gl/bodies'
 import { Seed } from './Seed'
 import './Universe.css'
 
-const QuestionEntryShell = lazy(() => import('./QuestionEntryShell').then((module) => ({ default: module.QuestionEntryShell })))
+const QuestionWorkspace = lazy(() => import('./QuestionWorkspace').then((module) => ({ default: module.QuestionWorkspace })))
 
 const reduceMotion = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -64,7 +64,7 @@ export function UniverseView() {
       try {
         if (id) {
           setShared(true)
-          setError('这是新版逐项分享。问题行星阅读界面即将接入，当前版本不会将它误当成私有星图打开。')
+          setError('这是新版逐项分享链接，当前加载器尚不支持读取该公开快照，也不会将它误当成私有星图打开。')
           return
         }
         const g = await pollUntilDone((p) => setGen({ stage: p.stage, progress: p.progress }), ac.signal)
@@ -149,6 +149,8 @@ export function UniverseView() {
 
   useEffect(() => { rendererRef.current?.setMode(mode, wormIdx) }, [mode, wormIdx])
 
+  useEffect(() => { rendererRef.current?.setWorkspaceOpen(questionEntry !== null) }, [questionEntry])
+
   const pickConcept = useCallback((c: string) => {
     const s = universe?.stars.find((x) => x.c === c)
     if (s) {
@@ -171,6 +173,7 @@ export function UniverseView() {
   }, [])
 
   const onEnterQuestion = useCallback((selected: PlanetDatum) => {
+    focusCardFromLaneRef.current = false
     setPlanet(null)
     rendererRef.current?.clearPlanet()
     // clearPlanet synchronously emits onPickPlanet(null); write entry last.
@@ -200,6 +203,11 @@ export function UniverseView() {
     setQuestionEntry(null)
   }, [])
 
+  const restoreQuestionCamera = useCallback(() => {
+    if (!questionEntry || !('id' in questionEntry.star.s)) return
+    rendererRef.current?.restoreQuestionPlanet(questionEntry.star.s.id, questionEntry.question.id)
+  }, [questionEntry])
+
   const getQuestionReturnFocus = useCallback(
     () => focusReturnRef.current ?? canvasRef.current,
     [],
@@ -211,7 +219,7 @@ export function UniverseView() {
     return <Seed onDone={() => { setSeeding(false); setError(null); setReload((n) => n + 1) }} />
   }
 
-  if (!universe) {
+  if (!universe || !universeIndex) {
     return (
       <>
         <Loading stage={gen.stage} progress={gen.progress} error={error} gone={false} />
@@ -306,7 +314,9 @@ export function UniverseView() {
         onClose={closePlanet} />
       {questionEntry && (
         <Suspense fallback={<div className="uv-entry-loading" role="status">正在建立问题航道…</div>}>
-          <QuestionEntryShell planet={questionEntry} onBack={leaveQuestionEntry}
+          <QuestionWorkspace index={universeIndex} questionId={questionEntry.question.id}
+            orbitIndex={questionEntry.orbitIndex} shared={shared} readOnly={shared}
+            onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
             getReturnFocus={getQuestionReturnFocus} />
         </Suspense>
       )}

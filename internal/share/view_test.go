@@ -185,7 +185,8 @@ func TestDeleteAllOwnedLeavesOtherOwnersShares(t *testing.T) {
 
 func TestLegacyOwnerlessShareIsReadableButNotDeletable(t *testing.T) {
 	dir := t.TempDir()
-	legacy := map[string]any{"id": "legacy", "createdAt": "2098-12-02T00:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "universe": map[string]any{}}
+	created := time.Now().Add(-time.Hour)
+	legacy := map[string]any{"id": "legacy", "createdAt": created, "expiresAt": created.Add(TTL), "universe": map[string]any{}}
 	b, _ := json.Marshal(legacy)
 	_ = os.WriteFile(filepath.Join(dir, "legacy.json"), b, 0o600)
 	store, _ := NewStore(dir)
@@ -254,6 +255,54 @@ func TestNewStoreQuarantinesCorruptCurrentRecords(t *testing.T) {
 	}
 	if quarantined != len(cases) {
 		t.Fatalf("quarantined %d records, want %d", quarantined, len(cases))
+	}
+}
+
+func TestNewStoreQuarantinesLegacyRecordCreatedInFuture(t *testing.T) {
+	dir := t.TempDir()
+	created := time.Now().Add(10 * time.Minute)
+	legacy := map[string]any{
+		"id": "future_legacy", "createdAt": created, "expiresAt": created.Add(time.Hour),
+		"universe": map[string]any{},
+	}
+	b, _ := json.Marshal(legacy)
+	path := filepath.Join(dir, "future_legacy.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load("future_legacy"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("future-dated legacy record remains publicly loadable: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("future-dated legacy record was not quarantined: %v", err)
+	}
+}
+
+func TestNewStoreQuarantinesLegacyRecordBeyondTTL(t *testing.T) {
+	dir := t.TempDir()
+	created := time.Now().Add(-time.Hour)
+	legacy := map[string]any{
+		"id": "long_legacy", "createdAt": created, "expiresAt": created.Add(TTL + time.Second),
+		"universe": map[string]any{},
+	}
+	b, _ := json.Marshal(legacy)
+	path := filepath.Join(dir, "long_legacy.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load("long_legacy"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("overlong legacy record remains publicly loadable: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("overlong legacy record was not quarantined: %v", err)
 	}
 }
 

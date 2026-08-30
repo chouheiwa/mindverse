@@ -22,6 +22,7 @@ import (
 const (
 	TTL               = 30 * 24 * time.Hour
 	MaxActivePerOwner = 20
+	maxClockSkew      = 5 * time.Minute
 )
 
 var (
@@ -204,8 +205,11 @@ func decodeRecord(fileID string, b []byte, now time.Time) (*Record, bool, error)
 			ExpiresAt time.Time `json:"expiresAt"`
 		}
 		if json.Unmarshal(b, &old) != nil || old.ID != fileID || !validID(old.ID) || old.CreatedAt.IsZero() ||
-			old.ExpiresAt.IsZero() || !old.ExpiresAt.After(old.CreatedAt) || old.ExpiresAt.Sub(old.CreatedAt) > TTL+time.Minute {
+			old.ExpiresAt.IsZero() || !old.ExpiresAt.After(old.CreatedAt) || old.ExpiresAt.Sub(old.CreatedAt) > TTL {
 			return nil, false, fmt.Errorf("invalid legacy share")
+		}
+		if old.CreatedAt.After(now.Add(maxClockSkew)) {
+			return nil, false, fmt.Errorf("legacy share created in future")
 		}
 		if !old.ExpiresAt.IsZero() && !now.Before(old.ExpiresAt) {
 			return nil, true, errExpired

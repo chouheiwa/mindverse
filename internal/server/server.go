@@ -246,9 +246,11 @@ func (s *Server) authStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "无法创建安全登录状态")
 		return
 	}
+	sess.opMu.Lock()
 	sess.mu.Lock()
 	sess.state = st
 	sess.mu.Unlock()
+	sess.opMu.Unlock()
 
 	u, err := s.oauth.AuthorizeURL(st)
 	if err != nil {
@@ -266,9 +268,15 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "回调缺少 authorization_code")
 		return
 	}
+	sess.opMu.Lock()
 	sess.mu.Lock()
-	expected := sess.state
+	expected, epoch := sess.state, sess.epoch
 	sess.mu.Unlock()
+	sess.opMu.Unlock()
+	if expected == "" {
+		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
+		return
+	}
 
 	ok, checked := zhihu.VerifyState(q.Get("state"), expected)
 	if !ok {
@@ -287,7 +295,14 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	cl := zhihu.NewClient(s.cfg.AccessSecret, tok.AccessToken)
 	profile := cl.Profile(ctx)
 
+	sess.opMu.Lock()
+	defer sess.opMu.Unlock()
 	sess.mu.Lock()
+	if sess.epoch != epoch || sess.state != expected {
+		sess.mu.Unlock()
+		writeErr(w, http.StatusConflict, "登录会话已重置，请重新发起授权")
+		return
+	}
 	sess.token, sess.stateChecked, sess.profile, sess.state = tok, checked, profile, ""
 	sess.mu.Unlock()
 	http.Redirect(w, r, "/universe.html", http.StatusFound)
@@ -691,6 +706,7 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.gen = generation{}
 	sess.token, sess.profile, sess.seedCorpus = nil, nil, nil
+	sess.state, sess.stateChecked = "", false
 	sess.mu.Unlock()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -284,6 +285,57 @@ func TestWipeInvalidatesRunningGeneration(t *testing.T) {
 	defer sess.mu.Unlock()
 	if sess.gen.Universe != nil || sess.gen.State != "" {
 		t.Fatalf("stale generation restored state after wipe: %+v", sess.gen)
+	}
+}
+
+type blockingOAuthTransport struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingOAuthTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/access_token") {
+		close(b.entered)
+		<-b.release
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"secret","expires_in":3600}`)), Request: request}, nil
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":{"name":"Alice"}}`)), Request: request}, nil
+}
+
+func TestWipeInvalidatesOAuthCallbackCommit(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	cookie := startSession(t, s)
+	s.oauth.AppID, s.oauth.AppKey, s.oauth.RedirectURI = "1", "key", "https://example.com/callback"
+	transport := &blockingOAuthTransport{entered: make(chan struct{}), release: make(chan struct{})}
+	s.oauth.HTTP = &http.Client{Transport: transport}
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	defer func() { http.DefaultTransport = oldTransport }()
+
+	s.mu.Lock()
+	sess := s.sess[cookie.Value]
+	s.mu.Unlock()
+	sess.mu.Lock()
+	sess.state = "expected-state"
+	sess.mu.Unlock()
+
+	callbackDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		callbackDone <- doRequest(t, s.Routes(), http.MethodGet, "/auth/callback?authorization_code=code&state=expected-state", nil, cookie)
+	}()
+	<-transport.entered
+	if wiped := doRequest(t, s.Routes(), http.MethodDelete, "/api/session/data", nil, cookie); wiped.Code != http.StatusOK {
+		t.Fatalf("wipe status=%d body=%s", wiped.Code, wiped.Body.String())
+	}
+	close(transport.release)
+	callback := <-callbackDone
+	if callback.Code != http.StatusConflict {
+		t.Fatalf("stale callback status=%d body=%s", callback.Code, callback.Body.String())
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.token != nil || sess.profile != nil || sess.state != "" {
+		t.Fatalf("stale OAuth callback restored credentials: token=%v profile=%v state=%q", sess.token, sess.profile, sess.state)
 	}
 }
 

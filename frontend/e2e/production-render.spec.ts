@@ -44,12 +44,6 @@ async function expectRendererReady(page: Page) {
   await expect(page.getByTestId('universe-root')).toHaveAttribute('data-render-state', 'ready', { timeout: 15_000 })
 }
 
-async function afterTwoAnimationFrames(page: Page) {
-  await page.evaluate(() => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-  }))
-}
-
 async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
   const canvas = page.locator('canvas[aria-label="认知宇宙三维星图"]')
   await expect(canvas).toBeVisible()
@@ -71,16 +65,18 @@ async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
   const webglLimits = await canvas.evaluate(async (node: HTMLCanvasElement) => {
     const gl = node.getContext('webgl2') ?? node.getContext('webgl')
     if (!gl) throw new Error('WebGL context unavailable during capability check')
-    while (gl.getError() !== gl.NO_ERROR) { /* discard errors raised before the observed frames */ }
+    const readyError = gl.getError()
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
     return {
       maxVertexAttributes: gl.getParameter(gl.MAX_VERTEX_ATTRIBS) as number,
-      error: gl.getError(),
+      readyError,
+      observedFrameError: gl.getError(),
       noError: gl.NO_ERROR,
     }
   })
   expect(webglLimits.maxVertexAttributes).toBeGreaterThanOrEqual(16)
-  expect(webglLimits.error).toBe(webglLimits.noError)
+  expect(webglLimits.readyError).toBe(webglLimits.noError)
+  expect(webglLimits.observedFrameError).toBe(webglLimits.noError)
 
   const nonBackgroundPixels = await canvas.evaluate(async (node: HTMLCanvasElement) => {
     return await new Promise<number>((resolve, reject) => requestAnimationFrame(() => {
@@ -130,7 +126,6 @@ test('production universe satisfies the first-frame render contract', async ({ p
 
   await openProductionUniverse(page)
   await expectRendererReady(page)
-  await afterTwoAnimationFrames(page)
 
   expect(responses.map((response) => response.status())).toEqual([200])
   await expectCanvasContract(page, fixture)
@@ -156,7 +151,6 @@ test('a failed Renderer chunk records 503 and reload recovery reaches a 2xx read
   await expect(page.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
   await page.getByRole('button', { name: '重试 3D' }).click()
   await expectRendererReady(page)
-  await afterTwoAnimationFrames(page)
 
   expect(responses.map((response) => response.status())).toEqual([503, 200])
   await expectCanvasContract(page, fixture)
@@ -183,7 +177,6 @@ test('WebGL context creation failure remounts the renderer on the same page', as
   await page.evaluate(() => { (window as typeof window & { __e2eWebglFail?: boolean }).__e2eWebglFail = false })
   await page.getByRole('button', { name: '重试 3D' }).click()
   await expectRendererReady(page)
-  await afterTwoAnimationFrames(page)
 
   expect(responses.map((response) => response.status())).toEqual([200])
   await expectCanvasContract(page, fixture)
@@ -210,7 +203,6 @@ test('one-shot shader failure remounts on the same page and becomes ready', asyn
   expect(await page.evaluate(() => sessionStorage.getItem('mindverse:e2e-shader-failed'))).toBe('1')
   await page.getByRole('button', { name: '重试 3D' }).click()
   await expectRendererReady(page)
-  await afterTwoAnimationFrames(page)
   expect(await page.evaluate(() => sessionStorage.getItem('mindverse:e2e-shader-failed'))).toBeNull()
   expect(await page.evaluate(() => window.__e2eShaderMarkerClearCount)).toBe(1)
 
@@ -226,7 +218,6 @@ for (const quality of ['medium', 'low'] as const) {
     const fixture = await installUniverseFixture(page)
     await openProductionUniverse(page, `?e2eQuality=${quality}`)
     await expectRendererReady(page)
-    await afterTwoAnimationFrames(page)
     await expectCanvasContract(page, fixture)
     await expectSnapshot(page, quality)
     const apiShape = await page.evaluate(() => Object.keys(window.__MINDVERSE_E2E__ ?? {}))

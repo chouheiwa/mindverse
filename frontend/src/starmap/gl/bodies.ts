@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Mode, Universe } from '../../types'
-import { selectPlanetData, type QuestionPlanetDatum, type UniverseIndex } from '../../domain/universe'
+import { selectPlanetData, UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT, type QuestionPlanetDatum, type UniverseIndex } from '../../domain/universe'
 import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
 import { starData, starWorldPosition, type StarDatum } from './starData'
 import { renderDim } from './stars'
@@ -431,7 +431,7 @@ export interface BodyLayer {
   setMode(mode: Mode, u: Universe, wormIdx: number): void
   setFocus(starId: string | null): void
   /** 只更新当前聚焦恒星系的材质 LOD，并保留每实例上一帧状态以实现滞回。 */
-  updatePlanetLods(camera: THREE.Camera, elapsedMs: number, projectionScale: number): void
+  updatePlanetLods(camera: THREE.Camera, elapsedMs: number, projectionScale: number): number
   /** 供拾取与飞入复用，顺序与 u.stars 一致 */
   data: StarDatum[]
   /** 全部行星，顺序即实例顺序 */
@@ -696,18 +696,29 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   const lodView = new THREE.Vector3()
   const batchByFamily = new Map(planetBatches.map((batch) => [batch.family, batch]))
   let modeDims = data.map(() => 1)
-  let focusedStarConcept: string | null = null
-  let focusedLodStar: StarDatum | null = null
+  const focusIdentity = (star: StarDatum['s']) => 'id' in star && typeof star.id === 'string' ? `id:${star.id}` : `concept:${star.c}`
+  let focusedStarIdentity: string | null = null
   const dispose = scope.release()
   const applyDims = () => {
-    for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(data[i].s.c, focusedStarConcept)
-    for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(planetData[i].star.s.c, focusedStarConcept)
+    for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(focusIdentity(data[i].s), focusedStarIdentity)
+    for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(focusIdentity(planetData[i].star.s), focusedStarIdentity)
     for (const batch of planetBatches) {
       batch.globalIndices.forEach((globalIndex, localIndex) => { batch.basisDim[localIndex * 4 + 3] = pDim[globalIndex] })
       batch.basisDimAttribute.needsUpdate = true
     }
     sMetaAttr.needsUpdate = true
     rDimAttr.needsUpdate = true
+  }
+  const writeLod = (planet: PlanetDatum, lod: PlanetLod, changedBatches: Set<(typeof planetBatches)[number]>) => {
+    if (planetLods[planet.index] === lod) return
+    planetLods[planet.index] = lod
+    const local = planetIndexMap.toLocal(planet.index)!
+    const batch = batchByFamily.get(local.family)!
+    batch.axisLod[local.instanceIndex * 4 + 3] = lod === 'far' ? 0 : lod === 'medium' ? 1 : 2
+    changedBatches.add(batch)
+  }
+  const uploadLods = (changedBatches: Set<(typeof planetBatches)[number]>) => {
+    for (const batch of changedBatches) batch.axisLodAttribute.needsUpdate = true
   }
 
   return {
@@ -738,23 +749,12 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
       rSelAttr.needsUpdate = true
     },
     updatePlanetLods(camera, elapsedMs, projectionScale) {
-      const nextActive = focusedLodStar === null ? noPlanets : planetsByStar.get(focusedLodStar) ?? noPlanets
       const changedBatches = new Set<(typeof planetBatches)[number]>()
-      const writeLod = (planet: PlanetDatum, lod: PlanetLod) => {
-        if (planetLods[planet.index] === lod) return
-        planetLods[planet.index] = lod
-        const local = planetIndexMap.toLocal(planet.index)!
-        const batch = batchByFamily.get(local.family)!
-        batch.axisLod[local.instanceIndex * 4 + 3] = lod === 'far' ? 0 : lod === 'medium' ? 1 : 2
-        changedBatches.add(batch)
-      }
-      if (nextActive !== activeLodPlanets) {
-        for (const planet of activeLodPlanets) writeLod(planet, 'far')
-        activeLodPlanets = nextActive
-      }
       camera.updateMatrixWorld()
       const bob = reduceMotion ? 0 : 1.35
-      for (const planet of activeLodPlanets) {
+      const projectionCount = Math.min(activeLodPlanets.length, UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT)
+      for (let index = 0; index < projectionCount; index++) {
+        const planet = activeLodPlanets[index]
         starWorldPosition(planet.star, elapsedMs, bob, lodWorld)
         const theta = planet.phase + ((Math.PI * 2) / planet.period) * (elapsedMs / 1000)
         const cosine = Math.cos(theta)
@@ -766,16 +766,24 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
         )
         lodView.copy(lodWorld).applyMatrix4(camera.matrixWorldInverse)
         const projectedRadius = planet.radius * projectionScale / Math.max(1, -lodView.z)
-        writeLod(planet, nextPlanetLod(planetLods[planet.index], projectedRadius))
+        writeLod(planet, nextPlanetLod(planetLods[planet.index], projectedRadius), changedBatches)
       }
-      for (const batch of changedBatches) batch.axisLodAttribute.needsUpdate = true
+      uploadLods(changedBatches)
+      return projectionCount
     },
     setUniform(name, value) {
       for (const m of mats) if (m.uniforms[name]) m.uniforms[name].value = value
     },
     setFocus(starId) {
-      focusedLodStar = starId === null ? null : data.find((datum) => ('id' in datum.s ? datum.s.id : datum.s.c) === starId) ?? null
-      focusedStarConcept = focusedLodStar?.s.c ?? null
+      const focusedStar = starId === null ? null : data.find((datum) => ('id' in datum.s ? datum.s.id : datum.s.c) === starId) ?? null
+      const nextActive = focusedStar === null ? noPlanets : planetsByStar.get(focusedStar) ?? noPlanets
+      if (nextActive !== activeLodPlanets) {
+        const changedBatches = new Set<(typeof planetBatches)[number]>()
+        for (const planet of activeLodPlanets) writeLod(planet, 'far', changedBatches)
+        activeLodPlanets = nextActive
+        uploadLods(changedBatches)
+      }
+      focusedStarIdentity = focusedStar === null ? null : focusIdentity(focusedStar.s)
       applyDims()
     },
     setMode(mode, uni, wormIdx) {

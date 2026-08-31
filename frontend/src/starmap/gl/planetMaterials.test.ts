@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { QuestionPlanetDatum } from '../../domain/universe'
-import type { UniverseIndex } from '../../domain/universe'
+import { indexUniverse, parseUniverse, type UniverseIndex } from '../../domain/universe'
 import type { AnswerSatellite } from '../../types'
 import type { CurrentStar, Universe } from '../../types'
 import * as THREE from 'three'
@@ -451,25 +451,26 @@ describe('planet surface batching and LOD', () => {
     movingLayer.dispose()
   })
 
-  test('uses the focused star id when two stars share one concept and resets LOD uploads on switch and null', () => {
+  test('keeps parsed private/public stars with one concept independently focused across a to b to null', () => {
     const questions = [0, 1].map((i) => ({ id: `question:same:${i}`, questionId: `${i}`, title: `${i}`, url: '', answerIds: [] }))
-    const stars = [0, 1].map((i): CurrentStar => ({
-      id: `star:same:${i}`, c: 'same-concept', g: 1, p: [i * 20, 0, -20], n: 1, o: 0, f: 0,
-      hue: 210, sat: .5, pe: 0, bu: 0, fi: '', la: '', ev: [], scope: 'public',
-      externalQueryAllowed: false, questionIds: [questions[i].id], probeIds: [],
+    questions[0] = { id: 'question:10', questionId: '10', title: '10', url: 'https://www.zhihu.com/question/10', answerIds: [] }
+    questions[1] = { id: 'question:11', questionId: '11', title: '11', url: 'https://www.zhihu.com/question/11', answerIds: [] }
+    const identities = [
+      { id: 'star:v1:private:8ed3f6ad685b959e', scope: 'private', externalQueryAllowed: false },
+      { id: 'star:v1:public:8ed3f6ad685b959e', scope: 'public', externalQueryAllowed: true },
+    ] as const
+    const stars = identities.map((identity, i): CurrentStar => ({
+      c: 'Alpha', g: 1, p: [i * 20, 0, -20], n: 1, o: 0, f: 0,
+      hue: 210, sat: 0, pe: 0, bu: 0, fi: '', la: '', ev: [], questionIds: [questions[i].id], probeIds: [],
+      ...identity,
     }))
-    const universe = {
+    const rawUniverse = {
       schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
       meta: { items: 2, concepts: 1, clusters: 1, own: 0, fav: 0, span: [0, 0] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
-      clusters: [{ g: 1, name: 'same', lead: 'same-concept', c: [10, 0, -20] as [number, number, number], n: 2, o: 0, f: 0, hue: 210, sat: .5, mem: ['same-concept'] }],
+      clusters: [{ g: 1, name: 'same', lead: 'Alpha', c: [10, 0, -20] as [number, number, number], n: 2, o: 0, f: 0, hue: 210, sat: 0, mem: ['Alpha'] }],
       stars, particles: [], wormholes: [], solo: [], dark: [], nebula: [], questions, answers: [], probes: [],
     } satisfies Universe
-    const index: UniverseIndex = {
-      universe,
-      starsById: new Map(stars.map((star) => [star.id, star])),
-      questionsById: new Map(questions.map((question) => [question.id, question])),
-      answersById: new Map(), probesById: new Map(),
-    }
+    const index = indexUniverse(parseUniverse(rawUniverse))
     const layer = makeBodies(index, true)
     const batches = layer.group.children.filter((child): child is THREE.InstancedMesh =>
       child instanceof THREE.InstancedMesh && Boolean(child.geometry.getAttribute('iSurface')))
@@ -482,11 +483,26 @@ describe('planet surface batching and LOD', () => {
     const second = layer.planets.find((planet) => 'id' in planet.star.s && planet.star.s.id === stars[1].id)!.index
     const firstLod = lodAttributeFor(first)
     const secondLod = lodAttributeFor(second)
+    const starMeta = (layer.group.children.find((child) => child instanceof THREE.Mesh
+      && child.geometry.getAttribute('iMeta') && !child.geometry.getAttribute('iDim')) as THREE.Mesh)
+      .geometry.getAttribute('iMeta') as THREE.InstancedBufferAttribute
+    const ringDim = (layer.group.children.find((child) => child instanceof THREE.LineSegments) as THREE.LineSegments)
+      .geometry.getAttribute('iDim') as THREE.InstancedBufferAttribute
+    const planetDims = () => layer.planets.map((_, globalIndex) => {
+      const local = layer.planetIndexMap.toLocal(globalIndex)!
+      const batch = batches.find((candidate) => candidate.userData.planetFamily === local.family)!
+      return (batch.geometry.getAttribute('iBasisDim') as THREE.InstancedBufferAttribute).getW(local.instanceIndex)
+    })
+    const starDims = () => [starMeta.getY(0), starMeta.getY(1)]
+    const ringDims = () => [ringDim.getX(0), ringDim.getX(1)]
     const camera = new THREE.PerspectiveCamera(55, 1, .5, 200)
     camera.position.set(0, 0, 0)
     camera.lookAt(0, 0, -20)
 
     layer.setFocus(stars[1].id)
+    expect(starDims()).toEqual([Math.fround(.12), 1])
+    expect(planetDims()).toEqual([Math.fround(.12), 1])
+    expect(ringDims()).toEqual([Math.fround(.12), 1])
     layer.updatePlanetLods(camera, 0, 100_000)
     layer.updatePlanetLods(camera, 0, 100_000)
     expect(firstLod.attribute.getW(firstLod.local.instanceIndex)).toBe(0)
@@ -495,6 +511,9 @@ describe('planet surface batching and LOD', () => {
     const secondBeforeSwitch = secondLod.attribute.version
 
     layer.setFocus(stars[0].id)
+    expect(starDims()).toEqual([1, Math.fround(.12)])
+    expect(planetDims()).toEqual([1, Math.fround(.12)])
+    expect(ringDims()).toEqual([1, Math.fround(.12)])
     layer.updatePlanetLods(camera, 0, 100_000)
     layer.updatePlanetLods(camera, 0, 100_000)
     expect(firstLod.attribute.getW(firstLod.local.instanceIndex)).toBe(2)
@@ -504,10 +523,65 @@ describe('planet surface batching and LOD', () => {
 
     const firstBeforeNull = firstLod.attribute.version
     layer.setFocus(null)
+    expect(starDims()).toEqual([1, 1])
+    expect(planetDims()).toEqual([1, 1])
+    expect(ringDims()).toEqual([1, 1])
     layer.updatePlanetLods(camera, 0, 100_000)
     expect(firstLod.attribute.getW(firstLod.local.instanceIndex)).toBe(0)
     expect(secondLod.attribute.getW(secondLod.local.instanceIndex)).toBe(0)
     expect(firstLod.attribute.version).toBeGreaterThan(firstBeforeNull)
+    layer.dispose()
+  })
+
+  test('projects at most 512 planets per frame and clears the old system during the focus event', () => {
+    const questions = Array.from({ length: 1024 }, (_, i) => ({
+      id: `question:${i + 100}`, questionId: `${i + 100}`, title: `${i}`, url: `https://www.zhihu.com/question/${i + 100}`, answerIds: [],
+    }))
+    const stars: CurrentStar[] = [
+      ['star:v1:private:8ed3f6ad685b959e', 'Alpha', 0],
+      ['star:v1:private:f44e64e75f3948e9', 'Beta', 512],
+    ].map(([id, concept, start], starIndex) => ({
+      id: id as string, c: concept as string, g: 1, p: [starIndex * 20, 0, -20], n: 512, o: 0, f: 0,
+      hue: 210, sat: 0, pe: 0, bu: 0, fi: '', la: '', ev: [], scope: 'private', externalQueryAllowed: false,
+      questionIds: questions.slice(start as number, (start as number) + 512).map(({ id: questionId }) => questionId).sort(), probeIds: [],
+    }))
+    const rawUniverse = {
+      schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
+      meta: { items: 1024, concepts: 2, clusters: 1, own: 0, fav: 0, span: [0, 0] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
+      clusters: [{ g: 1, name: 'budget', lead: 'Alpha', c: [10, 0, -20] as [number, number, number], n: 1024, o: 0, f: 0, hue: 210, sat: 0, mem: ['Alpha', 'Beta'] }],
+      stars, particles: [], wormholes: [], solo: [], dark: [], nebula: [], questions, answers: [], probes: [],
+    } satisfies Universe
+    const layer = makeBodies(indexUniverse(parseUniverse(rawUniverse)), true)
+    const lodAttributes = layer.group.children
+      .filter((child): child is THREE.InstancedMesh => child instanceof THREE.InstancedMesh && Boolean(child.geometry.getAttribute('iAxisLod')))
+      .map((batch) => batch.geometry.getAttribute('iAxisLod') as THREE.InstancedBufferAttribute)
+    const versions = () => lodAttributes.map(({ version }) => version)
+    const camera = new THREE.PerspectiveCamera(55, 1, .5, 200)
+    camera.position.set(0, 0, 0)
+    camera.lookAt(0, 0, -20)
+
+    layer.setFocus(stars[0].id)
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(512)
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(512)
+    const stableA = versions()
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(512)
+    expect(versions()).toEqual(stableA)
+
+    layer.setFocus(stars[1].id)
+    const afterEventCleanup = versions()
+    expect(afterEventCleanup.some((version, i) => version > stableA[i])).toBe(true)
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(512)
+    expect(versions().some((version, i) => version > afterEventCleanup[i])).toBe(true)
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(512)
+    const stableB = versions()
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(512)
+    expect(versions()).toEqual(stableB)
+
+    layer.setFocus(null)
+    const afterNullCleanup = versions()
+    expect(afterNullCleanup.some((version, i) => version > stableB[i])).toBe(true)
+    expect(layer.updatePlanetLods(camera, 0, 100_000)).toBe(0)
+    expect(versions()).toEqual(afterNullCleanup)
     layer.dispose()
   })
 })

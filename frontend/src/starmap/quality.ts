@@ -8,7 +8,8 @@
 //   Session 4 虫洞：所有档位保留穿越（§7.9），low 降 RT 分辨率。
 //   Session 5 透镜：low 关真扭曲，只留极淡环。
 
-export type Quality = 'high' | 'medium' | 'low'
+export const QUALITY_LEVELS = ['high', 'medium', 'low'] as const
+export type Quality = typeof QUALITY_LEVELS[number]
 
 export function detectQuality(reduceMotion: boolean): Quality {
   // 降级动效偏好 = 直接 Low：用户主动要求少动效，景深也该退场

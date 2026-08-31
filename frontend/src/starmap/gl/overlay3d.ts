@@ -1,8 +1,9 @@
 import * as THREE from 'three'
-import type { Universe } from '../../types'
+import type { Star, Universe } from '../../types'
 import { clusterAxis, orbitPeriod } from '../projection'
 import { DEPTH_FADE, ORBIT } from './chunks'
 import { ResourceScope } from '../resourceScope'
+import { ownerOpacity } from '../focusEmphasis'
 
 // 两种模式叠加物，都放进 3D 里 —— 它们得跟着相机走，也得吃到 bloom。
 // 画在 2D 覆盖层上的发光物永远像贴纸。
@@ -21,6 +22,7 @@ const WORM_VERT = /* glsl */ `
 ${DEPTH_FADE}
 attribute float aT;      // 0..1，沿曲线的位置
 attribute float aWorm;   // 属于第几条虫洞
+attribute float aFocus;
 uniform float uT;
 uniform float uActive;
 uniform float uConverge;
@@ -39,7 +41,7 @@ void main() {
   float pulse = pow(1.0 - phase, 5.0);
   float base = 0.16 + 0.84 * pulse;
 
-  vAlpha = on * base * depthFade(viewZ, uNear, uFar) * smoothstep(0.9, 1.0, uConverge);
+  vAlpha = on * base * aFocus * depthFade(viewZ, uNear, uFar) * smoothstep(0.9, 1.0, uConverge);
   gl_PointSize = max(1.0, (1.6 + 4.6 * pulse) * (uProjScale / viewZ) * 0.55);
 }
 `
@@ -70,6 +72,7 @@ attribute vec3 aAxis;
 attribute float aPeriod;
 attribute float aRadius;
 attribute float aSeed;
+attribute float aFocus;
 uniform float uT;
 uniform float uConverge;
 uniform float uNear;
@@ -85,7 +88,7 @@ void main() {
   gl_Position = projectionMatrix * mv;
   vUv = aCorner;
   vSeed = aSeed;
-  vAlpha = depthFade(viewZ, uNear, uFar) * smoothstep(0.9, 1.0, uConverge);
+  vAlpha = aFocus * depthFade(viewZ, uNear, uFar) * smoothstep(0.9, 1.0, uConverge);
 }
 `
 
@@ -121,6 +124,7 @@ export interface Overlay3D {
   setActiveWorm(i: number): void
   setEmphasis(dark: number): void
   setWormVisible(on: boolean): void
+  setFocus(star: Star | null): void
   dispose(): void
 }
 
@@ -146,6 +150,7 @@ function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
   const wp: number[] = []
   const wt: number[] = []
   const wi: number[] = []
+  const wormOwners: number[] = []
   u.wormholes.forEach((w, idx) => {
     const a = centerOf.get(w.a)
     const b = centerOf.get(w.b)
@@ -157,17 +162,21 @@ function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
       wp.push(p[0], p[1], p[2])
       wt.push(t)
       wi.push(idx)
+      wormOwners.push(t < 0.5 ? w.a : w.b)
     }
   })
 
   let wormPts: THREE.Points | null = null
   let wormMat: THREE.ShaderMaterial | null = null
+  let wormFocus: THREE.BufferAttribute | null = null
   if (wp.length > 0) {
     const geo = new THREE.BufferGeometry()
     scope.use(geo)
     geo.setAttribute('position', new THREE.Float32BufferAttribute(wp, 3))
     geo.setAttribute('aT', new THREE.Float32BufferAttribute(wt, 1))
     geo.setAttribute('aWorm', new THREE.Float32BufferAttribute(wi, 1))
+    wormFocus = new THREE.Float32BufferAttribute(new Float32Array(wormOwners.length).fill(1), 1)
+    geo.setAttribute('aFocus', wormFocus)
     geo.computeBoundingSphere()
     wormMat = scope.use(new THREE.ShaderMaterial({
       uniforms: { ...shared(), uActive: { value: 0 }, uColor: { value: AMBER.clone() }, uGain: { value: 2.6 } },
@@ -184,6 +193,8 @@ function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
 
   // ── 暗物质透镜 ──
   let darkMat: THREE.ShaderMaterial | null = null
+  let darkFocus: THREE.BufferAttribute | null = null
+  const darkOwners: string[] = []
   const darkItems = u.dark
     .map((d) => ({ d, s: u.stars.find((x) => x.c === d.c) }))
     .filter((o): o is { d: typeof u.dark[number]; s: NonNullable<typeof o.s> } => !!o.s)
@@ -212,6 +223,7 @@ function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
         dper.push(period)
         drad.push(R)
         dseed.push(k * 1.7 + d.f)
+        darkOwners.push(s.c)
       }
     })
 
@@ -224,6 +236,8 @@ function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
     geo.setAttribute('aPeriod', new THREE.Float32BufferAttribute(dper, 1))
     geo.setAttribute('aRadius', new THREE.Float32BufferAttribute(drad, 1))
     geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(dseed, 1))
+    darkFocus = new THREE.Float32BufferAttribute(new Float32Array(darkOwners.length).fill(1), 1)
+    geo.setAttribute('aFocus', darkFocus)
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6)
 
     darkMat = scope.use(new THREE.ShaderMaterial({
@@ -248,6 +262,20 @@ function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
     setActiveWorm(i) { if (wormMat) wormMat.uniforms.uActive.value = i },
     setEmphasis(dark) { if (darkMat) darkMat.uniforms.uEmphasis.value = dark },
     setWormVisible(on) { if (wormPts) wormPts.visible = on },
+    setFocus(star) {
+      if (wormFocus) {
+        const values = wormFocus.array as Float32Array
+        for (let i = 0; i < values.length; i++) values[i] = ownerOpacity(wormOwners[i], star?.g ?? null)
+        wormFocus.needsUpdate = true
+      }
+      if (darkFocus) {
+        const values = darkFocus.array as Float32Array
+        for (let i = 0; i < values.length; i++) {
+          values[i] = ownerOpacity(darkOwners[i], star?.c ?? null)
+        }
+        darkFocus.needsUpdate = true
+      }
+    },
     dispose,
   }
 }

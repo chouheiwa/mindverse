@@ -9,6 +9,14 @@ import { starColor } from './blackbody'
 /** 视场角。60° 比 three 默认的 75° 稳一点，边缘的点精灵不会被拉变形。 */
 export const FOV = 60
 
+/** 核心相对星系半径的直径；宁可小一些，不和近景恒星争主体。 */
+export const NEBULA_CORE_DIAMETER_SCALE = 2.25
+
+/** 进入恒星系后背景额外退让，与距离退让叠加。 */
+export function nebulaFocusGain(focused: boolean): number {
+  return focused ? 0.38 : 1
+}
+
 /**
  * 场景包围半径。
  *

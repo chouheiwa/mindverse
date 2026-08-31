@@ -5,6 +5,7 @@ import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
 import { starData, type StarDatum } from './starData'
 import { renderDim } from './stars'
 import { PLANET_CONVERGENCE_START, PLANET_STAR_LOD_END_PX, PLANET_STAR_LOD_START_PX, indexPlanetsByStar } from '../planetVisibility'
+import { ownerOpacity } from '../focusEmphasis'
 
 // 有体积的天体：恒星球体、行星、行星轨道。
 //
@@ -354,6 +355,7 @@ export interface BodyLayer {
   group: THREE.Group
   setUniform(name: string, value: number): void
   setMode(mode: Mode, u: Universe, wormIdx: number): void
+  setFocus(starId: string | null): void
   /** 供拾取与飞入复用，顺序与 u.stars 一致 */
   data: StarDatum[]
   /** 全部行星，顺序即实例顺序 */
@@ -570,6 +572,15 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
   const rSelAttr = ringGeo.getAttribute('iSel') as THREE.InstancedBufferAttribute
   let selected = -1
   const planetsByStar = indexPlanetsByStar(planetData)
+  let modeDims = data.map(() => 1)
+  let focusedStarId: string | null = null
+  const applyDims = () => {
+    for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(data[i].s.c, focusedStarId)
+    for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(planetData[i].star.s.c, focusedStarId)
+    sMetaAttr.needsUpdate = true
+    pDimAttr.needsUpdate = true
+    rDimAttr.needsUpdate = true
+  }
 
   return {
     group,
@@ -587,13 +598,13 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     setUniform(name, value) {
       for (const m of mats) if (m.uniforms[name]) m.uniforms[name].value = value
     },
+    setFocus(starId) {
+      focusedStarId = starId
+      applyDims()
+    },
     setMode(mode, uni, wormIdx) {
-      const dims = data.map((d) => renderDim(d.s, mode, uni, wormIdx))
-      for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = dims[i]
-      sMetaAttr.needsUpdate = true
-      for (let i = 0; i < pn; i++) pDim[i] = dims[pStarIndex[i]]
-      pDimAttr.needsUpdate = true
-      rDimAttr.needsUpdate = true
+      modeDims = data.map((d) => renderDim(d.s, mode, uni, wormIdx))
+      applyDims()
     },
     dispose() {
       sphere.dispose()

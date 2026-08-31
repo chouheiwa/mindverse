@@ -1,7 +1,9 @@
 import * as THREE from 'three'
-import type { Mode, Universe } from '../../types'
+import type { Cluster, Universe } from '../../types'
 import { starColor } from './blackbody'
 import { ResourceScope, type ResourceCleanup } from '../resourceScope'
+import { starLabelOpacity } from '../labelVisibility'
+import { starData, type StarDatum } from './starData'
 
 // 星群名。
 //
@@ -13,19 +15,19 @@ import { ResourceScope, type ResourceCleanup } from '../resourceScope'
 
 export class Labels {
   private canvas: HTMLCanvasElement
-  private u: Universe
   private ctx: CanvasRenderingContext2D
   private w = 0
   private h = 0
   private v = new THREE.Vector3()
   private v2 = new THREE.Vector3()
   private disposeResources: ResourceCleanup
+  private stars: StarDatum[]
 
   constructor(canvas: HTMLCanvasElement, u: Universe) {
     const scope = new ResourceScope()
     try {
       this.canvas = canvas
-      this.u = u
+      this.stars = starData(u)
       const context = canvas.getContext('2d')
       if (!context) throw new Error('2D label canvas is unavailable')
       this.ctx = context
@@ -56,7 +58,14 @@ export class Labels {
   /** 比这更近的星群质心不画名字 —— 飞进恒星系时它会横在画面正中。 */
   tooClose = 0
 
-  draw(camera: THREE.PerspectiveCamera, converge: number, mode: Mode, wormIdx: number, near: number, far: number) {
+  draw(
+    camera: THREE.PerspectiveCamera,
+    converge: number,
+    clusters: readonly Cluster[],
+    focusStar: StarDatum | null,
+    near: number,
+    far: number,
+  ) {
     const ctx = this.ctx
     ctx.clearRect(0, 0, this.w, this.h)
     if (converge < 0.88) return
@@ -70,24 +79,17 @@ export class Labels {
     ctx.lineJoin = 'round'
     ctx.miterLimit = 2
 
-    const worm = this.u.wormholes[wormIdx]
     const boxes: [number, number, number, number][] = []
 
-    const ordered = this.u.clusters
+    const ordered = clusters
       .map((c) => {
         this.v.set(c.c[0], c.c[1], c.c[2]).project(camera)
         return { c, ndc: { x: this.v.x, y: this.v.y, z: this.v.z } }
       })
       // z 在 [-1,1] 之外表示在相机背后或超出远平面
       .filter((o) => o.ndc.z > -1 && o.ndc.z < 1)
-      .sort((a, b) => b.c.n - a.c.n)
 
     for (const { c, ndc } of ordered) {
-      const dim = mode === 'all' ? 1
-        : mode === 'worm' && worm ? (c.g === worm.a || c.g === worm.b ? 1 : 0.16)
-        : 0.3
-      if (dim < 0.25) continue
-
       const x = (ndc.x * 0.5 + 0.5) * this.w
       const y = (-ndc.y * 0.5 + 0.5) * this.h
       if (x < -80 || x > this.w + 80 || y < -40 || y > this.h + 40) continue
@@ -107,7 +109,7 @@ export class Labels {
       if (boxes.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) continue
       boxes.push(box)
 
-      const a = Math.min(1, 0.96 * la * dim * df)
+      const a = Math.min(1, 0.96 * la * df)
       const rgb = starColor(c.hue, c.sat)
       const r = Math.round(226 + 29 * rgb[0])
       const g = Math.round(226 + 29 * rgb[1])
@@ -118,6 +120,26 @@ export class Labels {
       ctx.strokeText(c.name, x, ly)
       ctx.fillStyle = `rgba(${Math.min(255, r)},${Math.min(255, g)},${Math.min(255, b)},${a.toFixed(3)})`
       ctx.fillText(c.name, x, ly)
+    }
+
+    if (!focusStar) return
+    const projectionScale = (this.h * 0.5) / Math.tan((camera.fov * Math.PI) / 360)
+    for (const star of this.stars) {
+      if (star.s.g !== focusStar.s.g) continue
+      this.v.set(star.s.p[0], star.s.p[1], star.s.p[2])
+      this.v2.copy(this.v).applyMatrix4(camera.matrixWorldInverse)
+      const viewZ = Math.max(1, -this.v2.z)
+      const opacity = starLabelOpacity(star.bodyR * projectionScale / viewZ) * la
+      if (opacity <= 0) continue
+      this.v.project(camera)
+      if (this.v.z <= -1 || this.v.z >= 1) continue
+      const x = (this.v.x * 0.5 + 0.5) * this.w
+      const y = (-this.v.y * 0.5 + 0.5) * this.h - 12
+      ctx.lineWidth = 3
+      ctx.strokeStyle = `rgba(3,5,12,${(opacity * 0.92).toFixed(3)})`
+      ctx.strokeText(star.s.c, x, y)
+      ctx.fillStyle = `rgba(240,244,255,${opacity.toFixed(3)})`
+      ctx.fillText(star.s.c, x, y)
     }
   }
 }

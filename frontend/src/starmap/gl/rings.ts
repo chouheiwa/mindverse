@@ -4,6 +4,7 @@ import { clusterAxis, orbitRing } from '../projection'
 import { starColor } from './blackbody'
 import { DEPTH_FADE } from './chunks'
 import { ResourceScope } from '../resourceScope'
+import { ownerOpacity } from '../focusEmphasis'
 
 // 轨道环。
 //
@@ -46,6 +47,7 @@ export interface RingLayer {
   object: THREE.LineSegments
   setUniform(name: string, value: number): void
   setMode(mode: Mode, u: Universe, wormIdx: number): void
+  setFocus(clusterId: number | null): void
   dispose(): void
 }
 
@@ -110,20 +112,30 @@ function makeRingsScoped(u: Universe, scope: ResourceScope): RingLayer | null {
   object.frustumCulled = false
 
   const groups = segsGroup
+  const modeDim = new Float32Array(n).fill(1)
+  let focusedCluster: number | null = null
   const dimAttr = geo.getAttribute('aDim') as THREE.BufferAttribute
   const dispose = scope.release()
+  const applyDims = () => {
+    for (let i = 0; i < n; i++) dim[i] = modeDim[i] * ownerOpacity(groups[i], focusedCluster)
+    dimAttr.needsUpdate = true
+  }
 
   return {
     object,
     setUniform(name, value) { if (mat.uniforms[name]) mat.uniforms[name].value = value },
+    setFocus(clusterId) {
+      focusedCluster = clusterId
+      applyDims()
+    },
     setMode(mode, uni, wormIdx) {
       const w = uni.wormholes[wormIdx]
       for (let i = 0; i < n; i++) {
-        dim[i] = mode === 'all' ? 1
+        modeDim[i] = mode === 'all' ? 1
           : mode === 'worm' && w ? (groups[i] === w.a || groups[i] === w.b ? 1 : 0)
           : 0.14
       }
-      dimAttr.needsUpdate = true
+      applyDims()
     },
     dispose,
   }

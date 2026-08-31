@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Universe } from '../../types'
 import { makeNebula } from './nebula'
+import { cinematicEnvironment } from './cinematic'
 import { makeStars } from './stars'
 import { makeDust } from './dust'
 import { makeRings } from './rings'
@@ -57,7 +58,7 @@ export function renderStill(u: Universe, w: number, h: number): Still {
   camera.lookAt(0, 0, 0)
 
   const scene = new THREE.Scene()
-  const nebula = makeNebula(renderer, R, nebulaPalette(u), BAKE)
+  const nebula = makeNebula(renderer, R, nebulaPalette(u), { ...cinematicEnvironment('high'), nebulaBake: BAKE })
   const stars = makeStars(u, false)
   const dust = makeDust(u, false)
   const rings = makeRings(u)

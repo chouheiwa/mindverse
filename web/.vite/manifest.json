@@ -18,8 +18,8 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_postprocessing-CCzHAWZV.js": {
-    "file": "assets/postprocessing-CCzHAWZV.js",
+  "_postprocessing-UefeKVF2.js": {
+    "file": "assets/postprocessing-UefeKVF2.js",
     "name": "postprocessing",
     "imports": [
       "_three-Cq-fTrNH.js"
@@ -54,18 +54,18 @@
     ]
   },
   "src/starmap/Renderer.ts": {
-    "file": "assets/Renderer-B-5dxcoI.js",
+    "file": "assets/Renderer-iBlVWmvV.js",
     "name": "Renderer",
     "src": "src/starmap/Renderer.ts",
     "isDynamicEntry": true,
     "imports": [
       "_api-vGgttR-j.js",
       "_three-Cq-fTrNH.js",
-      "_postprocessing-CCzHAWZV.js"
+      "_postprocessing-UefeKVF2.js"
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-DG56ua9t.js",
+    "file": "assets/QuestionWorkspace-Dv--_Ikw.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -91,7 +91,7 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-BIKenOlE.js",
+    "file": "assets/Universe-CSOiOuzK.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
@@ -111,7 +111,7 @@
     ]
   },
   "universe.html": {
-    "file": "assets/universe-PsK6Ir2V.js",
+    "file": "assets/universe-BjTbgtem.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,

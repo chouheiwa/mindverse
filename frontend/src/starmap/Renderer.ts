@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BlendFunction, BloomEffect, ChromaticAberrationEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
+import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Mode, Star, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
 import { orbit } from './projection'
@@ -11,12 +11,14 @@ import { makeDust, type DustLayer } from './gl/dust'
 import { makeRings, type RingLayer } from './gl/rings'
 import { makeOverlay3D, type Overlay3D } from './gl/overlay3d'
 import { Labels } from './gl/labels'
-import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
+import { FOV, nebulaFocusGain, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
 import { measureFrameTiming, resumeRenderClock } from './renderClock'
 import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
+import { cinematicEnvironment } from './gl/cinematic'
+import { visibleClusterLabels } from './labelVisibility'
 
 /**
  * 星图渲染器。
@@ -115,8 +117,6 @@ export class Renderer {
   private mode: Mode = 'all'
   private wormIdx = 0
   private quality: Quality
-  /** 色差 effect；Low 档为 null（不创建）。Session 4 穿越时把 offset 拉到峰值。 */
-  private ca: ChromaticAberrationEffect | null = null
 
   /**
    * 注视点。
@@ -181,6 +181,7 @@ export class Renderer {
       ? forcedE2EQuality(location.search)
       : null
     this.quality = forcedQuality ?? quality
+    const environment = cinematicEnvironment(this.quality)
 
     this.R = sceneRadius(u)
     this.dist = this.R * 4.6
@@ -211,7 +212,7 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, this.R * 90)
 
     const data = starData(u)
-    this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u))
+    this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u), environment)
     this.resources.defer(() => this.nebula.dispose())
     this.stars = makeStars(u, reduceMotion, data)
     this.resources.defer(() => this.stars.dispose())
@@ -251,26 +252,13 @@ export class Renderer {
       mipmapBlur: true,          // 多级 mip 混合，比单核高斯的方形光晕干净
       luminanceThreshold: 0.68,
       luminanceSmoothing: 0.30,
-      intensity: 1.02,
+      intensity: environment.bloom,
       radius: 0.74,
       levels: 8,
     })
 
-    // 色差：电影感的低成本来源，不依赖深度、不碰点精灵。Low 档不创建。
-    // 径向调制：中心弱、边缘强（真镜头色差的样子）。
-    // Session 4 虫洞穿越时会把 offset 瞬时拉到峰值（~0.02）。
-    if (this.quality !== 'low') {
-      this.ca = new ChromaticAberrationEffect({
-        offset: new THREE.Vector2(0.003, 0.003),
-        radialModulation: true,
-        modulationOffset: 0.15,
-      })
-    }
-
-    // 管线顺序 = §7.6：Bloom → 色差 → ToneMap（GravitationalLens 由 Session 5 插入）。
-    const effects = this.ca
-      ? [bloom, this.ca, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })]
-      : [bloom, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })]
+    // 常态深空不创建或显示色差。
+    const effects = [bloom, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })]
     this.composer.addPass(new EffectPass(this.camera, ...effects))
 
     this.applyMode()
@@ -335,6 +323,7 @@ export class Renderer {
   /** 退回星系全景。面板关闭、切模式时调用。 */
   resetView() {
     this.focusStar = null
+    this.applyFocus()
     this.targetDist = this.R * 1.62
     this.retarget = true
     this.clearPlanet()
@@ -483,7 +472,8 @@ export class Renderer {
     // 星云按方向采样，亮度与距离无关 —— 飞进一个恒星系之后，画面上只剩
     // 几个天体，星云就成了压倒性的奶白底。它是背景，靠近时必须退场。
     const nearK = 0.22 + 0.78 * smooth(this.dist, this.R * 0.35, this.R * 1.1)
-    this.nebula.setDim((this.mode === 'all' ? 1 : 0.48) * nearK)
+    const focusRetreat = nebulaFocusGain(Boolean(this.focusStar || this.selected))
+    this.nebula.setDim((this.mode === 'all' ? 1 : 0.48) * nearK * focusRetreat)
     this.nebula.update(A * 0.001, this.camera)
 
     if (this.selected && this.cb.onAnchor) {
@@ -504,7 +494,14 @@ export class Renderer {
       sessionStorage.removeItem(E2E_SHADER_FAILURE_MARK)
     }
     this.labels.tooClose = this.R * 0.2
-    this.labels.draw(this.camera, conv, this.mode, this.wormIdx, near, far)
+    this.labels.draw(
+      this.camera,
+      conv,
+      visibleClusterLabels(this.u.clusters, this.focusStar?.s.g ?? null),
+      this.focusStar,
+      near,
+      far,
+    )
 
     if (!this.genesisDone && (skipK >= 1 || A > this.stars.igniteEnd)) {
       this.genesisDone = true
@@ -527,6 +524,13 @@ export class Renderer {
     // 暗物质常驻，只是平时很淡 —— 它得一直在那儿，进了模式才被点亮。
     // 全景里压到 0.14：三个大琥珀环会立刻抢走整张图的构图。
     this.overlay.setEmphasis(this.mode === 'dark' ? 1 : 0.14)
+  }
+
+  private applyFocus() {
+    const star = this.focusStar?.s ?? null
+    this.bodies.setFocus(star?.c ?? null)
+    this.rings?.setFocus(star?.g ?? null)
+    this.overlay.setFocus(star)
   }
 
   // ── 交互 ──
@@ -639,6 +643,7 @@ export class Renderer {
       // 飞过去。LOD 挂在屏幕尺寸上，所以「靠近」这个动作本身
       // 就会把球体、行星、轨道依次带出来
       this.focusStar = star
+      this.applyFocus()
       this.targetDist = SYSTEM_DIST
       this.retarget = true
     } else if (this.focusStar) {
@@ -651,6 +656,7 @@ export class Renderer {
     this.selected = planet
     this.bodies.setSelected(planet.index)
     this.focusStar = planet.star
+    this.applyFocus()
     this.targetDist = planetDist(planet.orbitR)
     this.retarget = true
     this.cb.onPickPlanet?.(planet)

@@ -1,5 +1,8 @@
 import * as THREE from 'three'
 import { FBM, SIMPLEX3 } from './chunks'
+import type { CinematicEnvironment } from './cinematic'
+import { ResourceScope } from '../resourceScope'
+import { NEBULA_CORE_DIAMETER_SCALE } from './scene'
 
 // 星际气体：三层不同半径的球壳 + 一枚星系核心。
 //
@@ -21,12 +24,10 @@ import { FBM, SIMPLEX3 } from './chunks'
  * 1.0 以下，否则 tone map 之后全部塌成灰白，配色等于白配。
  */
 const SHELLS = [
-  { r: 1.00, freq: 3.4, warp: 1.10, low: 0.10, high: 0.62, flat: 1.45, dust: 0.55, gain: 0.24, spin: 0.0042 },
-  { r: 1.62, freq: 2.3, warp: 0.85, low: 0.16, high: 0.70, flat: 1.05, dust: 0.38, gain: 0.17, spin: 0.0026 },
-  { r: 2.45, freq: 1.5, warp: 0.55, low: 0.24, high: 0.80, flat: 0.72, dust: 0.20, gain: 0.09, spin: 0.0015 },
+  { r: 1.00, freq: 3.4, warp: 1.10, low: 0.10, high: 0.62, flat: 1.45, dust: 0.55, spin: 0.0042 },
+  { r: 1.62, freq: 2.3, warp: 0.85, low: 0.16, high: 0.70, flat: 1.05, dust: 0.38, spin: 0.0026 },
+  { r: 2.45, freq: 1.5, warp: 0.55, low: 0.24, high: 0.80, flat: 0.72, dust: 0.20, spin: 0.0015 },
 ]
-
-const DEFAULT_BAKE = 512
 
 export interface NebulaLayer {
   group: THREE.Group
@@ -44,25 +45,34 @@ export function makeNebula(
   renderer: THREE.WebGLRenderer,
   radius: number,
   palette: [THREE.Color, THREE.Color, THREE.Color],
-  bakeSize = DEFAULT_BAKE,
+  environment: Pick<CinematicEnvironment, 'nebulaBake' | 'shellGain' | 'coreGain'>,
+): NebulaLayer {
+  return ResourceScope.construct((scope) => makeNebulaScoped(renderer, radius, palette, environment, scope))
+}
+
+function makeNebulaScoped(
+  renderer: THREE.WebGLRenderer,
+  radius: number,
+  palette: [THREE.Color, THREE.Color, THREE.Color],
+  environment: Pick<CinematicEnvironment, 'nebulaBake' | 'shellGain' | 'coreGain'>,
+  scope: ResourceScope,
 ): NebulaLayer {
   const group = new THREE.Group()
-  const disposables: { dispose(): void }[] = []
   const shells: { mesh: THREE.Mesh; spin: number }[] = []
   const gains: { u: THREE.IUniform<number>; base: number }[] = []
 
   SHELLS.forEach((cfg, i) => {
-    const cube = bake(renderer, bakeSize, {
+    const cube = scope.use(bake(renderer, environment.nebulaBake, {
       freq: cfg.freq, warp: cfg.warp, low: cfg.low, high: cfg.high,
       flat: cfg.flat, dust: cfg.dust, seed: 3.7 + i * 17.3,
       colA: palette[0], colB: palette[1], colC: palette[2],
-    })
-    disposables.push(cube)
+    }))
 
-    const mat = new THREE.ShaderMaterial({
+    const gain = environment.shellGain[i]
+    const mat = scope.use(new THREE.ShaderMaterial({
       uniforms: {
         uMap: { value: cube.texture },
-        uGain: { value: cfg.gain },
+        uGain: { value: gain },
       },
       vertexShader: /* glsl */ `
         varying vec3 vDir;
@@ -84,11 +94,9 @@ export function makeNebula(
       depthWrite: false,
       depthTest: false,
       transparent: true,
-    })
-    disposables.push(mat)
+    }))
 
-    const geo = new THREE.BoxGeometry(1, 1, 1)
-    disposables.push(geo)
+    const geo = scope.use(new THREE.BoxGeometry(1, 1, 1))
     const mesh = new THREE.Mesh(geo, mat)
     // 半边长 = radius * r * 11：相机最远 4.6R，必须始终待在内层壳里面
     mesh.scale.setScalar(radius * cfg.r * 22)
@@ -98,14 +106,15 @@ export function makeNebula(
     mesh.rotation.set(i * 1.31, i * 2.17, i * 0.73)
     group.add(mesh)
     shells.push({ mesh, spin: cfg.spin })
-    gains.push({ u: mat.uniforms.uGain, base: cfg.gain })
+    gains.push({ u: mat.uniforms.uGain, base: gain })
   })
 
   // 星系核心：真的钉在原点，所以它会随相机正确地视差，而不是永远糊在屏幕中央
-  const core = makeCore(radius, palette[1])
-  disposables.push(core.geometry, core.material as THREE.Material)
+  const core = makeCore(radius, palette[1], environment.coreGain, scope)
   group.add(core)
-  gains.push({ u: (core.material as THREE.ShaderMaterial).uniforms.uGain, base: 1 })
+  gains.push({ u: (core.material as THREE.ShaderMaterial).uniforms.uGain, base: environment.coreGain })
+
+  const dispose = scope.release()
 
   return {
     group,
@@ -119,15 +128,13 @@ export function makeNebula(
     setDim(v) {
       for (const g of gains) g.u.value = g.base * v
     },
-    dispose() {
-      for (const d of disposables) d.dispose()
-    },
+    dispose,
   }
 }
 
-function makeCore(radius: number, tint: THREE.Color): THREE.Mesh {
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { uTint: { value: tint.clone() }, uGain: { value: 1 } },
+function makeCore(radius: number, tint: THREE.Color, gain: number, scope: ResourceScope): THREE.Mesh {
+  const mat = scope.use(new THREE.ShaderMaterial({
+    uniforms: { uTint: { value: tint.clone() }, uGain: { value: gain } },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
       void main() {
@@ -151,8 +158,11 @@ function makeCore(radius: number, tint: THREE.Color): THREE.Mesh {
     depthWrite: false,
     depthTest: false,
     transparent: true,
-  })
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(radius * 3.2, radius * 3.2), mat)
+  }))
+  const mesh = new THREE.Mesh(scope.use(new THREE.PlaneGeometry(
+    radius * NEBULA_CORE_DIAMETER_SCALE,
+    radius * NEBULA_CORE_DIAMETER_SCALE,
+  )), mat)
   mesh.renderOrder = -5
   mesh.frustumCulled = false
   return mesh
@@ -173,8 +183,10 @@ function bake(renderer: THREE.WebGLRenderer, size: number, o: BakeOpts): THREE.W
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
   })
+  const temporary = new ResourceScope()
+  try {
 
-  const mat = new THREE.ShaderMaterial({
+  const mat = temporary.use(new THREE.ShaderMaterial({
     uniforms: {
       uFreq: { value: o.freq }, uWarp: { value: o.warp },
       uLow: { value: o.low }, uHigh: { value: o.high },
@@ -224,19 +236,26 @@ function bake(renderer: THREE.WebGLRenderer, size: number, o: BakeOpts): THREE.W
     side: THREE.BackSide,
     depthWrite: false,
     depthTest: false,
-  })
+  }))
 
   const scene = new THREE.Scene()
-  const box = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), mat)
+  const box = new THREE.Mesh(temporary.use(new THREE.BoxGeometry(10, 10, 10)), mat)
   box.frustumCulled = false
   scene.add(box)
 
   const cam = new THREE.CubeCamera(0.5, 40, target)
   const prevTarget = renderer.getRenderTarget()
-  cam.update(renderer, scene)
-  renderer.setRenderTarget(prevTarget)
+  try {
+    cam.update(renderer, scene)
+  } finally {
+    renderer.setRenderTarget(prevTarget)
+  }
 
-  box.geometry.dispose()
-  mat.dispose()
+  temporary.dispose()
   return target
+  } catch (cause) {
+    temporary.dispose()
+    target.dispose()
+    throw cause
+  }
 }

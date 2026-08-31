@@ -5,6 +5,7 @@ interface E2ERenderSnapshot {
   frameTimes: number[]
   memory: { geometries: number, textures: number }
   quality: Quality
+  probeTransitionFrames: number
 }
 
 interface E2EDiagnosticsApi {
@@ -18,6 +19,7 @@ interface ActiveDiagnostics {
   renderReady: boolean
   memory(): E2ERenderSnapshot['memory']
   quality: Quality
+  probeTransitionFrames: number
 }
 
 declare global {
@@ -45,6 +47,7 @@ export function installE2EDiagnostics(
       frameTimes: [...state.frameTimes],
       memory: { ...state.memory() },
       quality: state.quality,
+      probeTransitionFrames: state.probeTransitionFrames,
     }),
   })
   state = {
@@ -53,16 +56,18 @@ export function installE2EDiagnostics(
     renderReady: false,
     memory,
     quality,
+    probeTransitionFrames: 0,
     api,
   }
   active = state
   window.__MINDVERSE_E2E__ = state.api
 }
 
-export function recordE2EFrame(owner: object, duration: number): void {
+export function recordE2EFrame(owner: object, duration: number, probeNearOpacity = 0): void {
   if (active?.owner !== owner) return
   active.renderReady = true
   active.frameTimes.push(duration)
+  if (probeNearOpacity > 0.001 && probeNearOpacity < 0.999) active.probeTransitionFrames += 1
   if (active.frameTimes.length > 120) active.frameTimes.shift()
 }
 

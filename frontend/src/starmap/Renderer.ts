@@ -18,7 +18,7 @@ import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
 import { LabelStrategyCache } from './labelVisibility'
-import { makeProbe, type ProbeLayer } from './gl/probe'
+import { makeProbe, probeLayerSnapshot, type ProbeLayer } from './gl/probe'
 
 /**
  * 星图渲染器。
@@ -522,7 +522,9 @@ export class Renderer {
     }
 
     this.composer.render()
-    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, rawFrameMs)
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+      recordE2EFrame(this, rawFrameMs, probeLayerSnapshot(this.probes).nearOpacity)
+    }
     const becameReady = this.signals.frameSucceeded()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1' && becameReady) {
       sessionStorage.removeItem(E2E_SHADER_FAILURE_MARK)

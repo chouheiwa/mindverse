@@ -10,7 +10,7 @@
       "schemaVersion": "universe.v1",
       "analysisVersion": "engine.v1",
       "meta": {
-        "items": 3,
+        "items": 4,
         "concepts": 1,
         "clusters": 1,
         "own": 3,
@@ -27,7 +27,7 @@
           "name": "测试星群",
           "lead": "Alpha",
           "c": [0, 0, 0],
-          "n": 3,
+          "n": 4,
           "o": 3,
           "f": 0,
           "hue": 218,
@@ -41,11 +41,11 @@
           "scope": "private",
           "externalQueryAllowed": false,
           "questionIds": ["question:7"],
-          "probeIds": ["article:21"],
+          "probeIds": ["article:112", "article:21"],
           "c": "Alpha",
           "g": 0,
           "p": [0, 0, 0],
-          "n": 3,
+          "n": 4,
           "o": 3,
           "f": 0,
           "hue": 218,
@@ -91,6 +91,14 @@
       ],
       "probes": [
         {
+          "id": "article:112",
+          "title": "近景材质回归文章",
+          "summary": "固定测试近景探测器",
+          "url": "https://zhuanlan.zhihu.com/p/112",
+          "bindings": [{ "relation": "created", "at": 2, "folders": [] }],
+          "discoverySources": ["own_content"]
+        },
+        {
           "id": "article:21",
           "title": "生产构建文章",
           "summary": "固定测试探测器",
@@ -104,6 +112,6 @@
   "assertions": {
     "minNonBackgroundPixels": 100,
     "questionCount": 1,
-    "probeCount": 1
+    "probeCount": 2
   }
 }

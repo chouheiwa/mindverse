@@ -107,6 +107,35 @@ describe('probe LOD', () => {
     expect(layer.group.getObjectByName('probe-near-singleton')?.visible).toBe(true)
     layer.dispose()
   })
+
+  test('cross-fades medium to near with material alpha without shrinking near geometry', () => {
+    const u = universe(1)
+    const data = starData(u)
+    const orbit = probeOrbitData(indexUniverse(u), data)[0]
+    const layer = makeProbe(indexUniverse(u), data)
+    const viewDepth = -(star.p[2] + orbit.position[2])
+    layer.update(frame(star.id, 84 * viewDepth / 0.34))
+
+    const mediumHull = layer.group.getObjectByName('probe-medium:hull') as THREE.InstancedMesh
+    const nearHull = layer.group.getObjectByName('probe-near:hull') as THREE.Mesh
+    const mediumAlpha = mediumHull.getColorAt(0, new THREE.Color()).r
+    const nearAlpha = (nearHull.material as THREE.Material).opacity
+    const scale = new THREE.Vector3()
+    nearHull.matrix.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale)
+
+    expect(nearAlpha).toBeGreaterThan(0)
+    expect(nearAlpha).toBeLessThan(1)
+    expect(nearHull.material).not.toBe(mediumHull.material)
+    expect(mediumAlpha + nearAlpha).toBeCloseTo(1)
+    expect(scale.toArray()).toEqual([1, 1, 1])
+
+    layer.update(frame(star.id, 92 * viewDepth / 0.34))
+    layer.update(frame(star.id, 76 * viewDepth / 0.34))
+    expect(probeLayerSnapshot(layer).nearOpacity).toBe(0)
+    expect((nearHull.material as THREE.Material).opacity).toBe(0)
+    expect(layer.group.getObjectByName('probe-near-singleton')?.visible).toBe(false)
+    layer.dispose()
+  })
 })
 
 describe('probe ownership and stable orbit slots', () => {

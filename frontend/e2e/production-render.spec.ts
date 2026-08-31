@@ -7,6 +7,7 @@ interface RenderSnapshot {
   frameTimes: number[]
   memory: { geometries: number, textures: number }
   quality: E2EQuality
+  probeTransitionFrames: number
 }
 
 declare global {
@@ -119,6 +120,39 @@ async function expectSnapshot(page: Page, quality?: E2EQuality) {
   expect(mutated.memory.geometries).toBeGreaterThan(0)
 }
 
+async function expectProbeNearTransitionHasNoWebGLError(page: Page) {
+  const skip = page.getByRole('button', { name: '跳过 →' })
+  if (await skip.isVisible()) await skip.click()
+  const canvas = page.locator('canvas[aria-label="认知宇宙三维星图"]')
+  const bounds = await canvas.boundingBox()
+  if (!bounds) throw new Error('render canvas has no layout bounds')
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+  await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible()
+  await canvas.hover()
+  for (let index = 0; index < 12; index += 1) await page.mouse.wheel(0, -100)
+
+  const result = await canvas.evaluate(async (node: HTMLCanvasElement) => {
+    const gl = node.getContext('webgl2') ?? node.getContext('webgl')
+    if (!gl) throw new Error('WebGL context unavailable during probe transition')
+    await new Promise<void>((resolve) => {
+      let frames = 0
+      const next = () => {
+        frames += 1
+        if (frames >= 90) resolve()
+        else requestAnimationFrame(next)
+      }
+      requestAnimationFrame(next)
+    })
+    const transitionError = gl.getError()
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    return { transitionError, settledError: gl.getError(), noError: gl.NO_ERROR }
+  })
+  expect(result.transitionError).toBe(result.noError)
+  expect(result.settledError).toBe(result.noError)
+  const snapshot = await page.evaluate(() => window.__MINDVERSE_E2E__?.snapshot())
+  expect(snapshot?.probeTransitionFrames).toBeGreaterThan(0)
+}
+
 test('production universe satisfies the first-frame render contract', async ({ page }) => {
   const errors = collectRuntimeErrors(page)
   const responses = collectRendererResponses(page)
@@ -130,6 +164,7 @@ test('production universe satisfies the first-frame render contract', async ({ p
   expect(responses.map((response) => response.status())).toEqual([200])
   await expectCanvasContract(page, fixture)
   await expectSnapshot(page)
+  await expectProbeNearTransitionHasNoWebGLError(page)
   expect(errors).toEqual([])
 })
 

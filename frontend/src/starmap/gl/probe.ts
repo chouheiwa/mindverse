@@ -74,6 +74,7 @@ export interface ProbeLayerSnapshot {
   readonly nearModelCount: number
   readonly lods: Readonly<Record<ProbeLod, number>>
   readonly maxSimultaneousLevels: number
+  readonly nearOpacity: number
   readonly parts: Readonly<Record<ProbeLod, readonly ProbePart[]>>
   readonly inspectedProbeId: string | null
   readonly highlightedPart: ProbePart | null
@@ -86,6 +87,7 @@ interface MutableSnapshot {
   nearModelCount: number
   lods: Record<ProbeLod, number>
   maxSimultaneousLevels: number
+  nearOpacity: number
   parts: Record<ProbeLod, ProbePart[]>
   inspectedProbeId: string | null
   highlightedPart: ProbePart | null
@@ -184,17 +186,32 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
   const stripGeometry = registerResource(new THREE.BoxGeometry(0.28, 0.012, 0.018))
   const etchingGeometry = registerResource(new THREE.PlaneGeometry(0.22, 0.08))
 
-  const hullMaterial = registerResource(fadingStandard({ color: 0x536173, metalness: 0.72, roughness: 0.36 }))
-  const panelMaterial = registerResource(fadingStandard({ color: 0x253959, metalness: 0.56, roughness: 0.28 }))
-  const amberMaterial = registerResource(fadingStandard({ color: 0xffa43a, emissive: 0xff7818, emissiveIntensity: 1.8, roughness: 0.28 }))
-  const metalMaterial = registerResource(fadingStandard({ color: 0x929eab, metalness: 0.84, roughness: 0.24 }))
-  const lensMaterial = registerResource(new THREE.MeshPhysicalMaterial({
+  const hullParameters = { color: 0x536173, metalness: 0.72, roughness: 0.36 }
+  const panelParameters = { color: 0x253959, metalness: 0.56, roughness: 0.28 }
+  const amberParameters = { color: 0xffa43a, emissive: 0xff7818, emissiveIntensity: 1.8, roughness: 0.28 }
+  const metalParameters = { color: 0x929eab, metalness: 0.84, roughness: 0.24 }
+  const lightParameters = { color: 0xffb14c, emissive: 0xff7b19, emissiveIntensity: 2.1, roughness: 0.22 }
+  const etchingParameters = { color: 0xc5d1dc, emissive: 0x152331, emissiveIntensity: 0.25, metalness: 0.66, roughness: 0.3, side: THREE.DoubleSide }
+
+  const hullMaterial = registerResource(fadingStandard(hullParameters))
+  const panelMaterial = registerResource(fadingStandard(panelParameters))
+  const amberMaterial = registerResource(fadingStandard(amberParameters))
+  const metalMaterial = registerResource(fadingStandard(metalParameters))
+  const nearHullMaterial = registerResource(nearStandard(hullParameters))
+  const nearPanelMaterial = registerResource(nearStandard(panelParameters))
+  const nearAmberMaterial = registerResource(nearStandard(amberParameters))
+  const nearMetalMaterial = registerResource(nearStandard(metalParameters))
+  const nearLensMaterial = registerResource(new THREE.MeshPhysicalMaterial({
     color: 0x73bde8, emissive: 0x12334c, emissiveIntensity: 0.8,
     metalness: 0.25, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08,
-    transparent: true,
+    transparent: true, depthWrite: false, opacity: 0,
   }))
-  const lightMaterial = registerResource(fadingStandard({ color: 0xffb14c, emissive: 0xff7b19, emissiveIntensity: 2.1, roughness: 0.22 }))
-  const etchingMaterial = registerResource(fadingStandard({ color: 0xc5d1dc, emissive: 0x152331, emissiveIntensity: 0.25, metalness: 0.66, roughness: 0.3, side: THREE.DoubleSide }))
+  const nearLightMaterial = registerResource(nearStandard(lightParameters))
+  const nearEtchingMaterial = registerResource(nearStandard(etchingParameters))
+  const nearMaterials: THREE.Material[] = [
+    nearHullMaterial, nearPanelMaterial, nearAmberMaterial, nearMetalMaterial,
+    nearLensMaterial, nearLightMaterial, nearEtchingMaterial,
+  ]
 
   const far: PartDefinition[] = [
     part('hull', hullGeometry, hullMaterial),
@@ -209,13 +226,25 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     part('right-hinge', hingeGeometry, metalMaterial, [0, 0, 0.20]),
   ]
   const nearOnly: PartDefinition[] = [
-    part('seam', seamGeometry, metalMaterial, [0.05, 0, 0]),
-    part('scanner-lens', scannerGeometry, lensMaterial, [0.12, 0, 0.20]),
-    part('light-strip-inner', stripGeometry, lightMaterial, [0.03, -0.17, 0]),
-    part('etching', etchingGeometry, etchingMaterial, [0.08, 0.01, -0.185], [Math.PI / 2, 0, 0]),
+    part('seam', seamGeometry, nearMetalMaterial, [0.05, 0, 0]),
+    part('scanner-lens', scannerGeometry, nearLensMaterial, [0.12, 0, 0.20]),
+    part('light-strip-inner', stripGeometry, nearLightMaterial, [0.03, -0.17, 0]),
+    part('etching', etchingGeometry, nearEtchingMaterial, [0.08, 0.01, -0.185], [Math.PI / 2, 0, 0]),
   ]
   const medium = [...far, ...additions]
-  const near = [...medium, ...nearOnly]
+  const nearMaterialByMedium = new Map<THREE.Material, THREE.Material>([
+    [hullMaterial, nearHullMaterial],
+    [panelMaterial, nearPanelMaterial],
+    [amberMaterial, nearAmberMaterial],
+    [metalMaterial, nearMetalMaterial],
+  ])
+  const near = [
+    ...medium.map((definition) => ({
+      ...definition,
+      material: nearMaterialByMedium.get(definition.material) ?? nearMetalMaterial,
+    })),
+    ...nearOnly,
+  ]
   const capacity = Math.max(1, records.length)
   const farGroup = new THREE.Group()
   farGroup.name = 'probe-far'
@@ -223,13 +252,14 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
   mediumGroup.name = 'probe-medium'
   const nearGroup = new THREE.Group()
   nearGroup.name = 'probe-near-singleton'
-  const farMeshes = instantiate(far, capacity, farGroup, registerResource)
-  const mediumMeshes = instantiate(medium, capacity, mediumGroup, registerResource)
+  const farMeshes = instantiate(far, capacity, farGroup, 10, registerResource)
+  const mediumMeshes = instantiate(medium, capacity, mediumGroup, 20, registerResource)
   const nearMeshes = near.map((definition) => {
     const mesh = new THREE.Mesh(definition.geometry, definition.material)
     mesh.name = `probe-near:${definition.part}`
     mesh.userData.probePart = definition.part
     mesh.matrixAutoUpdate = false
+    mesh.renderOrder = 30
     nearGroup.add(mesh)
     return { ...definition, mesh }
   })
@@ -252,6 +282,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     nearModelCount: 1,
     lods: { far: records.length, medium: 0, near: 0 },
     maxSimultaneousLevels: 1,
+    nearOpacity: 0,
     parts: {
       far: far.map(({ part: name }) => name),
       medium: medium.map(({ part: name }) => name),
@@ -346,7 +377,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     }
     updateInstances(farMeshes, baseMatrices, farAlphas)
     updateInstances(mediumMeshes, baseMatrices, mediumAlphas)
-    updateNear(nearMeshes, nearGroup, nearCandidate, baseMatrices, weights, snapshot, ctx.elapsedMs)
+    updateNear(nearMeshes, nearMaterials, nearGroup, nearCandidate, baseMatrices, weights, snapshot, ctx.elapsedMs)
   }
 
   layer = {
@@ -425,6 +456,7 @@ function instantiate(
   definitions: readonly PartDefinition[],
   capacity: number,
   group: THREE.Group,
+  renderOrder: number,
   registerResource: <T extends { dispose(): void }>(resource: T) => T,
 ): InstancedPart[] {
   return definitions.map((definition) => {
@@ -432,6 +464,7 @@ function instantiate(
     mesh.name = `${group.name}:${definition.part}`
     mesh.userData.probePart = definition.part
     mesh.frustumCulled = false
+    mesh.renderOrder = renderOrder
     mesh.count = capacity
     group.add(mesh)
     return { part: definition.part, mesh, local: definition.local }
@@ -460,6 +493,7 @@ function updateInstances(parts: readonly InstancedPart[], bases: readonly THREE.
 
 function updateNear(
   parts: readonly (PartDefinition & { mesh: THREE.Mesh })[],
+  materials: readonly THREE.Material[],
   group: THREE.Group,
   candidate: number,
   bases: readonly THREE.Matrix4[],
@@ -468,15 +502,15 @@ function updateNear(
   elapsedMs: number,
 ) {
   const alpha = candidate < 0 ? 0 : weights[candidate].near
+  snapshot.nearOpacity = alpha
+  for (const material of materials) material.opacity = alpha
   group.visible = candidate >= 0 && alpha > 0.001
   if (!group.visible) return
   const highlightScale = new THREE.Matrix4()
   const scanRotation = new THREE.Matrix4()
-  const fadeScale = new THREE.Matrix4().makeScale(alpha, alpha, alpha)
   for (const definition of parts) {
     definition.mesh.visible = true
     definition.mesh.matrix.multiplyMatrices(bases[candidate], definition.local)
-    definition.mesh.matrix.multiply(fadeScale)
     if (definition.part === snapshot.highlightedPart) {
       highlightScale.makeScale(1.12, 1.12, 1.12)
       definition.mesh.matrix.multiply(highlightScale)
@@ -516,6 +550,15 @@ function fadingStandard(parameters: THREE.MeshStandardMaterialParameters): THREE
   }
   material.customProgramCacheKey = () => 'mindverse-probe-instance-fade-v1'
   return material
+}
+
+function nearStandard(parameters: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    ...parameters,
+    transparent: true,
+    depthWrite: false,
+    opacity: 0,
+  })
 }
 
 function recordKey(record: Pick<ProbeOrbitDatum, 'starId' | 'probeId'>): string {

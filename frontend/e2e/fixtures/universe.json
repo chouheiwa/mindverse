@@ -1,0 +1,109 @@
+{
+  "generation": {
+    "state": "done",
+    "stage": "宇宙已成形",
+    "progress": 100,
+    "filtered": 0,
+    "source": "e2e-fixture",
+    "calls": 0,
+    "universe": {
+      "schemaVersion": "universe.v1",
+      "analysisVersion": "engine.v1",
+      "meta": {
+        "items": 3,
+        "concepts": 1,
+        "clusters": 1,
+        "own": 3,
+        "fav": 0,
+        "span": [1, 3],
+        "medz": 0,
+        "p10z": 0,
+        "source": "e2e-fixture",
+        "splits": 0
+      },
+      "clusters": [
+        {
+          "g": 0,
+          "name": "测试星群",
+          "lead": "Alpha",
+          "c": [0, 0, 0],
+          "n": 3,
+          "o": 3,
+          "f": 0,
+          "hue": 218,
+          "sat": 70,
+          "mem": ["Alpha"]
+        }
+      ],
+      "stars": [
+        {
+          "id": "star:v1:private:8ed3f6ad685b959e",
+          "scope": "private",
+          "externalQueryAllowed": false,
+          "questionIds": ["question:7"],
+          "probeIds": ["article:21"],
+          "c": "Alpha",
+          "g": 0,
+          "p": [0, 0, 0],
+          "n": 3,
+          "o": 3,
+          "f": 0,
+          "hue": 218,
+          "sat": 70,
+          "pe": 1,
+          "bu": 0,
+          "fi": "2026.08",
+          "la": "2026.08",
+          "ev": [
+            {
+              "t": "生产构建浏览器回归",
+              "u": "https://www.zhihu.com/question/7",
+              "o": 1,
+              "y": "26.08"
+            }
+          ]
+        }
+      ],
+      "particles": [[0, 0, 0, 0, 1]],
+      "wormholes": [],
+      "solo": [],
+      "dark": [],
+      "nebula": [],
+      "questions": [
+        {
+          "id": "question:7",
+          "questionId": "7",
+          "title": "生产宇宙能否正常渲染？",
+          "url": "https://www.zhihu.com/question/7",
+          "answerIds": ["answer:8"]
+        }
+      ],
+      "answers": [
+        {
+          "id": "answer:8",
+          "questionId": "question:7",
+          "title": "生产构建回答",
+          "summary": "固定测试数据",
+          "url": "https://www.zhihu.com/question/7/answer/8",
+          "bindings": [{ "relation": "created", "at": 1, "folders": [] }],
+          "discoverySources": ["own_content"]
+        }
+      ],
+      "probes": [
+        {
+          "id": "article:21",
+          "title": "生产构建文章",
+          "summary": "固定测试探测器",
+          "url": "https://zhuanlan.zhihu.com/p/21",
+          "bindings": [{ "relation": "created", "at": 2, "folders": [] }],
+          "discoverySources": ["own_content"]
+        }
+      ]
+    }
+  },
+  "assertions": {
+    "minNonBackgroundPixels": 1,
+    "questionCount": 1,
+    "probeCount": 1
+  }
+}

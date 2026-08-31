@@ -18,16 +18,11 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_postprocessing-DEVNFRfJ.js": {
-    "file": "assets/postprocessing-DEVNFRfJ.js",
+  "_postprocessing-CCzHAWZV.js": {
+    "file": "assets/postprocessing-CCzHAWZV.js",
     "name": "postprocessing",
     "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CvOWVqaR.js",
-      "_three-CRglOXhH.js",
-      "_three-iIGaBBoM.js",
-      "_three-CNMgPxYf.js",
-      "_three-DGqgeLFw.js"
+      "_three-Cq-fTrNH.js"
     ]
   },
   "_theme-CbzUqeID.css": {
@@ -41,82 +36,9 @@
       "assets/theme-CbzUqeID.css"
     ]
   },
-  "_three-BaKNbgsC.js": {
-    "file": "assets/three-BaKNbgsC.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CvOWVqaR.js",
-      "_three-CRglOXhH.js",
-      "_three-iIGaBBoM.js",
-      "_three-CNMgPxYf.js",
-      "_three-BdAEWc9W.js"
-    ]
-  },
-  "_three-BdAEWc9W.js": {
-    "file": "assets/three-BdAEWc9W.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CvOWVqaR.js",
-      "_three-CRglOXhH.js"
-    ]
-  },
-  "_three-CNMgPxYf.js": {
-    "file": "assets/three-CNMgPxYf.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CvOWVqaR.js",
-      "_three-CRglOXhH.js"
-    ]
-  },
-  "_three-CRglOXhH.js": {
-    "file": "assets/three-CRglOXhH.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CvOWVqaR.js",
-      "_three-iIGaBBoM.js",
-      "_three-CNMgPxYf.js",
-      "_three-BdAEWc9W.js"
-    ]
-  },
-  "_three-CvOWVqaR.js": {
-    "file": "assets/three-CvOWVqaR.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CRglOXhH.js"
-    ]
-  },
-  "_three-DGqgeLFw.js": {
-    "file": "assets/three-DGqgeLFw.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CRglOXhH.js"
-    ]
-  },
-  "_three-DSTeC33X.js": {
-    "file": "assets/three-DSTeC33X.js",
-    "name": "three",
-    "imports": [
-      "_three-CvOWVqaR.js",
-      "_three-CRglOXhH.js"
-    ]
-  },
-  "_three-iIGaBBoM.js": {
-    "file": "assets/three-iIGaBBoM.js",
-    "name": "three",
-    "imports": [
-      "_three-DSTeC33X.js",
-      "_three-CvOWVqaR.js",
-      "_three-CRglOXhH.js",
-      "_three-CNMgPxYf.js",
-      "_three-BaKNbgsC.js",
-      "_three-BdAEWc9W.js"
-    ]
+  "_three-Cq-fTrNH.js": {
+    "file": "assets/three-Cq-fTrNH.js",
+    "name": "three"
   },
   "index.html": {
     "file": "assets/landing-DjEU8Lvc.js",
@@ -132,22 +54,18 @@
     ]
   },
   "src/starmap/Renderer.ts": {
-    "file": "assets/Renderer-BNdblKlG.js",
+    "file": "assets/Renderer-B3vWdIjH.js",
     "name": "Renderer",
     "src": "src/starmap/Renderer.ts",
     "isDynamicEntry": true,
     "imports": [
       "_api-vGgttR-j.js",
-      "_three-DSTeC33X.js",
-      "_three-CRglOXhH.js",
-      "_three-iIGaBBoM.js",
-      "_three-CNMgPxYf.js",
-      "_three-DGqgeLFw.js",
-      "_postprocessing-DEVNFRfJ.js"
+      "_three-Cq-fTrNH.js",
+      "_postprocessing-CCzHAWZV.js"
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-BUVpotMa.js",
+    "file": "assets/QuestionWorkspace-C-Mx2pjm.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -173,7 +91,7 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-CDzK0FB4.js",
+    "file": "assets/Universe-DjY7gUX2.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
@@ -193,7 +111,7 @@
     ]
   },
   "universe.html": {
-    "file": "assets/universe-BL4lES-1.js",
+    "file": "assets/universe-6EswxAdf.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,

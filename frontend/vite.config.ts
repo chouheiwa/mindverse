@@ -24,11 +24,6 @@ function cleanAssets(dir: string): Plugin {
 export default defineConfig({
   plugins: [react(), cleanAssets(resolve(configDir, '../web/assets'))],
   base: '/',
-  // three 默认导出是一个单体模块，无法被 Rolldown 按模块继续分包。
-  // 指向等价的源码入口后，tree-shaking 与 maxSize 才能真正生效。
-  resolve: {
-    alias: [{ find: /^three$/, replacement: resolve(configDir, 'node_modules/three/src/Three.js') }],
-  },
   build: {
     outDir: resolve(configDir, '../web'),
     emptyOutDir: false,
@@ -45,7 +40,6 @@ export default defineConfig({
               name: 'three',
               test: /node_modules[\\/]three[\\/]/,
               priority: 2,
-              maxSize: 450_000,
               includeDependenciesRecursively: false,
             },
             {

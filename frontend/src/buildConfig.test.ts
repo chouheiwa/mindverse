@@ -17,4 +17,11 @@ describe('production build contract', () => {
     const pkg = JSON.parse(source('../package.json')) as { scripts: Record<string, string> }
     expect(pkg.scripts.build).toMatch(/vite build\s*&&\s*node scripts\/verify-build-boundaries\.mjs/)
   })
+
+  test('keeps Three.js in one coherent vendor group without maxSize splitting', () => {
+    const config = source('../vite.config.ts')
+    const threeGroup = config.slice(config.indexOf("name: 'three'"), config.indexOf("name: 'postprocessing'"))
+    expect(threeGroup).not.toMatch(/maxSize/)
+    expect(threeGroup).toMatch(/node_modules.*three/)
+  })
 })

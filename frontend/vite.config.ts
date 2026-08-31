@@ -3,28 +3,36 @@ import react from '@vitejs/plugin-react'
 import { rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { relative, resolve } from 'node:path'
+import { assertSafeBuildOutput } from './buildOutputSafety.js'
 
 const configDir = fileURLToPath(new URL('.', import.meta.url))
-const deployOutputDir = resolve(configDir, '../web')
-const e2eOutputDir = resolve(configDir, '../.e2e-web')
+const projectRoot = resolve(configDir, '..')
+const deployOutputDir = resolve(projectRoot, 'web')
+const e2eOutputDir = resolve(projectRoot, '.e2e-web')
 const requestedOutputDir = process.env.MINDVERSE_BUILD_DIR
 const isolatedBuild = requestedOutputDir !== undefined
 if (isolatedBuild && resolve(configDir, requestedOutputDir) !== e2eOutputDir) {
   throw new Error('MINDVERSE_BUILD_DIR may only select the isolated ../.e2e-web directory')
 }
 const buildOutputDir = isolatedBuild ? e2eOutputDir : deployOutputDir
+const allowedOutputName = isolatedBuild ? '.e2e-web' : 'web'
+const assertOutputSafety = () => assertSafeBuildOutput(projectRoot, buildOutputDir, allowedOutputName)
+
+// Config-load gate: no Vite plugin (and therefore no buildStart cleanup) can run first.
+assertOutputSafety()
 
 // 多页构建：保持 Go 侧路由不变（/ 与 /universe.html，/s/{id} 复用后者）。
 // 普通产物落进 web/，Go 用 http.FileServer 提供；E2E 产物隔离到 .e2e-web/。
 //
 // 普通构建的 emptyOutDir 必须关掉 —— web/ 下还有手工维护的 static/。但只关掉它，
 // 带哈希名的旧产物会一直堆积（构建十次就攒十份 universe-*.js）。
-// 所以单独清 assets/，两边都要。
-function cleanAssets(dir: string): Plugin {
+// 所以普通构建单独清 assets/；E2E 路径不执行任何手动删除。
+function cleanAssets(dir: string, assertSafe: () => void): Plugin {
   return {
     name: 'clean-assets',
     apply: 'build',
     buildStart() {
+      assertSafe()
       rmSync(dir, { recursive: true, force: true })
     },
   }
@@ -62,11 +70,20 @@ function emitBuildMetadata(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), cleanAssets(resolve(buildOutputDir, 'assets')), emitBuildMetadata()],
+  plugins: [
+    react(),
+    // E2E output is ignored and may retain old hashed files; never delete through that path.
+    ...(isolatedBuild ? [{
+      name: 'assert-safe-isolated-output',
+      apply: 'build' as const,
+      buildStart: assertOutputSafety,
+    }] : [cleanAssets(resolve(buildOutputDir, 'assets'), assertOutputSafety)]),
+    emitBuildMetadata(),
+  ],
   base: '/',
   build: {
     outDir: buildOutputDir,
-    emptyOutDir: isolatedBuild,
+    emptyOutDir: false,
     manifest: true,
     rolldownOptions: {
       input: {

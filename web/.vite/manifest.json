@@ -18,11 +18,11 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_postprocessing-D4Ppbo6B.js": {
-    "file": "assets/postprocessing-D4Ppbo6B.js",
+  "_postprocessing-wtPlhSw8.js": {
+    "file": "assets/postprocessing-wtPlhSw8.js",
     "name": "postprocessing",
     "imports": [
-      "_three-DuC2CzUZ.js"
+      "_three-D9i4NVAn.js"
     ]
   },
   "_theme-CbzUqeID.css": {
@@ -36,8 +36,8 @@
       "assets/theme-CbzUqeID.css"
     ]
   },
-  "_three-DuC2CzUZ.js": {
-    "file": "assets/three-DuC2CzUZ.js",
+  "_three-D9i4NVAn.js": {
+    "file": "assets/three-D9i4NVAn.js",
     "name": "three"
   },
   "index.html": {
@@ -54,18 +54,18 @@
     ]
   },
   "src/starmap/Renderer.ts": {
-    "file": "assets/Renderer-C9JrPwE_.js",
+    "file": "assets/Renderer-C-UFCC61.js",
     "name": "Renderer",
     "src": "src/starmap/Renderer.ts",
     "isDynamicEntry": true,
     "imports": [
       "_api-vGgttR-j.js",
-      "_three-DuC2CzUZ.js",
-      "_postprocessing-D4Ppbo6B.js"
+      "_three-D9i4NVAn.js",
+      "_postprocessing-wtPlhSw8.js"
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-CL6rkljc.js",
+    "file": "assets/QuestionWorkspace-CfZ6cj-V.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -91,7 +91,7 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-LLSznVw3.js",
+    "file": "assets/Universe-B28LRNc3.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
@@ -111,7 +111,7 @@
     ]
   },
   "universe.html": {
-    "file": "assets/universe-BL2NOwnj.js",
+    "file": "assets/universe-BgtoCbth.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,

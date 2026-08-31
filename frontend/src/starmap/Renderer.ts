@@ -18,7 +18,12 @@ import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
 import { LabelStrategyCache } from './labelVisibility'
-import { makeProbe, probeLayerSnapshot, writeProbeFrame, type ProbeFrame, type ProbeLayer } from './gl/probe'
+import { makeProbe, probeLayerSnapshot, writeProbeFrame, type ProbeFrame, type ProbeLayer, type ProbePart } from './gl/probe'
+import {
+  normalizeInspectionPose,
+  STANDARD_INSPECTION_POSE,
+  type InspectionPose,
+} from './probeInspection'
 
 /**
  * 星图渲染器。
@@ -50,11 +55,17 @@ export interface RendererCallbacks {
   onGenesisEnd?: () => void
   onRenderReady?: () => void
   onRenderError?: (cause: Error) => void
+  onProbeArrived?: (event: { probeId: string; token: number }) => void
+  onProbeScanComplete?: (event: { probeId: string; token: number }) => void
+  onProbePartChange?: (part: ProbePart | null) => void
+  onProbeError?: (event: { probeId: string; token: number; cause: Error }) => void
 }
 
 const CONVERGE_FROM = 1800
 const CONVERGE_MS = 3400
 const SKIP_MS = 500
+const PROBE_APPROACH_MS = 520
+const PROBE_SCAN_MS = 900
 /** 星体拾取的屏幕命中半径上下限（CSS 像素）。 */
 const HIT_MIN = 11
 const HIT_MAX = 46
@@ -79,6 +90,12 @@ const PLANET_NEAR = 1.2
 const E2E_SHADER_FAILURE_MARK = 'mindverse:e2e-shader-failed'
 function planetDist(orbitR: number) {
   return clamp(orbitR * 0.8, 2.8, 6.0)
+}
+
+interface ProbeTransition {
+  readonly kind: 'approach' | 'scan'
+  readonly probeId: string
+  readonly token: number
 }
 
 export class Renderer {
@@ -153,9 +170,23 @@ export class Renderer {
 
   private tmp = new THREE.Vector3()
   private tmp2 = new THREE.Vector3()
+  private inspectionTarget = new THREE.Vector3()
+  private inspectionLookAt = new THREE.Vector3()
+  private inspectionCameraPosition = new THREE.Vector3()
+  private inspectionCameraTarget = new THREE.Vector3()
+  private raycaster = new THREE.Raycaster()
+  private pointerNdc = new THREE.Vector2()
   private probeStarWorldPositions = new Map<string, THREE.Vector3>()
   private probeStarOpacities = new Map<string, number>()
   private probeStarData: StarDatum[] = []
+  private probeIds = new Set<string>()
+  private probeOwnerById = new Map<string, StarDatum>()
+  private inspectionProbeId: string | null = null
+  private inspectionPose: InspectionPose = { ...STANDARD_INSPECTION_POSE }
+  private probeTransition: ProbeTransition | null = null
+  private probeTransitionTimer: ReturnType<typeof setTimeout> | null = null
+  private probeTransitionRaf = 0
+  private inspectionCameraMix = 0
   private lost = false
   private destroyed = false
   private suspendedAt: number | null = null
@@ -223,6 +254,14 @@ export class Renderer {
       if (!('id' in s)) continue
       this.probeStarWorldPositions.set(s.id, new THREE.Vector3())
       this.probeStarOpacities.set(s.id, 1)
+    }
+    for (const datum of this.probeStarData) {
+      if (!('id' in datum.s)) continue
+      for (const probeId of datum.s.probeIds) {
+        if (!index.probesById.has(probeId)) continue
+        this.probeIds.add(probeId)
+        this.probeOwnerById.set(probeId, datum)
+      }
     }
     this.probeFrame = {
       elapsedMs: 0,
@@ -330,6 +369,7 @@ export class Renderer {
 
   destroy() {
     if (this.destroyed) return
+    this.exitProbeInspection()
     this.destroyed = true
     this.signals.destroy()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') removeE2EDiagnostics(this)
@@ -381,6 +421,93 @@ export class Renderer {
   setWorkspaceOpen(open: boolean) {
     this.canvas.style.pointerEvents = open ? 'none' : ''
     this.canvas.style.filter = open ? 'brightness(.55) saturate(.72)' : ''
+  }
+
+  approachProbe(probeId: string, token: number): void {
+    if (this.destroyed) return
+    this.cancelProbeTransition()
+    const transition = { kind: 'approach' as const, probeId, token }
+    this.probeTransition = transition
+    try {
+      this.requireProbe(probeId)
+      const owner = this.probeOwnerById.get(probeId)
+      if (owner) {
+        this.clearPlanet()
+        this.focusStar = owner
+        this.applyFocus()
+        this.targetDist = SYSTEM_DIST
+        this.retarget = true
+      }
+      this.inspectionProbeId = probeId
+      this.probes.inspect(probeId)
+      this.probes.setScanning(false)
+      if (this.reduceMotion) {
+        this.inspectionCameraMix = 1
+        this.finishProbeTransition(transition, this.cb.onProbeArrived)
+      } else {
+        this.inspectionCameraMix = 0
+        let startedAt: number | null = null
+        const advance = (now: number) => {
+          if (this.destroyed || this.probeTransition !== transition) return
+          startedAt ??= now
+          this.inspectionCameraMix = clamp((now - startedAt) / PROBE_APPROACH_MS, 0, 1)
+          if (this.inspectionCameraMix >= 1) {
+            this.probeTransitionRaf = 0
+            this.finishProbeTransition(transition, this.cb.onProbeArrived)
+          } else {
+            this.probeTransitionRaf = requestAnimationFrame(advance)
+          }
+        }
+        this.probeTransitionRaf = requestAnimationFrame(advance)
+      }
+    } catch (cause) {
+      this.failProbeTransition(transition, cause)
+    }
+  }
+
+  startProbeScan(probeId: string, token: number): void {
+    if (this.destroyed) return
+    this.cancelProbeTransition()
+    const transition = { kind: 'scan' as const, probeId, token }
+    this.probeTransition = transition
+    try {
+      this.requireProbe(probeId)
+      this.inspectionProbeId = probeId
+      this.probes.inspect(probeId)
+      this.probes.setScanning(true)
+      this.inspectionCameraMix = 1
+      if (this.reduceMotion) {
+        this.finishProbeTransition(transition, this.cb.onProbeScanComplete)
+      } else {
+        this.probeTransitionTimer = setTimeout(() => {
+          if (this.probeTransition === transition) this.probes.setScanning(false)
+          this.finishProbeTransition(transition, this.cb.onProbeScanComplete)
+        }, PROBE_SCAN_MS)
+      }
+    } catch (cause) {
+      this.failProbeTransition(transition, cause)
+    }
+  }
+
+  setProbeInspectionPose(pose: InspectionPose): void {
+    if (this.destroyed) return
+    this.inspectionPose = normalizeInspectionPose(pose)
+    this.lastTouch = performance.now()
+  }
+
+  focusProbePart(part: ProbePart | null): void {
+    if (this.destroyed) return
+    this.probes.setPartHighlight(part)
+  }
+
+  exitProbeInspection(): void {
+    this.cancelProbeTransition()
+    this.inspectionProbeId = null
+    this.inspectionPose = { ...STANDARD_INSPECTION_POSE }
+    this.inspectionCameraMix = 0
+    this.probes.inspect(null)
+    this.probes.setScanning(false)
+    this.probes.setPartHighlight(null)
   }
 
   skipGenesis() {
@@ -502,6 +629,7 @@ export class Renderer {
         renderDim(datum.s, this.mode, this.u, this.wormIdx) * focusOpacity)
     }
     this.probes.update(writeProbeFrame(this.probeFrame, A, projScale / this.dpr, focusedStarId, conv))
+    this.applyProbeInspectionCamera()
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)
     this.rings?.setUniform('uFar', far)
@@ -582,6 +710,7 @@ export class Renderer {
     c.addEventListener('pointermove', this.onMove)
     c.addEventListener('pointerup', this.onUp)
     c.addEventListener('wheel', this.onWheel, { passive: false })
+    c.addEventListener('dblclick', this.onDoubleClickBound)
     c.addEventListener('webglcontextlost', this.onContextLost)
     c.addEventListener('webglcontextrestored', this.onContextRestored)
   }
@@ -592,6 +721,7 @@ export class Renderer {
     c.removeEventListener('pointermove', this.onMove)
     c.removeEventListener('pointerup', this.onUp)
     c.removeEventListener('wheel', this.onWheel)
+    c.removeEventListener('dblclick', this.onDoubleClickBound)
     c.removeEventListener('webglcontextlost', this.onContextLost)
     c.removeEventListener('webglcontextrestored', this.onContextRestored)
   }
@@ -656,6 +786,75 @@ export class Renderer {
     // 一路拉远就逐级脱离，不用专门去点「返回」：行星 → 恒星系 → 全景
     if (this.selected && this.targetDist > SYSTEM_DIST * 0.85) this.clearPlanet()
     else if (this.focusStar && this.targetDist > this.R * 0.9) this.resetView()
+  }
+
+  private onDoubleClickBound = (event: MouseEvent) => this.onDoubleClick(event)
+
+  onDoubleClick(event: Pick<MouseEvent, 'clientX' | 'clientY'>): void {
+    if (this.destroyed || !this.inspectionProbeId) return
+    const rect = this.canvas.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    this.pointerNdc.set(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera)
+    const part = this.probes.raycastPart(this.raycaster)
+    if (!part) return
+    this.focusProbePart(part)
+    this.cb.onProbePartChange?.(part)
+  }
+
+  private applyProbeInspectionCamera(): void {
+    if (!this.inspectionProbeId || !this.probes.inspectionTarget(this.inspectionTarget)) return
+    const pose = this.inspectionPose
+    this.inspectionLookAt.set(
+      this.inspectionTarget.x + pose.panX,
+      this.inspectionTarget.y + pose.panY,
+      this.inspectionTarget.z,
+    )
+    this.inspectionCameraPosition.set(
+      this.inspectionLookAt.x + Math.sin(pose.yaw) * Math.cos(pose.pitch) * pose.distance,
+      this.inspectionLookAt.y - Math.sin(pose.pitch) * pose.distance,
+      this.inspectionLookAt.z + Math.cos(pose.yaw) * Math.cos(pose.pitch) * pose.distance,
+    )
+    this.camera.position.lerp(this.inspectionCameraPosition, this.inspectionCameraMix)
+    this.inspectionCameraTarget.copy(this.focus).lerp(this.inspectionLookAt, this.inspectionCameraMix)
+    this.camera.lookAt(this.inspectionCameraTarget)
+    this.camera.updateMatrixWorld(true)
+  }
+
+  private requireProbe(probeId: string): void {
+    if (!this.probeIds.has(probeId)) throw new Error(`Unknown probe: ${probeId}`)
+  }
+
+  private cancelProbeTransition(): void {
+    if (this.probeTransitionTimer !== null) clearTimeout(this.probeTransitionTimer)
+    if (this.probeTransitionRaf) cancelAnimationFrame(this.probeTransitionRaf)
+    this.probeTransitionTimer = null
+    this.probeTransitionRaf = 0
+    this.probeTransition = null
+  }
+
+  private finishProbeTransition(
+    transition: ProbeTransition,
+    callback: ((event: { probeId: string; token: number }) => void) | undefined,
+  ): void {
+    if (this.destroyed || this.probeTransition !== transition) return
+    this.probeTransition = null
+    this.probeTransitionTimer = null
+    callback?.({ probeId: transition.probeId, token: transition.token })
+  }
+
+  private failProbeTransition(
+    transition: ProbeTransition,
+    cause: unknown,
+  ): void {
+    if (this.probeTransition !== transition) return
+    this.cancelProbeTransition()
+    this.inspectionProbeId = null
+    const error = cause instanceof Error ? cause : new Error(String(cause))
+    this.cb.onProbeError?.({ probeId: transition.probeId, token: transition.token, cause: error })
   }
 
   /**

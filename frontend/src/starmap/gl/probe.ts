@@ -40,6 +40,8 @@ export interface ProbeLayer {
   inspect(probeId: string | null): void
   setPartHighlight(part: ProbePart | null): void
   setScanning(scanning: boolean): void
+  inspectionTarget(out: THREE.Vector3): boolean
+  raycastPart(raycaster: THREE.Raycaster): ProbePart | null
   dispose(): void
 }
 
@@ -313,6 +315,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     nearGroup.add(mesh)
     return { ...definition, mesh }
   })
+  const nearPickMeshes = nearMeshes.map(({ mesh }) => mesh)
   nearGroup.visible = false
 
   const group = new THREE.Group()
@@ -336,6 +339,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
   const instanceScratch = new THREE.Matrix4()
   const highlightScratch = new THREE.Matrix4()
   const scanScratch = new THREE.Matrix4()
+  const inspectionTarget = new THREE.Vector3()
   const snapshot: MutableSnapshot = {
     probeCount: records.length,
     sharedResourceCount,
@@ -416,9 +420,11 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
         weights[index].medium = 0
         weights[index].near = 0
       }
+      if (record.probeId === snapshot.inspectedProbeId && focused && ownerOpacity > 0) {
+        inspectedCandidate = index
+      }
       if (weights[index].near > 0) {
         if (index === nearCandidate) retainedCandidateEligible = true
-        if (record.probeId === snapshot.inspectedProbeId) inspectedCandidate = index
         if (bestCandidate < 0 || px > bestCandidatePx) {
           bestCandidate = index
           bestCandidatePx = px
@@ -437,6 +443,13 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     snapshot.maxSimultaneousLevels = 0
     for (let index = 0; index < records.length; index += 1) {
       let lod = lodByKey.get(records[index].key) ?? 'far'
+      if (index === inspectedCandidate) {
+        lod = 'near'
+        lodByKey.set(records[index].key, lod)
+        weights[index].far = 0
+        weights[index].medium = 0
+        weights[index].near = clamp01(ctx.starOpacities.get(records[index].starId) ?? 0) * clamp01(ctx.convergence)
+      }
       if (weights[index].near > 0 && index !== nearCandidate) {
         if (lod === 'near') {
           lod = 'medium'
@@ -462,6 +475,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
       nearMeshes, nearMaterials, nearGroup, nearCandidate, baseMatrices, weights, snapshot, ctx.elapsedMs,
       highlightScratch, scanScratch,
     )
+    if (nearCandidate >= 0) inspectionTarget.setFromMatrixPosition(baseMatrices[nearCandidate])
   }
 
   layer = {
@@ -479,6 +493,18 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
       if (disposed) return
       snapshot.scanning = scanning
     },
+    inspectionTarget(out) {
+      if (disposed || nearCandidate < 0 || !nearGroup.visible) return false
+      out.copy(inspectionTarget)
+      return true
+    },
+    raycastPart(raycaster) {
+      if (disposed || !nearGroup.visible) return null
+      nearGroup.updateMatrixWorld(true)
+      const hit = raycaster.intersectObjects(nearPickMeshes, false)[0]
+      const partName = hit?.object.userData.probePart
+      return isProbePart(partName) ? partName : null
+    },
     dispose() {
       if (disposed) return
       disposed = true
@@ -491,6 +517,15 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
   disposeResources = scope.release()
   return layer
 }
+
+function isProbePart(value: unknown): value is ProbePart {
+  return typeof value === 'string' && PROBE_PARTS.has(value as ProbePart)
+}
+
+const PROBE_PARTS: ReadonlySet<ProbePart> = new Set([
+  'hull', 'left-wing', 'right-wing', 'beacon', 'antenna', 'thruster',
+  'left-hinge', 'right-hinge', 'seam', 'scanner-lens', 'light-strip-inner', 'etching',
+])
 
 const UNIT_X = new THREE.Vector3(1, 0, 0)
 

@@ -47,19 +47,23 @@ function createLayer(count = 1): ProbeLayer {
   return makeProbe(indexUniverse(u), starData(u))
 }
 
-function frame(focusedStarId: string | null, projectionScale: number): ProbeFrame {
+function frame(
+  focusedStarId: string | null,
+  projectionScale: number,
+  options: { elapsedMs?: number; opacity?: number } = {},
+): ProbeFrame {
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1_000)
   camera.position.set(0, 0, 0)
   camera.lookAt(0, 0, -1)
   camera.updateMatrixWorld(true)
   return {
-    elapsedMs: 0,
+    elapsedMs: options.elapsedMs ?? 0,
     camera,
     projectionScale,
     focusedStarId,
     convergence: 1,
     starWorldPositions: new Map([[star.id, new THREE.Vector3(...star.p)]]),
-    starOpacities: new Map([[star.id, 1]]),
+    starOpacities: new Map([[star.id, options.opacity ?? 1]]),
   }
 }
 
@@ -136,6 +140,127 @@ describe('probe LOD', () => {
     expect(layer.group.getObjectByName('probe-near-singleton')?.visible).toBe(false)
     layer.dispose()
   })
+
+  test('uses instance color only as linear alpha and keeps hashed depth during fades', () => {
+    const u = universe(1)
+    const data = starData(u)
+    const orbit = probeOrbitData(indexUniverse(u), data)[0]
+    const layer = makeProbe(indexUniverse(u), data)
+    layer.update(frame(null, 1, { opacity: 0.12 }))
+
+    const farHull = layer.group.getObjectByName('probe-far:hull') as THREE.InstancedMesh
+    const material = farHull.material as THREE.MeshStandardMaterial
+    const shader = {
+      vertexShader: 'void main() {\n#include <color_vertex>\n}',
+      fragmentShader: 'void main() {\n#include <color_fragment>\n}',
+      uniforms: {},
+    } as unknown as Parameters<typeof material.onBeforeCompile>[0]
+    material.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+
+    expect(farHull.getColorAt(0, new THREE.Color()).r).toBeCloseTo(0.12)
+    expect(shader.vertexShader).toMatch(/vProbeAlpha\s*=\s*instanceColor\.r[\s\S]*vColor\.rgb\s*=\s*vec3\(1\.0\)/)
+    expect(shader.fragmentShader).toContain('diffuseColor.a *= vProbeAlpha')
+    expect(material).toMatchObject({ alphaHash: true, transparent: false, depthWrite: true })
+
+    const viewDepth = -(star.p[2] + orbit.position[2])
+    layer.update(frame(star.id, 24 * viewDepth / 0.34))
+    const mediumHull = layer.group.getObjectByName('probe-medium:hull') as THREE.InstancedMesh
+    const farAlpha = farHull.getColorAt(0, new THREE.Color()).r
+    const mediumAlpha = mediumHull.getColorAt(0, new THREE.Color()).r
+    expect(farAlpha + mediumAlpha).toBeCloseTo(1)
+    expect(farAlpha ** 2 + mediumAlpha ** 2).toBeCloseTo(0.5)
+    layer.dispose()
+  })
+
+  test('compacts visible levels and does not dirty unchanged instance buffers', () => {
+    const layer = createLayer(300)
+    const firstFrame = frame(null, 10_000, { elapsedMs: 0 })
+    layer.update(firstFrame)
+    const snapshot = probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics
+    const farHull = layer.group.getObjectByName('probe-far:hull') as THREE.InstancedMesh
+    const mediumHull = layer.group.getObjectByName('probe-medium:hull') as THREE.InstancedMesh
+
+    expect(farHull.count).toBe(300)
+    expect(mediumHull.count).toBe(0)
+    expect(snapshot.frame).toMatchObject({ farInstances: 300, mediumInstances: 0, transientAllocations: 0 })
+    expect(snapshot.frame.matrixWrites).toBeLessThanOrEqual(4 * 300)
+    expect(snapshot.frame.colorWrites).toBeLessThanOrEqual(4 * 300)
+    expect(snapshot.frame.dirtyBuffers).toBeLessThanOrEqual(8)
+
+    const versions = layer.group.children.flatMap((group) => group.children)
+      .filter((child): child is THREE.InstancedMesh => child instanceof THREE.InstancedMesh)
+      .flatMap((mesh) => [mesh.instanceMatrix.version, mesh.instanceColor?.version ?? 0])
+    layer.update(firstFrame)
+    expect(layer.group.children.flatMap((group) => group.children)
+      .filter((child): child is THREE.InstancedMesh => child instanceof THREE.InstancedMesh)
+      .flatMap((mesh) => [mesh.instanceMatrix.version, mesh.instanceColor?.version ?? 0])).toEqual(versions)
+    expect((probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).frame).toMatchObject({
+      matrixWrites: 0, colorWrites: 0, dirtyBuffers: 0, transientAllocations: 0,
+    })
+
+    layer.update(frame(null, 10_000, { elapsedMs: 1_000 }))
+    expect((probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).frame).toMatchObject({
+      matrixWrites: 4 * 300, colorWrites: 0, dirtyBuffers: 4, transientAllocations: 0,
+    })
+    layer.dispose()
+  })
+
+  test('keeps a legal 10000-probe frame bounded to visible far-part writes', () => {
+    const layer = createLayer(10_000)
+    layer.update(frame(null, 10_000))
+    const metrics = (probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).frame
+    expect(metrics).toMatchObject({
+      farInstances: 10_000,
+      mediumInstances: 0,
+      matrixWrites: 40_000,
+      colorWrites: 40_000,
+      dirtyBuffers: 8,
+      transientAllocations: 0,
+    })
+    expect((layer.group.getObjectByName('probe-medium:hull') as THREE.InstancedMesh).count).toBe(0)
+    layer.dispose()
+  })
+
+  test('keeps a near candidate across close projected-size rank swaps until inspect or exit', () => {
+    const candidateAt = (elapsedMs: number) => {
+      const layer = createLayer(2)
+      layer.update(frame(star.id, 10_000, { elapsedMs }))
+      const candidate = (probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).nearCandidateId
+      layer.dispose()
+      return candidate
+    }
+    const first = candidateAt(0)
+    const coarseSwapTime = Array.from({ length: 121 }, (_, index) => (index + 1) * 5_000)
+      .find((elapsedMs) => candidateAt(elapsedMs) !== first)
+    expect(first).toMatch(/^article:/)
+    expect(coarseSwapTime).toBeDefined()
+    let beforeSwap = (coarseSwapTime ?? 5_000) - 5_000
+    let afterSwap = coarseSwapTime ?? 5_000
+    for (let iteration = 0; iteration < 24; iteration += 1) {
+      const midpoint = (beforeSwap + afterSwap) / 2
+      if (candidateAt(midpoint) === first) beforeSwap = midpoint
+      else afterSwap = midpoint
+    }
+    expect(afterSwap - beforeSwap).toBeLessThan(0.001)
+    expect(candidateAt(beforeSwap)).toBe(first)
+    expect(candidateAt(afterSwap)).not.toBe(first)
+
+    const layer = createLayer(2)
+    layer.update(frame(star.id, 10_000, { elapsedMs: beforeSwap }))
+    layer.update(frame(star.id, 10_000, { elapsedMs: afterSwap }))
+    expect((probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).nearCandidateId).toBe(first)
+
+    const inspected = first === 'article:1' ? 'article:2' : 'article:1'
+    layer.inspect(inspected)
+    layer.update(frame(star.id, 10_000, { elapsedMs: afterSwap }))
+    expect((probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).nearCandidateId).toBe(inspected)
+    layer.inspect('article:missing')
+    layer.update(frame(star.id, 10_000, { elapsedMs: afterSwap }))
+    expect((probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).nearCandidateId).toBe(inspected)
+    layer.update(frame(star.id, 0, { elapsedMs: afterSwap }))
+    expect((probeLayerSnapshot(layer) as ProbeLayerSnapshotWithMetrics).nearCandidateId).toBeNull()
+    layer.dispose()
+  })
 })
 
 describe('probe ownership and stable orbit slots', () => {
@@ -164,7 +289,48 @@ describe('probe ownership and stable orbit slots', () => {
     expect(first.every(({ starId }) => starId === star.id)).toBe(true)
     expect(first.every((value) => !Object.hasOwn(value, 'questionId'))).toBe(true)
   })
+
+  test.each([513, 1_000, 10_000])('allocates %i stable unique slots with linear probe work', (count) => {
+    const u = universe(count)
+    const firstIndex = indexUniverse(u)
+    const firstStars = starData(u)
+    const clone = structuredClone(u)
+    const secondIndex = indexUniverse(clone)
+    const secondStars = starData(clone)
+    let membershipChecks = 0
+    const originalHas = Set.prototype.has
+    Set.prototype.has = function countedHas(value) {
+      membershipChecks += 1
+      if (membershipChecks > count * 16) throw new Error('slot allocation exceeded linear work bound')
+      return originalHas.call(this, value)
+    }
+    try {
+      const first = probeOrbitData(firstIndex, firstStars)
+      expect(membershipChecks).toBeLessThanOrEqual(count * 16)
+      membershipChecks = 0
+      const second = probeOrbitData(secondIndex, secondStars)
+      expect(membershipChecks).toBeLessThanOrEqual(count * 16)
+      Set.prototype.has = originalHas
+      expect(first).toEqual(second)
+      expect(new Set(first.map(({ slot }) => slot))).toHaveLength(count)
+      expect(first.every((value) => !Object.hasOwn(value, 'questionId'))).toBe(true)
+    } finally {
+      Set.prototype.has = originalHas
+    }
+  })
 })
+
+interface ProbeLayerSnapshotWithMetrics {
+  readonly nearCandidateId: string | null
+  readonly frame: {
+    readonly farInstances: number
+    readonly mediumInstances: number
+    readonly matrixWrites: number
+    readonly colorWrites: number
+    readonly dirtyBuffers: number
+    readonly transientAllocations: number
+  }
+}
 
 describe('shared procedural resources', () => {
   test('constructs the same shared far and medium resources for one or 300 articles', () => {

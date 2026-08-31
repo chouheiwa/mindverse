@@ -49,6 +49,7 @@ export interface ProbeOrbitDatum {
 }
 
 interface OrbitRecord extends ProbeOrbitDatum {
+  readonly key: string
   readonly axis: readonly [number, number, number]
   readonly u: readonly [number, number, number]
   readonly v: readonly [number, number, number]
@@ -75,6 +76,8 @@ export interface ProbeLayerSnapshot {
   readonly lods: Readonly<Record<ProbeLod, number>>
   readonly maxSimultaneousLevels: number
   readonly nearOpacity: number
+  readonly nearCandidateId: string | null
+  readonly frame: Readonly<ProbeFrameMetrics>
   readonly parts: Readonly<Record<ProbeLod, readonly ProbePart[]>>
   readonly inspectedProbeId: string | null
   readonly highlightedPart: ProbePart | null
@@ -88,10 +91,31 @@ interface MutableSnapshot {
   lods: Record<ProbeLod, number>
   maxSimultaneousLevels: number
   nearOpacity: number
+  nearCandidateId: string | null
+  frame: ProbeFrameMetrics
   parts: Record<ProbeLod, ProbePart[]>
   inspectedProbeId: string | null
   highlightedPart: ProbePart | null
   scanning: boolean
+}
+
+interface ProbeFrameMetrics {
+  farInstances: number
+  mediumInstances: number
+  matrixWrites: number
+  colorWrites: number
+  dirtyBuffers: number
+  transientAllocations: number
+}
+
+interface InstanceLevelState {
+  readonly indices: Int32Array
+  readonly previousIndices: Int32Array
+  readonly alphas: Float32Array
+  readonly previousAlphas: Float32Array
+  readonly matrixChanged: Uint8Array
+  readonly colorChanged: Uint8Array
+  count: number
 }
 
 const snapshots = new WeakMap<ProbeLayer, MutableSnapshot>()
@@ -145,7 +169,7 @@ function writeLodWeights(target: Record<ProbeLod, number>, lod: ProbeLod, projec
 
 /** Stable, star-local orbit assignments. Questions are deliberately absent from this path. */
 export function probeOrbitData(index: UniverseIndex, stars: readonly StarDatum[]): readonly ProbeOrbitDatum[] {
-  return buildOrbitRecords(index, stars).map(({ axis: _axis, u: _u, v: _v, speed: _speed, ...datum }) =>
+  return buildOrbitRecords(index, stars).map(({ key: _key, axis: _axis, u: _u, v: _v, speed: _speed, ...datum }) =>
     Object.freeze(datum))
 }
 
@@ -154,6 +178,7 @@ export function probeLayerSnapshot(layer: ProbeLayer): ProbeLayerSnapshot {
   if (!state) throw new Error('Unknown or disposed probe layer')
   return Object.freeze({
     ...state,
+    frame: Object.freeze({ ...state.frame }),
     lods: Object.freeze({ ...state.lods }),
     parts: Object.freeze({
       far: Object.freeze([...state.parts.far]),
@@ -204,7 +229,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
   const nearLensMaterial = registerResource(new THREE.MeshPhysicalMaterial({
     color: 0x73bde8, emissive: 0x12334c, emissiveIntensity: 0.8,
     metalness: 0.25, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08,
-    transparent: true, depthWrite: false, opacity: 0,
+    alphaHash: true, transparent: false, depthWrite: true, opacity: 0,
   }))
   const nearLightMaterial = registerResource(nearStandard(lightParameters))
   const nearEtchingMaterial = registerResource(nearStandard(etchingParameters))
@@ -271,11 +296,21 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
   const keyLight = new THREE.DirectionalLight(0xffd7a0, 2.1)
   keyLight.position.set(2, 3, 4)
   group.add(fillLight, keyLight, farGroup, mediumGroup, nearGroup)
-  const lodByKey = new Map(records.map((record) => [recordKey(record), 'far' as ProbeLod]))
+  const lodByKey = new Map(records.map((record) => [record.key, 'far' as ProbeLod]))
   const baseMatrices = records.map(() => new THREE.Matrix4())
+  const baseChanged = new Uint8Array(records.length)
   const weights = records.map(() => ({ far: 1, medium: 0, near: 0 }))
-  const farAlphas = records.map(() => 0)
-  const mediumAlphas = records.map(() => 0)
+  const farState = instanceLevelState(records.length)
+  const mediumState = instanceLevelState(records.length)
+  const quaternion = new THREE.Quaternion()
+  const tangent = new THREE.Vector3()
+  const world = new THREE.Vector3()
+  const view = new THREE.Vector3()
+  const unitScale = new THREE.Vector3(1, 1, 1)
+  const baseScratch = new THREE.Matrix4()
+  const instanceScratch = new THREE.Matrix4()
+  const highlightScratch = new THREE.Matrix4()
+  const scanScratch = new THREE.Matrix4()
   const snapshot: MutableSnapshot = {
     probeCount: records.length,
     sharedResourceCount,
@@ -283,6 +318,11 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     lods: { far: records.length, medium: 0, near: 0 },
     maxSimultaneousLevels: 1,
     nearOpacity: 0,
+    nearCandidateId: null,
+    frame: {
+      farInstances: 0, mediumInstances: 0, matrixWrites: 0,
+      colorWrites: 0, dirtyBuffers: 0, transientAllocations: 0,
+    },
     parts: {
       far: far.map(({ part: name }) => name),
       medium: medium.map(({ part: name }) => name),
@@ -293,30 +333,32 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     scanning: false,
   }
   let disposed = false
+  let nearCandidate = -1
   let disposeResources: ResourceCleanup = () => undefined
   let layer: ProbeLayer
 
   const update = (ctx: ProbeFrame) => {
     if (disposed) return
     ctx.camera.updateMatrixWorld(true)
-    const quaternion = new THREE.Quaternion()
-    const tangent = new THREE.Vector3()
-    const world = new THREE.Vector3()
-    const view = new THREE.Vector3()
-    const scale = new THREE.Vector3(1, 1, 1)
-    let nearCandidate = -1
-    let nearCandidatePx = -1
+    resetFrameMetrics(snapshot.frame)
+    farState.count = 0
+    mediumState.count = 0
+    let bestCandidate = -1
+    let bestCandidatePx = -1
+    let retainedCandidateEligible = false
+    let inspectedCandidate = -1
 
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index]
       const starWorld = ctx.starWorldPositions.get(record.starId)
       const ownerOpacity = clamp01(ctx.starOpacities.get(record.starId) ?? 0) * clamp01(ctx.convergence)
       if (!starWorld || ownerOpacity <= 0) {
+        baseChanged[index] = Number(!baseMatrices[index].equals(HIDDEN))
         baseMatrices[index].copy(HIDDEN)
         weights[index].far = 0
         weights[index].medium = 0
         weights[index].near = 0
-        lodByKey.set(recordKey(record), 'far')
+        lodByKey.set(record.key, 'far')
         continue
       }
       const angle = record.phase + ctx.elapsedMs * 0.001 * record.speed
@@ -333,13 +375,15 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
         -record.u[2] * sine + record.v[2] * cosine,
       ).normalize()
       quaternion.setFromUnitVectors(UNIT_X, tangent)
-      baseMatrices[index].compose(world, quaternion, scale)
+      baseScratch.compose(world, quaternion, unitScale)
+      baseChanged[index] = Number(!baseMatrices[index].equals(baseScratch))
+      baseMatrices[index].copy(baseScratch)
       view.copy(world).applyMatrix4(ctx.camera.matrixWorldInverse)
       const px = view.z < -0.01 ? PROBE_RADIUS * ctx.projectionScale / -view.z : 0
       const focused = record.starId === ctx.focusedStarId
-      const previous = lodByKey.get(recordKey(record)) ?? 'far'
+      const previous = lodByKey.get(record.key) ?? 'far'
       const next = focused ? nextProbeLod(previous, px) : 'far'
-      lodByKey.set(recordKey(record), next)
+      lodByKey.set(record.key, next)
       if (focused) {
         setLodWeights(weights[index], next, px, ownerOpacity)
       } else {
@@ -348,22 +392,30 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
         weights[index].near = 0
       }
       if (weights[index].near > 0) {
-        const inspected = record.probeId === snapshot.inspectedProbeId
-        if (nearCandidate < 0 || inspected || (records[nearCandidate].probeId !== snapshot.inspectedProbeId && px > nearCandidatePx)) {
-          nearCandidate = index
-          nearCandidatePx = px
+        if (index === nearCandidate) retainedCandidateEligible = true
+        if (record.probeId === snapshot.inspectedProbeId) inspectedCandidate = index
+        if (bestCandidate < 0 || px > bestCandidatePx) {
+          bestCandidate = index
+          bestCandidatePx = px
         }
       }
     }
 
-    snapshot.lods = { far: 0, medium: 0, near: 0 }
+    nearCandidate = inspectedCandidate >= 0
+      ? inspectedCandidate
+      : retainedCandidateEligible ? nearCandidate : bestCandidate
+    snapshot.nearCandidateId = nearCandidate < 0 ? null : records[nearCandidate].probeId
+
+    snapshot.lods.far = 0
+    snapshot.lods.medium = 0
+    snapshot.lods.near = 0
     snapshot.maxSimultaneousLevels = 0
     for (let index = 0; index < records.length; index += 1) {
-      let lod = lodByKey.get(recordKey(records[index])) ?? 'far'
+      let lod = lodByKey.get(records[index].key) ?? 'far'
       if (weights[index].near > 0 && index !== nearCandidate) {
         if (lod === 'near') {
           lod = 'medium'
-          lodByKey.set(recordKey(records[index]), lod)
+          lodByKey.set(records[index].key, lod)
         }
         weights[index].far = 0
         weights[index].medium = clamp01(ctx.starOpacities.get(records[index].starId) ?? 0) * clamp01(ctx.convergence)
@@ -372,12 +424,17 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
       snapshot.lods[lod] += 1
       snapshot.maxSimultaneousLevels = Math.max(snapshot.maxSimultaneousLevels,
         Number(weights[index].far > 0) + Number(weights[index].medium > 0) + Number(weights[index].near > 0))
-      farAlphas[index] = weights[index].far
-      mediumAlphas[index] = weights[index].medium
+      if (weights[index].far > 0.001) appendInstance(farState, index, weights[index].far)
+      if (weights[index].medium > 0.001) appendInstance(mediumState, index, weights[index].medium)
     }
-    updateInstances(farMeshes, baseMatrices, farAlphas)
-    updateInstances(mediumMeshes, baseMatrices, mediumAlphas)
-    updateNear(nearMeshes, nearMaterials, nearGroup, nearCandidate, baseMatrices, weights, snapshot, ctx.elapsedMs)
+    snapshot.frame.farInstances = farState.count
+    snapshot.frame.mediumInstances = mediumState.count
+    updateInstances(farMeshes, baseMatrices, baseChanged, farState, instanceScratch, snapshot.frame)
+    updateInstances(mediumMeshes, baseMatrices, baseChanged, mediumState, instanceScratch, snapshot.frame)
+    updateNear(
+      nearMeshes, nearMaterials, nearGroup, nearCandidate, baseMatrices, weights, snapshot, ctx.elapsedMs,
+      highlightScratch, scanScratch,
+    )
   }
 
   layer = {
@@ -418,12 +475,12 @@ function buildOrbitRecords(index: UniverseIndex, stars: readonly StarDatum[]): O
     if (probes.length === 0) continue
     const axis = stableAxis(datum.s.id)
     const [u, v] = stableBasis(axis)
-    const occupied = new Set<number>()
+    const nextOccupied = new Map<number, number>()
     for (const probe of probes) {
       const pairHash = hashText(`${datum.s.id}\u0000${probe.id}`)
-      let slot = pairHash % INITIAL_SLOT_COUNT
-      while (occupied.has(slot)) slot += 1
-      occupied.add(slot)
+      const preferredSlot = pairHash % INITIAL_SLOT_COUNT
+      const slot = nextAvailableSlot(nextOccupied, preferredSlot)
+      nextOccupied.set(slot, nextAvailableSlot(nextOccupied, slot + 1))
       const phase = ((slot % SLOT_ANGLE_COUNT) / SLOT_ANGLE_COUNT) * Math.PI * 2
       const radius = 2.5 + Math.floor(slot / SLOT_ANGLE_COUNT) * 0.46
       const position = [
@@ -434,6 +491,7 @@ function buildOrbitRecords(index: UniverseIndex, stars: readonly StarDatum[]): O
       records.push(Object.freeze({
         starId: datum.s.id,
         probeId: probe.id,
+        key: `${datum.s.id}\u0000${probe.id}`,
         slot,
         phase,
         radius,
@@ -446,6 +504,17 @@ function buildOrbitRecords(index: UniverseIndex, stars: readonly StarDatum[]): O
     }
   }
   return records
+}
+
+function nextAvailableSlot(occupied: Map<number, number>, initial: number): number {
+  let slot = initial
+  const path: number[] = []
+  while (occupied.has(slot)) {
+    path.push(slot)
+    slot = occupied.get(slot) ?? slot + 1
+  }
+  for (const visited of path) occupied.set(visited, slot)
+  return slot
 }
 
 function isCurrentStar(star: StarDatum['s']): star is CurrentStar {
@@ -466,28 +535,86 @@ function instantiate(
     mesh.frustumCulled = false
     mesh.renderOrder = renderOrder
     mesh.count = capacity
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3)
     group.add(mesh)
     return { part: definition.part, mesh, local: definition.local }
   })
 }
 
-function updateInstances(parts: readonly InstancedPart[], bases: readonly THREE.Matrix4[], alphas: readonly number[]) {
-  const matrix = new THREE.Matrix4()
+function instanceLevelState(capacity: number): InstanceLevelState {
+  const previousIndices = new Int32Array(capacity)
+  previousIndices.fill(-1)
+  const previousAlphas = new Float32Array(capacity)
+  previousAlphas.fill(Number.NaN)
+  return {
+    indices: new Int32Array(capacity),
+    previousIndices,
+    alphas: new Float32Array(capacity),
+    previousAlphas,
+    matrixChanged: new Uint8Array(capacity),
+    colorChanged: new Uint8Array(capacity),
+    count: 0,
+  }
+}
+
+function appendInstance(state: InstanceLevelState, recordIndex: number, alpha: number): void {
+  state.indices[state.count] = recordIndex
+  state.alphas[state.count] = alpha
+  state.count += 1
+}
+
+function resetFrameMetrics(metrics: ProbeFrameMetrics): void {
+  metrics.farInstances = 0
+  metrics.mediumInstances = 0
+  metrics.matrixWrites = 0
+  metrics.colorWrites = 0
+  metrics.dirtyBuffers = 0
+  metrics.transientAllocations = 0
+}
+
+function updateInstances(
+  parts: readonly InstancedPart[],
+  bases: readonly THREE.Matrix4[],
+  baseChanged: Uint8Array,
+  state: InstanceLevelState,
+  matrix: THREE.Matrix4,
+  metrics: ProbeFrameMetrics,
+): void {
+  for (let slot = 0; slot < state.count; slot += 1) {
+    const recordIndex = state.indices[slot]
+    state.matrixChanged[slot] = Number(state.previousIndices[slot] !== recordIndex || baseChanged[recordIndex] === 1)
+    state.colorChanged[slot] = Number(state.previousIndices[slot] !== recordIndex || state.previousAlphas[slot] !== state.alphas[slot])
+  }
   for (const { mesh, local } of parts) {
-    mesh.count = bases.length
-    for (let index = 0; index < bases.length; index += 1) {
-      const alpha = clamp01(alphas[index] ?? 0)
-      if (alpha <= 0.001) {
-        mesh.setMatrixAt(index, HIDDEN)
-      } else {
-        matrix.multiplyMatrices(bases[index], local)
-        mesh.setMatrixAt(index, matrix)
+    mesh.count = state.count
+    let matrixDirty = false
+    let colorDirty = false
+    for (let slot = 0; slot < state.count; slot += 1) {
+      if (state.matrixChanged[slot] === 1) {
+        matrix.multiplyMatrices(bases[state.indices[slot]], local)
+        mesh.setMatrixAt(slot, matrix)
+        metrics.matrixWrites += 1
+        matrixDirty = true
       }
-      WHITE.setScalar(alpha)
-      mesh.setColorAt(index, WHITE)
+      if (state.colorChanged[slot] === 1) {
+        WHITE.setScalar(state.alphas[slot])
+        mesh.setColorAt(slot, WHITE)
+        metrics.colorWrites += 1
+        colorDirty = true
+      }
     }
-    mesh.instanceMatrix.needsUpdate = true
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+    if (matrixDirty) {
+      mesh.instanceMatrix.needsUpdate = true
+      metrics.dirtyBuffers += 1
+    }
+    if (colorDirty && mesh.instanceColor) {
+      mesh.instanceColor.needsUpdate = true
+      metrics.dirtyBuffers += 1
+    }
+  }
+  for (let slot = 0; slot < state.count; slot += 1) {
+    state.previousIndices[slot] = state.indices[slot]
+    state.previousAlphas[slot] = state.alphas[slot]
   }
 }
 
@@ -500,14 +627,16 @@ function updateNear(
   weights: readonly Record<ProbeLod, number>[],
   snapshot: MutableSnapshot,
   elapsedMs: number,
-) {
+  highlightScale: THREE.Matrix4,
+  scanRotation: THREE.Matrix4,
+): void {
   const alpha = candidate < 0 ? 0 : weights[candidate].near
   snapshot.nearOpacity = alpha
-  for (const material of materials) material.opacity = alpha
+  for (const material of materials) {
+    if (material.opacity !== alpha) material.opacity = alpha
+  }
   group.visible = candidate >= 0 && alpha > 0.001
   if (!group.visible) return
-  const highlightScale = new THREE.Matrix4()
-  const scanRotation = new THREE.Matrix4()
   for (const definition of parts) {
     definition.mesh.visible = true
     definition.mesh.matrix.multiplyMatrices(bases[candidate], definition.local)
@@ -539,30 +668,29 @@ function part(
 }
 
 function fadingStandard(parameters: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
-  const material = new THREE.MeshStandardMaterial({ ...parameters, transparent: true, depthWrite: false })
+  const material = new THREE.MeshStandardMaterial({
+    ...parameters, alphaHash: true, transparent: false, depthWrite: true,
+  })
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('void main() {', 'varying float vProbeAlpha;\nvoid main() {')
-      .replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n  vProbeAlpha = instanceColor.r;\n#else\n  vProbeAlpha = 1.0;\n#endif')
+      .replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n  vProbeAlpha = instanceColor.r;\n  vColor.rgb = vec3(1.0);\n#else\n  vProbeAlpha = 1.0;\n#endif')
     shader.fragmentShader = shader.fragmentShader
       .replace('void main() {', 'varying float vProbeAlpha;\nvoid main() {')
       .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.a *= vProbeAlpha;')
   }
-  material.customProgramCacheKey = () => 'mindverse-probe-instance-fade-v1'
+  material.customProgramCacheKey = () => 'mindverse-probe-instance-fade-v2'
   return material
 }
 
 function nearStandard(parameters: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     ...parameters,
-    transparent: true,
-    depthWrite: false,
+    alphaHash: true,
+    transparent: false,
+    depthWrite: true,
     opacity: 0,
   })
-}
-
-function recordKey(record: Pick<ProbeOrbitDatum, 'starId' | 'probeId'>): string {
-  return `${record.starId}\u0000${record.probeId}`
 }
 
 function setLodWeights(

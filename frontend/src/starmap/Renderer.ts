@@ -98,6 +98,26 @@ interface ProbeTransition {
   readonly token: number
 }
 
+export function probeOwnersById(
+  index: UniverseIndex,
+  stars: readonly StarDatum[],
+): ReadonlyMap<string, readonly StarDatum[]> {
+  const owners = new Map<string, StarDatum[]>()
+  for (const datum of stars) {
+    if (!('id' in datum.s)) continue
+    for (const probeId of datum.s.probeIds) {
+      if (!index.probesById.has(probeId)) continue
+      const list = owners.get(probeId) ?? []
+      list.push(datum)
+      owners.set(probeId, list)
+    }
+  }
+  for (const list of owners.values()) {
+    list.sort((left, right) => currentStarId(left).localeCompare(currentStarId(right)))
+  }
+  return owners
+}
+
 export class Renderer {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -180,7 +200,7 @@ export class Renderer {
   private probeStarOpacities = new Map<string, number>()
   private probeStarData: StarDatum[] = []
   private probeIds = new Set<string>()
-  private probeOwnerById = new Map<string, StarDatum>()
+  private probeOwnersById: ReadonlyMap<string, readonly StarDatum[]> = new Map()
   private inspectionProbeId: string | null = null
   private inspectionPose: InspectionPose = { ...STANDARD_INSPECTION_POSE }
   private probeTransition: ProbeTransition | null = null
@@ -255,14 +275,8 @@ export class Renderer {
       this.probeStarWorldPositions.set(s.id, new THREE.Vector3())
       this.probeStarOpacities.set(s.id, 1)
     }
-    for (const datum of this.probeStarData) {
-      if (!('id' in datum.s)) continue
-      for (const probeId of datum.s.probeIds) {
-        if (!index.probesById.has(probeId)) continue
-        this.probeIds.add(probeId)
-        this.probeOwnerById.set(probeId, datum)
-      }
-    }
+    this.probeIds = new Set(index.probesById.keys())
+    this.probeOwnersById = probeOwnersById(index, data)
     this.probeFrame = {
       elapsedMs: 0,
       camera: this.camera,
@@ -430,14 +444,15 @@ export class Renderer {
     this.probeTransition = transition
     try {
       this.requireProbe(probeId)
-      const owner = this.probeOwnerById.get(probeId)
-      if (owner) {
-        this.clearPlanet()
-        this.focusStar = owner
-        this.applyFocus()
-        this.targetDist = SYSTEM_DIST
-        this.retarget = true
-      }
+      const owners = this.probeOwnersById.get(probeId) ?? []
+      const focusedStarId = this.focusStar ? currentStarId(this.focusStar) : null
+      const owner = owners.find((candidate) => currentStarId(candidate) === focusedStarId) ?? owners[0]
+      if (!owner) throw new Error(`Probe has no owner: ${probeId}`)
+      this.clearPlanet()
+      this.focusStar = owner
+      this.applyFocus()
+      this.targetDist = SYSTEM_DIST
+      this.retarget = true
       this.inspectionProbeId = probeId
       this.probes.inspect(probeId)
       this.probes.setScanning(false)
@@ -477,6 +492,7 @@ export class Renderer {
       this.probes.setScanning(true)
       this.inspectionCameraMix = 1
       if (this.reduceMotion) {
+        this.probes.setScanning(false)
         this.finishProbeTransition(transition, this.cb.onProbeScanComplete)
       } else {
         this.probeTransitionTimer = setTimeout(() => {
@@ -998,4 +1014,8 @@ function smooth(x: number, lo: number, hi: number) {
 
 function clamp(v: number, lo: number, hi: number) {
   return v < lo ? lo : v > hi ? hi : v
+}
+
+function currentStarId(datum: StarDatum): string {
+  return 'id' in datum.s ? datum.s.id : ''
 }

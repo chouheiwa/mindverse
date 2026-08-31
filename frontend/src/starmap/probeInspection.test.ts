@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import * as THREE from 'three'
-import { Renderer } from './Renderer'
+import { indexUniverse } from '../domain/universe'
+import type { CurrentStar, NormalizedCurrentUniverse } from '../types'
+import { Renderer, probeOwnersById } from './Renderer'
 import type { ProbePart } from './gl/probe'
+import { starData, type StarDatum } from './gl/starData'
 import {
   ProbeInspectionController,
   STANDARD_INSPECTION_POSE,
@@ -9,6 +12,29 @@ import {
 } from './probeInspection'
 
 const point = (id: number, x: number, y: number, button: 0 | 2 = 0) => ({ id, x, y, button })
+
+const sharedProbe = {
+  id: 'article:21', title: 'Shared article', url: 'https://zhuanlan.zhihu.com/p/21',
+  bindings: [], discoverySources: ['public_search' as const],
+}
+const sharedStar = (id: string, concept: string): CurrentStar => ({
+  id, c: concept, g: 0, p: [0, 0, -12], n: 1, o: 0, f: 1, hue: 210, sat: 70,
+  pe: 1, bu: 0, fi: '', la: '', ev: [], scope: 'public', externalQueryAllowed: false,
+  questionIds: [], probeIds: [sharedProbe.id],
+})
+
+function sharedProbeFixture(): NormalizedCurrentUniverse {
+  const starB = sharedStar('star:v1:public:f44e64e75f3948e9', 'Beta')
+  const starA = sharedStar('star:v1:public:8ed3f6ad685b959e', 'Alpha')
+  return {
+    schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
+    meta: { items: 1, concepts: 2, clusters: 1, own: 0, fav: 1, span: [0, 0], medz: 0, p10z: 0, source: 'test', splits: 0 },
+    clusters: [{ g: 0, name: 'Cluster', lead: 'Alpha', c: [0, 0, -12], n: 2, o: 0, f: 2, hue: 210, sat: 70, mem: ['Beta', 'Alpha'] }],
+    stars: [starB, starA],
+    particles: [], wormholes: [], solo: [], dark: [], nebula: [],
+    questions: [], answers: [], probes: [sharedProbe],
+  }
+}
 
 describe('ProbeInspectionController constraints', () => {
   test('clamps pitch while preserving finite yaw', () => {
@@ -130,7 +156,14 @@ function commandRenderer(reduceMotion: boolean, callbacks: Record<string, unknow
   renderer.reduceMotion = reduceMotion
   renderer.destroyed = false
   renderer.probeIds = new Set(['probe:1', 'probe:2'])
-  renderer.probeOwnerById = new Map()
+  const owner = { s: sharedStar('star:test', 'Test') } as StarDatum
+  renderer.probeOwnersById = new Map([
+    ['probe:1', [owner]],
+    ['probe:2', [owner]],
+  ])
+  renderer.focusStar = null
+  renderer.clearPlanet = vi.fn()
+  renderer.applyFocus = vi.fn()
   renderer.probeTransition = null
   renderer.probeTransitionTimer = null
   renderer.probeTransitionRaf = 0
@@ -221,8 +254,14 @@ describe('Renderer probe inspection commands', () => {
     vi.advanceTimersByTime(2_000)
     expect(normalComplete).toHaveBeenCalledWith({ probeId: 'probe:1', token: 12 })
 
-    const reducedComplete = vi.fn()
-    commandRenderer(true, { onProbeScanComplete: reducedComplete }).startProbeScan('probe:2', 13)
+    const reduced = commandRenderer(true)
+    const reducedScanning = (reduced.probes as Record<string, ReturnType<typeof vi.fn>>).setScanning
+    const reducedComplete = vi.fn(() => {
+      expect(reducedScanning).toHaveBeenLastCalledWith(false)
+    })
+    reduced.cb = { onProbeScanComplete: reducedComplete }
+    reduced.startProbeScan('probe:2', 13)
+    expect(reducedScanning.mock.calls).toEqual([[true], [false]])
     expect(reducedComplete).toHaveBeenCalledWith({ probeId: 'probe:2', token: 13 })
   })
 
@@ -251,5 +290,48 @@ describe('Renderer probe inspection commands', () => {
     expect(probes.setPartHighlight).toHaveBeenCalledWith('antenna')
     expect(probes.raycastPart).toHaveBeenCalledOnce()
     expect(changed).toHaveBeenCalledWith('scanner-lens')
+  })
+
+  test('indexes every valid shared-probe owner in stable star-id order', () => {
+    const fixture = sharedProbeFixture()
+    const index = indexUniverse(fixture)
+    const owners = probeOwnersById(index, starData(fixture)).get(sharedProbe.id) ?? []
+    expect(owners.map(({ s }) => 'id' in s ? s.id : '')).toEqual([
+      'star:v1:public:8ed3f6ad685b959e',
+      'star:v1:public:f44e64e75f3948e9',
+    ])
+  })
+
+  test('shared probe prefers its currently focused owner and otherwise uses the stable first owner', () => {
+    const fixture = sharedProbeFixture()
+    const index = indexUniverse(fixture)
+    const owners = probeOwnersById(index, starData(fixture))
+    const [ownerA, ownerB] = owners.get(sharedProbe.id) ?? []
+
+    const focused = commandRenderer(true)
+    focused.probeIds = new Set([sharedProbe.id])
+    focused.probeOwnersById = owners
+    focused.focusStar = ownerB
+    focused.approachProbe(sharedProbe.id, 21)
+    expect(focused.focusStar).toBe(ownerB)
+
+    const panorama = commandRenderer(true)
+    panorama.probeIds = new Set([sharedProbe.id])
+    panorama.probeOwnersById = owners
+    panorama.focusStar = null
+    panorama.approachProbe(sharedProbe.id, 22)
+    expect(panorama.focusStar).toBe(ownerA)
+  })
+
+  test('a valid indexed probe with no remaining owner reports an error with the same token', () => {
+    const arrived = vi.fn()
+    const failed = vi.fn()
+    const renderer = commandRenderer(true, { onProbeArrived: arrived, onProbeError: failed })
+    renderer.probeIds = new Set([sharedProbe.id])
+    renderer.probeOwnersById = new Map()
+    renderer.approachProbe(sharedProbe.id, 29)
+    expect(arrived).not.toHaveBeenCalled()
+    expect(failed).toHaveBeenCalledOnce()
+    expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 29 })
   })
 })

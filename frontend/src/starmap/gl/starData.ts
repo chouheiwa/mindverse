@@ -50,6 +50,35 @@ export interface StarDatum {
   sysV: [number, number, number]
 }
 
+interface Vector3Target<T> {
+  set(x: number, y: number, z: number): T
+}
+
+/** CPU 上的恒星当前坐标，与 points/bodies shader 的 orbit+bob 逐项同式。 */
+export function starWorldPosition<T>(
+  datum: StarDatum,
+  elapsedMs: number,
+  bobAmplitude: number,
+  out: Vector3Target<T>,
+): T {
+  const ox = datum.p[0] - datum.center[0]
+  const oy = datum.p[1] - datum.center[1]
+  const oz = datum.p[2] - datum.center[2]
+  const theta = datum.period === 0 ? 0 : ((Math.PI * 2) / datum.period) * (elapsedMs / 1000)
+  const cosine = Math.cos(theta)
+  const sine = Math.sin(theta)
+  const dot = datum.axis[0] * ox + datum.axis[1] * oy + datum.axis[2] * oz
+  const crossX = datum.axis[1] * oz - datum.axis[2] * oy
+  const crossY = datum.axis[2] * ox - datum.axis[0] * oz
+  const crossZ = datum.axis[0] * oy - datum.axis[1] * ox
+  const bob = Math.sin(elapsedMs / (6400 + ((datum.seed * 311) % 5200)) + datum.seed) * bobAmplitude
+  return out.set(
+    datum.center[0] + ox * cosine + crossX * sine + datum.axis[0] * (dot * (1 - cosine) + bob),
+    datum.center[1] + oy * cosine + crossY * sine + datum.axis[1] * (dot * (1 - cosine) + bob),
+    datum.center[2] + oz * cosine + crossZ * sine + datum.axis[2] * (dot * (1 - cosine) + bob),
+  )
+}
+
 export function starData(u: Universe): StarDatum[] {
   const stars = u.stars
   const maxN = Math.max(1, ...stars.map((s) => s.n))

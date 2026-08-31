@@ -1,9 +1,9 @@
 import * as THREE from 'three'
-import type { Cluster, Universe } from '../../types'
+import type { Cluster } from '../../types'
 import { starColor } from './blackbody'
 import { ResourceScope, type ResourceCleanup } from '../resourceScope'
-import { starLabelOpacity } from '../labelVisibility'
-import { starData, type StarDatum } from './starData'
+import { starLabelOpacity, type StarLabelVisibility } from '../labelVisibility'
+import { starWorldPosition } from './starData'
 
 // 星群名。
 //
@@ -21,13 +21,11 @@ export class Labels {
   private v = new THREE.Vector3()
   private v2 = new THREE.Vector3()
   private disposeResources: ResourceCleanup
-  private stars: StarDatum[]
 
-  constructor(canvas: HTMLCanvasElement, u: Universe) {
+  constructor(canvas: HTMLCanvasElement) {
     const scope = new ResourceScope()
     try {
       this.canvas = canvas
-      this.stars = starData(u)
       const context = canvas.getContext('2d')
       if (!context) throw new Error('2D label canvas is unavailable')
       this.ctx = context
@@ -62,14 +60,16 @@ export class Labels {
     camera: THREE.PerspectiveCamera,
     converge: number,
     clusters: readonly Cluster[],
-    focusStar: StarDatum | null,
+    stars: readonly StarLabelVisibility[],
+    elapsedMs: number,
+    bobAmplitude: number,
     near: number,
     far: number,
   ) {
     const ctx = this.ctx
     ctx.clearRect(0, 0, this.w, this.h)
     if (converge < 0.88) return
-    const la = Math.min((converge - 0.88) * 8, 1)
+    const la = Math.min((converge - 0.88) / 0.12, 1)
 
     // 描边而不是投影。shadowBlur 是把字往外糊一圈，字本身的边缘反而更软；
     // 深色描边 + 亮色填充才是在杂乱背景上保持字形锐利的做法。
@@ -122,14 +122,12 @@ export class Labels {
       ctx.fillText(c.name, x, ly)
     }
 
-    if (!focusStar) return
     const projectionScale = (this.h * 0.5) / Math.tan((camera.fov * Math.PI) / 360)
-    for (const star of this.stars) {
-      if (star.s.g !== focusStar.s.g) continue
-      this.v.set(star.s.p[0], star.s.p[1], star.s.p[2])
+    for (const { star, opacity: ownerAlpha } of stars) {
+      starWorldPosition(star, elapsedMs, bobAmplitude, this.v)
       this.v2.copy(this.v).applyMatrix4(camera.matrixWorldInverse)
       const viewZ = Math.max(1, -this.v2.z)
-      const opacity = starLabelOpacity(star.bodyR * projectionScale / viewZ) * la
+      const opacity = starLabelOpacity(star.bodyR * projectionScale / viewZ) * ownerAlpha * la
       if (opacity <= 0) continue
       this.v.project(camera)
       if (this.v.z <= -1 || this.v.z >= 1) continue

@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'vitest'
-import { cinematicEnvironment } from './cinematic'
+import { describe, expect, expectTypeOf, test } from 'vitest'
+import { cinematicEnvironment, type CinematicEnvironment } from './cinematic'
+import { makeNebula } from './nebula'
 
 describe('cinematicEnvironment', () => {
   test.each([
@@ -13,4 +14,8 @@ describe('cinematicEnvironment', () => {
   test('keeps the high shell stack below the quiet-background ceiling', () => {
     expect(cinematicEnvironment('high').shellGain.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(0.24)
   })
+})
+
+test('makeNebula requires the complete cinematic environment contract', () => {
+  expectTypeOf(makeNebula).parameter(3).toEqualTypeOf<CinematicEnvironment>()
 })

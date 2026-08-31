@@ -2,11 +2,10 @@ import * as THREE from 'three'
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Mode, Star, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
-import { orbit } from './projection'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
 import { makeStars, modeDim, renderDim, type StarLayer } from './gl/stars'
 import { makeBodies, type BodyLayer, type PlanetDatum } from './gl/bodies'
-import { starData, type StarDatum } from './gl/starData'
+import { starData, starWorldPosition, type StarDatum } from './gl/starData'
 import { makeDust, type DustLayer } from './gl/dust'
 import { makeRings, type RingLayer } from './gl/rings'
 import { makeOverlay3D, type Overlay3D } from './gl/overlay3d'
@@ -18,7 +17,7 @@ import { measureFrameTiming, resumeRenderClock } from './renderClock'
 import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
-import { visibleClusterLabels } from './labelVisibility'
+import { visibleClusterLabels, visibleStarLabels, type StarLabelVisibility } from './labelVisibility'
 
 /**
  * 星图渲染器。
@@ -94,6 +93,7 @@ export class Renderer {
   private rings: RingLayer | null
   private overlay: Overlay3D
   private labels: Labels
+  private labelStars: StarLabelVisibility[] = []
 
   private raf = 0
   private w = 0
@@ -224,7 +224,7 @@ export class Renderer {
     if (this.rings) this.resources.defer(() => this.rings?.dispose())
     this.overlay = makeOverlay3D(u)
     this.resources.defer(() => this.overlay.dispose())
-    this.labels = new Labels(labelCanvas, u)
+    this.labels = new Labels(labelCanvas)
     this.resources.defer(() => this.labels.dispose())
 
     this.scene.add(this.nebula.group, this.dust.group, this.bodies.group, this.stars.group, this.overlay.group)
@@ -498,7 +498,9 @@ export class Renderer {
       this.camera,
       conv,
       visibleClusterLabels(this.u.clusters, this.focusStar?.s.g ?? null),
-      this.focusStar,
+      this.labelStars,
+      A,
+      this.reduceMotion ? 0 : 1.35,
       near,
       far,
     )
@@ -528,6 +530,7 @@ export class Renderer {
 
   private applyFocus() {
     const star = this.focusStar?.s ?? null
+    this.labelStars = visibleStarLabels(this.bodies.data, this.focusStar)
     this.bodies.setFocus(star?.c ?? null)
     this.rings?.setFocus(star?.g ?? null)
     this.overlay.setFocus(star)
@@ -746,15 +749,7 @@ export class Renderer {
 
   /** 恒星此刻的世界坐标，与 gl/starData 喂给着色器的那套公式同式。 */
   private starWorld(d: StarDatum, A: number, out: THREE.Vector3): THREE.Vector3 {
-    const p = orbit(d.p, d.center, d.axis, A)
-    const bob = this.reduceMotion
-      ? 0
-      : Math.sin(A / (6400 + ((d.seed * 311) % 5200)) + d.seed) * 1.35
-    return out.set(
-      p[0] + d.axis[0] * bob,
-      p[1] + d.axis[1] * bob,
-      p[2] + d.axis[2] * bob,
-    )
+    return starWorldPosition(d, A, this.reduceMotion ? 0 : 1.35, out)
   }
 }
 

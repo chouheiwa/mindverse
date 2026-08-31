@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { Cluster } from '../types'
-import { starLabelOpacity, visibleClusterLabels } from './labelVisibility'
+import { starLabelOpacity, visibleClusterLabels, visibleStarLabels } from './labelVisibility'
+import type { StarDatum } from './gl/starData'
 
 const cluster = (g: number, n: number): Cluster => ({
   g, n, name: `c${g}`, lead: '', c: [0, 0, 0], o: 0, f: 0, hue: 0, sat: 0, mem: [],
@@ -28,4 +29,17 @@ describe('starLabelOpacity', () => {
     expect(starLabelOpacity(42)).toBe(1)
     expect(starLabelOpacity(99)).toBe(1)
   })
+})
+
+test('star-label owner opacity switches a to b and restores panorama on null', () => {
+  const stars = [
+    { s: { c: 'a', g: 3 } },
+    { s: { c: 'b', g: 3 } },
+    { s: { c: 'outside', g: 4 } },
+  ] as StarDatum[]
+  expect(visibleStarLabels(stars, stars[0]).map(({ star, opacity }) => [star.s.c, opacity]))
+    .toEqual([['a', 1], ['b', 0.12]])
+  expect(visibleStarLabels(stars, stars[1]).map(({ star, opacity }) => [star.s.c, opacity]))
+    .toEqual([['a', 0.12], ['b', 1]])
+  expect(visibleStarLabels(stars, null)).toEqual([])
 })

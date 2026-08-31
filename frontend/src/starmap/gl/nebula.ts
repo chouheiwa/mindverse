@@ -45,7 +45,7 @@ export function makeNebula(
   renderer: THREE.WebGLRenderer,
   radius: number,
   palette: [THREE.Color, THREE.Color, THREE.Color],
-  environment: Pick<CinematicEnvironment, 'nebulaBake' | 'shellGain' | 'coreGain'>,
+  environment: CinematicEnvironment,
 ): NebulaLayer {
   return ResourceScope.construct((scope) => makeNebulaScoped(renderer, radius, palette, environment, scope))
 }
@@ -54,7 +54,7 @@ function makeNebulaScoped(
   renderer: THREE.WebGLRenderer,
   radius: number,
   palette: [THREE.Color, THREE.Color, THREE.Color],
-  environment: Pick<CinematicEnvironment, 'nebulaBake' | 'shellGain' | 'coreGain'>,
+  environment: CinematicEnvironment,
   scope: ResourceScope,
 ): NebulaLayer {
   const group = new THREE.Group()

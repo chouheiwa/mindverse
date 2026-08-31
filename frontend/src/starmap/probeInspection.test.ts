@@ -489,19 +489,124 @@ describe('Renderer probe inspection commands', () => {
     }
   })
 
-  test('real probe layer rejects scanning while approach has not arrived', () => {
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 91))
+  test('an early invalid scan leaves the real approach intact through arrival and idempotent exit', () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return 90 + frames.length
+    }))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const arrived = vi.fn()
     const failed = vi.fn()
-    const { renderer, layer, stars } = realProbeRenderer(false, { onProbeError: failed })
+    const { renderer, layer, stars } = realProbeRenderer(false, {
+      onProbeArrived: arrived,
+      onProbeError: failed,
+    })
     try {
       renderer.approachProbe(sharedProbe.id, 32)
       const focusedId = currentDatumId(renderer.focusStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
+      const inspectionTarget = renderer.inspectionTarget as THREE.Vector3
+      inspectionTarget.set(7, 8, 9)
       renderer.startProbeScan(sharedProbe.id, 33)
+
       expect(failed).toHaveBeenCalledOnce()
       expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 33 })
+      expect(renderer.probeTransition).toMatchObject({ kind: 'approach', probeId: sharedProbe.id, token: 32 })
+      expect(renderer.inspectionProbeId).toBe(sharedProbe.id)
+      expect(inspectionTarget.toArray()).toEqual([7, 8, 9])
+      expect(probeLayerSnapshot(layer)).toMatchObject({
+        inspectedProbeId: sharedProbe.id,
+        nearCandidateId: sharedProbe.id,
+        scanning: false,
+      })
+
+      frames.shift()?.(0)
+      frames.shift()?.(10_000)
+      expect(arrived).toHaveBeenCalledWith({ probeId: sharedProbe.id, token: 32 })
+      expect(renderer.arrivedProbeId).toBe(sharedProbe.id)
+
+      renderer.exitProbeInspection()
+      renderer.exitProbeInspection()
+      expect(probeLayerSnapshot(layer)).toMatchObject({
+        inspectedProbeId: null,
+        scanning: false,
+        highlightedPart: null,
+      })
+    } finally {
+      layer.dispose()
+    }
+  })
+
+  test.each([
+    { name: 'different probe', inspectedProbeId: sharedProbe.id, invalidProbeId: 'article:22', invalidateOwner: false },
+    { name: 'wrong owner', inspectedProbeId: 'article:22', invalidProbeId: 'article:22', invalidateOwner: true },
+  ])('an invalid $name scan does not replace the current real scan transition', ({ inspectedProbeId, invalidProbeId, invalidateOwner }) => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
+    const failed = vi.fn()
+    const { renderer, layer, stars } = realProbeRenderer(true, {
+      onProbeScanComplete: complete,
+      onProbeError: failed,
+    })
+    try {
+      renderer.approachProbe(inspectedProbeId, 40)
+      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      updateProbeNear(layer, stars, focusedId)
+      renderer.focusProbePart('antenna')
+      renderer.reduceMotion = false
+      renderer.startProbeScan(inspectedProbeId, 41)
+      if (invalidateOwner) renderer.focusStar = stars[0]
+
+      renderer.startProbeScan(invalidProbeId, 42)
+
+      expect(failed).toHaveBeenCalledOnce()
+      expect(failed.mock.calls[0][0]).toMatchObject({ probeId: invalidProbeId, token: 42 })
+      expect(renderer.probeTransition).toMatchObject({ kind: 'scan', probeId: inspectedProbeId, token: 41 })
+      expect(renderer.inspectionProbeId).toBe(inspectedProbeId)
+      expect(renderer.arrivedProbeId).toBe(inspectedProbeId)
+      expect(probeLayerSnapshot(layer)).toMatchObject({
+        inspectedProbeId,
+        scanning: true,
+        highlightedPart: 'antenna',
+      })
+
+      vi.runAllTimers()
+      expect(complete).toHaveBeenCalledWith({ probeId: inspectedProbeId, token: 41 })
       expect(probeLayerSnapshot(layer).scanning).toBe(false)
+    } finally {
+      layer.dispose()
+    }
+  })
+
+  test('a legal scan setup exception synchronizes renderer and real-layer cleanup', () => {
+    const failed = vi.fn()
+    const { renderer, layer, stars } = realProbeRenderer(true, { onProbeError: failed })
+    try {
+      renderer.approachProbe(sharedProbe.id, 43)
+      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      updateProbeNear(layer, stars, focusedId)
+      renderer.focusProbePart('scanner-lens')
+      renderer.probes = {
+        ...layer,
+        setScanning: (scanning: boolean) => {
+          layer.setScanning(scanning)
+          if (scanning) throw new Error('scan visual failed')
+        },
+      }
+
+      renderer.startProbeScan(sharedProbe.id, 44)
+
+      expect(failed).toHaveBeenCalledOnce()
+      expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 44 })
+      expect(renderer.probeTransition).toBeNull()
+      expect(renderer.inspectionProbeId).toBeNull()
+      expect(renderer.arrivedProbeId).toBeNull()
+      expect(probeLayerSnapshot(layer)).toMatchObject({
+        inspectedProbeId: null,
+        scanning: false,
+        highlightedPart: null,
+      })
     } finally {
       layer.dispose()
     }

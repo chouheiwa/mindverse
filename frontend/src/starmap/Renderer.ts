@@ -485,12 +485,17 @@ export class Renderer {
 
   startProbeScan(probeId: string, token: number): void {
     if (this.destroyed) return
+    try {
+      this.requireProbe(probeId)
+      this.requireReadyProbeInspection(probeId)
+    } catch (cause) {
+      this.reportProbeError(probeId, token, cause)
+      return
+    }
     this.cancelProbeTransition()
     const transition = { kind: 'scan' as const, probeId, token }
     this.probeTransition = transition
     try {
-      this.requireProbe(probeId)
-      this.requireReadyProbeInspection(probeId)
       this.inspectionProbeId = probeId
       this.probes.inspect(probeId)
       this.probes.setScanning(true)
@@ -530,9 +535,7 @@ export class Renderer {
     this.inspectionPose = { ...STANDARD_INSPECTION_POSE }
     this.inspectionCameraMix = 0
     if (!hadProbeState) return
-    this.probes.inspect(null)
-    this.probes.setScanning(false)
-    this.probes.setPartHighlight(null)
+    this.resetProbeVisuals()
   }
 
   skipGenesis() {
@@ -909,10 +912,28 @@ export class Renderer {
     cause: unknown,
   ): void {
     if (this.probeTransition !== transition) return
-    this.cancelProbeTransition()
-    this.inspectionProbeId = null
+    this.exitProbeInspection()
+    this.reportProbeError(transition.probeId, transition.token, cause)
+  }
+
+  private reportProbeError(probeId: string, token: number, cause: unknown): void {
     const error = cause instanceof Error ? cause : new Error(String(cause))
-    this.cb.onProbeError?.({ probeId: transition.probeId, token: transition.token, cause: error })
+    this.cb.onProbeError?.({ probeId, token, cause: error })
+  }
+
+  private resetProbeVisuals(): void {
+    const resets = [
+      () => this.probes.inspect(null),
+      () => this.probes.setScanning(false),
+      () => this.probes.setPartHighlight(null),
+    ]
+    for (const reset of resets) {
+      try {
+        reset()
+      } catch {
+        // Cleanup is best-effort so one faulty visual cannot strand the other states.
+      }
+    }
   }
 
   /**

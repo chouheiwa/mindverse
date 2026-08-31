@@ -16,6 +16,7 @@ import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
 import { resumeRenderClock } from './renderClock'
 import { RendererSignals, ResourceScope } from './resourceScope'
+import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 
 /**
  * 星图渲染器。
@@ -176,7 +177,10 @@ export class Renderer {
     this.signals = new RendererSignals(cb.onRenderReady, cb.onRenderError)
     this.genesisDone = reduceMotion
     this.convergence = reduceMotion ? 1 : 0
-    this.quality = quality
+    const forcedQuality = import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
+      ? forcedE2EQuality(location.search)
+      : null
+    this.quality = forcedQuality ?? quality
 
     this.R = sceneRadius(u)
     this.dist = this.R * 4.6
@@ -274,6 +278,9 @@ export class Renderer {
     this.resources.defer(() => this.unbindPointer())
     this.resources.defer(() => this.stop())
     this.resize()
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+      installE2EDiagnostics(this, this.quality, () => ({ ...this.renderer.info.memory }))
+    }
     } catch (cause) {
       this.signals.destroy()
       this.resources.dispose()
@@ -313,6 +320,7 @@ export class Renderer {
     if (this.destroyed) return
     this.destroyed = true
     this.signals.destroy()
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') removeE2EDiagnostics(this)
     this.resources.dispose()
   }
 
@@ -488,6 +496,7 @@ export class Renderer {
     }
 
     this.composer.render()
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, dt * 1000)
     this.signals.frameSucceeded()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
       sessionStorage.removeItem(E2E_SHADER_FAILURE_MARK)

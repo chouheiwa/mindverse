@@ -102,7 +102,7 @@
     }
   },
   "assertions": {
-    "minNonBackgroundPixels": 1,
+    "minNonBackgroundPixels": 100,
     "questionCount": 1,
     "probeCount": 1
   }

@@ -2,6 +2,22 @@ import type { QuestionPlanetDatum } from '../../domain/universe'
 import type { AnswerSatellite } from '../../types'
 
 export type PlanetFamily = 'basalt' | 'strata' | 'cloud' | 'archive'
+export type PlanetLod = 'far' | 'medium' | 'near'
+
+export interface PlanetInstanceGroup {
+  readonly family: PlanetFamily
+  readonly globalIndices: readonly number[]
+}
+
+export interface PlanetLocalIndex {
+  readonly family: PlanetFamily
+  readonly instanceIndex: number
+}
+
+export interface PlanetInstanceIndexMap {
+  toLocal(globalIndex: number): PlanetLocalIndex | null
+  toGlobal(family: PlanetFamily, instanceIndex: number): number | null
+}
 
 export interface PlanetMaterialInput {
   seed: number
@@ -24,6 +40,62 @@ const FAMILIES: readonly PlanetFamily[] = ['basalt', 'strata', 'cloud', 'archive
 const ANSWER_DENSITY_REFERENCE = Math.log1p(30)
 const MISSING_FRESHNESS = .35
 const UINT32_RANGE = 0x1_0000_0000
+
+export function planetFamilyIndex(family: PlanetFamily): number {
+  return FAMILIES.indexOf(family)
+}
+
+export function groupPlanetInstances(inputs: readonly PlanetMaterialInput[]): readonly PlanetInstanceGroup[] {
+  const indices = new Map<PlanetFamily, number[]>(FAMILIES.map((family) => [family, []]))
+  inputs.forEach((input, globalIndex) => indices.get(input.family)!.push(globalIndex))
+  return FAMILIES.flatMap((family) => {
+    const globalIndices = indices.get(family)!
+    return globalIndices.length === 0
+      ? []
+      : [Object.freeze({ family, globalIndices: Object.freeze(globalIndices) })]
+  })
+}
+
+export function planetInstanceIndexMap(
+  groups: readonly PlanetInstanceGroup[],
+  globalCount: number,
+): PlanetInstanceIndexMap {
+  const localByGlobal: Array<PlanetLocalIndex | null> = Array.from({ length: globalCount }, () => null)
+  const globalByFamily = new Map<PlanetFamily, readonly number[]>()
+  for (const group of groups) {
+    if (globalByFamily.has(group.family)) throw new Error(`duplicate planet family group: ${group.family}`)
+    globalByFamily.set(group.family, group.globalIndices)
+    group.globalIndices.forEach((globalIndex, instanceIndex) => {
+      if (!Number.isSafeInteger(globalIndex) || globalIndex < 0 || globalIndex >= globalCount) {
+        throw new Error(`invalid global planet index: ${globalIndex}`)
+      }
+      if (localByGlobal[globalIndex] !== null) throw new Error(`duplicate global planet index: ${globalIndex}`)
+      localByGlobal[globalIndex] = Object.freeze({ family: group.family, instanceIndex })
+    })
+  }
+  return Object.freeze({
+    toLocal(globalIndex: number) {
+      return Number.isSafeInteger(globalIndex) && globalIndex >= 0 && globalIndex < localByGlobal.length
+        ? localByGlobal[globalIndex]
+        : null
+    },
+    toGlobal(family: PlanetFamily, instanceIndex: number) {
+      const globals = globalByFamily.get(family)
+      return globals && Number.isSafeInteger(instanceIndex) && instanceIndex >= 0 && instanceIndex < globals.length
+        ? globals[instanceIndex]
+        : null
+    },
+  })
+}
+
+export function nextPlanetLod(current: PlanetLod, projectedRadiusPx: number): PlanetLod {
+  const radius = Number.isFinite(projectedRadiusPx) ? Math.max(0, projectedRadiusPx) : 0
+  if (current === 'far') return radius >= 18 ? 'medium' : 'far'
+  if (current === 'near') return radius <= 72 ? 'medium' : 'near'
+  if (radius < 12) return 'far'
+  if (radius >= 84) return 'near'
+  return 'medium'
+}
 
 function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0

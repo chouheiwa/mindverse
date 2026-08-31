@@ -65,25 +65,36 @@ test('body planet/orbit emphasis restores exact instance arrays across a to b to
   const layer = makeBodies(index, true)
   const attrs = layer.group.children
     .map((child) => (child as THREE.Mesh).geometry as THREE.BufferGeometry)
-    .filter((geometry) => geometry.getAttribute('iDim'))
-    .map((geometry) => geometry.getAttribute('iDim') as THREE.BufferAttribute)
+    .map((geometry) => geometry.getAttribute('iBasisDim') ?? geometry.getAttribute('iDim'))
+    .filter((attribute): attribute is THREE.BufferAttribute => Boolean(attribute))
   const starMeta = (layer.group.children
     .map((child) => (child as THREE.Mesh).geometry as THREE.BufferGeometry)
     .find((geometry) => geometry.getAttribute('iMeta') && !geometry.getAttribute('iDim'))!
     .getAttribute('iMeta')) as THREE.BufferAttribute
   const versions = attrs.map((attr) => attr.version)
   const starVersion = starMeta.version
+  const globalPlanetDims = () => layer.planets.map((_, globalIndex) => {
+    const local = layer.planetIndexMap.toLocal(globalIndex)!
+    const batch = layer.group.children.find((child) => child.userData.planetFamily === local.family) as THREE.InstancedMesh
+    return (batch.geometry.getAttribute('iBasisDim') as THREE.BufferAttribute).getW(local.instanceIndex)
+  })
+  const ringAttribute = (layer.group.children.find((child) => child instanceof THREE.LineSegments) as THREE.LineSegments)
+    .geometry.getAttribute('iDim') as THREE.BufferAttribute
+  const ringDims = () => values(ringAttribute)
   layer.setFocus('a')
-  expect(attrs.map(values)).toEqual([[1, Math.fround(0.12)], [1, Math.fround(0.12)]])
-  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([1, 1])
+  expect(globalPlanetDims()).toEqual([1, Math.fround(0.12)])
+  expect(ringDims()).toEqual([1, Math.fround(0.12)])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual(attrs.map(() => 1))
   expect(starMeta.version).toBe(starVersion + 1)
   layer.setFocus('b')
-  expect(attrs.map(values)).toEqual([[Math.fround(0.12), 1], [Math.fround(0.12), 1]])
-  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([2, 2])
+  expect(globalPlanetDims()).toEqual([Math.fround(0.12), 1])
+  expect(ringDims()).toEqual([Math.fround(0.12), 1])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual(attrs.map(() => 2))
   expect(starMeta.version).toBe(starVersion + 2)
   layer.setFocus(null)
-  expect(attrs.map(values)).toEqual([[1, 1], [1, 1]])
-  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([3, 3])
+  expect(globalPlanetDims()).toEqual([1, 1])
+  expect(ringDims()).toEqual([1, 1])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual(attrs.map(() => 3))
   expect(starMeta.version).toBe(starVersion + 3)
   layer.dispose()
 })

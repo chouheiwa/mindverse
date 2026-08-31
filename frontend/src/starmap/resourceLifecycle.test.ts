@@ -15,9 +15,29 @@ const emptyUniverse = {
   questions: [], answers: [], probes: [],
 } as Universe
 
-const emptyIndex: UniverseIndex = {
-  universe: emptyUniverse,
-  starsById: new Map(), questionsById: new Map(), answersById: new Map(), probesById: new Map(),
+const familyQuestionIds = [
+  'question:family:1', 'question:family:2', 'question:family:3', 'question:family:0',
+]
+const familyStar = {
+  id: 'star:families', c: 'families', g: 1, p: [0, 0, 0] as [number, number, number],
+  n: 4, o: 0, f: 0, hue: 210, sat: .5, pe: 0, bu: 0, fi: '', la: '', ev: [],
+  scope: 'public' as const, externalQueryAllowed: false, questionIds: familyQuestionIds, probeIds: [],
+}
+const familyQuestions = familyQuestionIds.map((id) => ({ id, questionId: id, title: id, url: '', answerIds: [] }))
+const familyUniverse = {
+  schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
+  meta: { items: 4, concepts: 1, clusters: 1, own: 0, fav: 0, span: [0, 0] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
+  clusters: [{ g: 1, name: 'families', lead: 'families', c: [0, 0, 0] as [number, number, number], n: 4, o: 0, f: 0, hue: 210, sat: .5, mem: ['families'] }],
+  stars: [familyStar],
+  particles: [], wormholes: [], solo: [], dark: [], nebula: [],
+  questions: familyQuestions,
+  answers: [], probes: [],
+} satisfies Universe
+const familyIndex: UniverseIndex = {
+  universe: familyUniverse,
+  starsById: new Map([[familyStar.id, familyStar]]),
+  questionsById: new Map(familyQuestions.map((question) => [question.id, question])),
+  answersById: new Map(), probesById: new Map(),
 }
 
 test('renderer-style partial construction unwinds returned layers and renderer in reverse order', () => {
@@ -102,9 +122,24 @@ test('a body layer failure after its second material unwinds every registered re
   const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
   try {
     __failResourceAfterForTests(6)
-    expect(() => makeBodies(emptyIndex, true)).toThrow('injected resource failure after 6')
+    expect(() => makeBodies(familyIndex, true)).toThrow('injected resource failure after 6')
     expect(geometryDispose).toHaveBeenCalledTimes(4)
     expect(materialDispose).toHaveBeenCalledTimes(2)
+  } finally {
+    __failResourceAfterForTests(null)
+    geometryDispose.mockRestore()
+    materialDispose.mockRestore()
+  }
+})
+
+test('a fourth planet-family material failure unwinds all prior family resources once', () => {
+  const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
+  const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+  try {
+    __failResourceAfterForTests(12)
+    expect(() => makeBodies(familyIndex, true)).toThrow('injected resource failure after 12')
+    expect(geometryDispose).toHaveBeenCalledTimes(7)
+    expect(materialDispose).toHaveBeenCalledTimes(5)
   } finally {
     __failResourceAfterForTests(null)
     geometryDispose.mockRestore()
@@ -127,7 +162,7 @@ test('a body attribute failure unwinds preceding geometries and material once in
       return originalSetAttribute.call(this, name, attribute)
     })
   try {
-    expect(() => makeBodies(emptyIndex, true)).toThrow('injected planet attribute failure')
+    expect(() => makeBodies(familyIndex, true)).toThrow('injected planet attribute failure')
     expect(disposals).toEqual([
       'InstancedBufferGeometry', 'SphereGeometry', 'ShaderMaterial',
       'InstancedBufferGeometry', 'SphereGeometry',
@@ -142,11 +177,11 @@ test('a body attribute failure unwinds preceding geometries and material once in
 test('a successfully constructed body layer disposes every GPU resource idempotently', () => {
   const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
   const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
-  const layer = makeBodies(emptyIndex, true)
+  const layer = makeBodies(familyIndex, true)
   layer.dispose()
   layer.dispose()
-  expect(geometryDispose).toHaveBeenCalledTimes(5)
-  expect(materialDispose).toHaveBeenCalledTimes(3)
+  expect(geometryDispose).toHaveBeenCalledTimes(8)
+  expect(materialDispose).toHaveBeenCalledTimes(6)
   geometryDispose.mockRestore()
   materialDispose.mockRestore()
 })

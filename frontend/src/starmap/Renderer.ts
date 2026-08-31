@@ -467,6 +467,7 @@ export class Renderer {
     }
     this.stars.setUniform('uLitFloor', litFloor)
     this.bodies.setUniform('uLitFloor', litFloor)
+    this.bodies.updatePlanetLods(this.camera, A, projScale)
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)
     this.rings?.setUniform('uFar', far)

@@ -2,15 +2,20 @@ import * as THREE from 'three'
 import type { Mode, Universe } from '../../types'
 import { selectPlanetData, type QuestionPlanetDatum, type UniverseIndex } from '../../domain/universe'
 import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
-import { starData, type StarDatum } from './starData'
+import { starData, starWorldPosition, type StarDatum } from './starData'
 import { renderDim } from './stars'
 import { PLANET_CONVERGENCE_START, PLANET_STAR_LOD_END_PX, PLANET_STAR_LOD_START_PX, indexPlanetsByStar } from '../planetVisibility'
 import { ownerOpacity } from '../focusEmphasis'
 import { ResourceScope } from '../resourceScope'
 import {
   buildMaterialTimeline,
+  groupPlanetInstances,
+  nextPlanetLod,
+  planetFamilyIndex,
+  planetInstanceIndexMap,
   planetMaterialInput,
-  type PlanetFamily,
+  type PlanetInstanceIndexMap,
+  type PlanetLod,
   type PlanetMaterialInput,
 } from './planetMaterials'
 
@@ -161,24 +166,24 @@ void main() {
 const PLANET_VERT = /* glsl */ `
 ${ORBIT}
 ${DEPTH_FADE}
-attribute vec3 iU;
-attribute vec3 iV;
+// xyz=orbit basis U, w=dim
+attribute vec4 iBasisDim;
 attribute vec3 iStarPos;
 attribute vec3 iStarCenter;
-attribute vec3 iStarAxis;
-attribute vec3 iColor;
+// xyz=star axis, w=LOD (0 far, 1 medium, 2 near)
+attribute vec4 iAxisLod;
+// xyz=star color, w=selected
+attribute vec4 iColorSelected;
 // x=orbitR y=phase z=period w=planetR
 attribute vec4 iOrb;
 // x=own*2+fresh y=starSeed z=starR w=starPeriod
 //   own   ∈{0,1}  是否本人创作
 //   fresh ∈[0,1)  内容的新旧，1 近 0 远
 attribute vec4 iMeta;
-// x=seed y=family z=answerDensity w=timeSpan (-1 means unavailable)
-attribute vec4 iMaterial0;
-// x=freshness y=divergence (-1 means unavailable) z=created w=collected
-attribute vec4 iMaterial1;
-attribute float iDim;
-attribute float iSel;
+// x=seed y=answerDensity z=freshness w=familyIndex
+attribute vec4 iSurface;
+// x=timeSpan y=hasTimeSpan z=created w=collected
+attribute vec4 iChronicle;
 
 uniform float uT;
 uniform float uConverge;
@@ -192,17 +197,22 @@ varying vec3 vN;
 varying vec3 vL;
 varying vec3 vV;
 varying float vAlpha;
-varying float vOwn;
 varying float vFresh;
 varying float vSeed;
 varying float vSel;
+varying float vPlanetPx;
+varying vec3 vLocal;
+varying float vDensity;
+varying float vCreated;
+varying float vLod;
 
 void main() {
-  vec3 starW = orbitAround(iStarPos, iStarCenter, iStarAxis, iMeta.w, uT * 0.001);
-  starW += iStarAxis * sin(uT / (6400.0 + mod(iMeta.y * 311.0, 5200.0)) + iMeta.y) * uBob;
+  vec3 starW = orbitAround(iStarPos, iStarCenter, iAxisLod.xyz, iMeta.w, uT * 0.001);
+  starW += iAxisLod.xyz * sin(uT / (6400.0 + mod(iMeta.y * 311.0, 5200.0)) + iMeta.y) * uBob;
 
   float th = iOrb.y + 6.28318530718 / iOrb.z * (uT * 0.001);
-  vec3 centerW = starW + (iU * cos(th) + iV * sin(th)) * iOrb.x;
+  vec3 planetV = normalize(cross(iAxisLod.xyz, iBasisDim.xyz));
+  vec3 centerW = starW + (iBasisDim.xyz * cos(th) + planetV * sin(th)) * iOrb.x;
   vec3 nrm = normalize(position);
   vec3 world = centerW + nrm * iOrb.w;
 
@@ -219,28 +229,38 @@ void main() {
   vN = normalize(normalMatrix * nrm);
   vL = mvS.xyz - mv.xyz;
   vV = -mv.xyz;
-  vOwn = iMaterial1.z;
-  vFresh = iMaterial1.x;
-  vSeed = iOrb.y;
-  vSel = iSel;
-  vColor = iColor;
-  vAlpha = iDim * lod * smoothstep(${PLANET_CONVERGENCE_START.toFixed(2)}, 1.0, uConverge)
+  vFresh = iSurface.z;
+  vSeed = iSurface.x;
+  vSel = iColorSelected.w;
+  vPlanetPx = iOrb.w * uProjScale / max(1.0, -mvC.z);
+  vLocal = nrm;
+  vDensity = iSurface.y;
+  vCreated = iChronicle.z;
+  vLod = iAxisLod.w;
+  vColor = iColorSelected.xyz;
+  vAlpha = iBasisDim.w * lod * smoothstep(${PLANET_CONVERGENCE_START.toFixed(2)}, 1.0, uConverge)
          * depthFade(max(1.0, -mvC.z), uNear, uFar);
 }
 `
 
 const PLANET_FRAG = /* glsl */ `
 ${SIMPLEX3}
+uniform float uT;
 uniform float uGain;
+uniform float uMotion;
 varying vec3 vColor;
 varying vec3 vN;
 varying vec3 vL;
 varying vec3 vV;
 varying float vAlpha;
-varying float vOwn;
 varying float vFresh;
 varying float vSeed;
 varying float vSel;
+varying float vPlanetPx;
+varying vec3 vLocal;
+varying float vDensity;
+varying float vCreated;
+varying float vLod;
 
 void main() {
   if (vAlpha <= 0.004) discard;
@@ -248,7 +268,38 @@ void main() {
   vec3 L = normalize(vL);
   vec3 V = normalize(vV);
 
-  float tex = 0.82 + 0.18 * (snoise(N * 5.0 + vSeed) * 0.7 + snoise(N * 13.0 - vSeed) * 0.3);
+  float mediumLod = step(0.5, vLod) * smoothstep(12.0, 18.0, vPlanetPx);
+  float nearLod = step(1.5, vLod) * smoothstep(72.0, 84.0, vPlanetPx);
+  float terrain = 0.0;
+  float detail = 0.0;
+  if (vLod >= 0.5) {
+#if PLANET_FAMILY == 0
+    terrain = snoise(vLocal * 4.7 + vSeed) * 0.72 + snoise(vLocal * 10.0 - vSeed) * 0.28;
+#elif PLANET_FAMILY == 1
+    terrain = sin((vLocal.y + snoise(vLocal * 3.2 + vSeed) * 0.10) * 38.0);
+#elif PLANET_FAMILY == 2
+    float cloudTime = uT * 0.000035 * uMotion;
+    terrain = snoise(vLocal * 3.1 + vec3(cloudTime, vSeed, -cloudTime));
+#else
+    vec3 archiveGrid = abs(fract(vLocal * 11.0 + vSeed) - 0.5);
+    terrain = 1.0 - smoothstep(0.035, 0.12, min(archiveGrid.x, archiveGrid.y));
+#endif
+  }
+  if (vLod >= 1.5) {
+#if PLANET_FAMILY == 0
+    detail = snoise(vLocal * 28.0 + vSeed * 3.0);
+#elif PLANET_FAMILY == 1
+    detail = sin(vLocal.y * 118.0 + snoise(vLocal * 9.0) * 2.2);
+#elif PLANET_FAMILY == 2
+    float highCloudTime = uT * 0.000065 * uMotion;
+    detail = snoise(vLocal * 12.0 + vec3(-highCloudTime, highCloudTime, vSeed));
+#else
+    detail = snoise(vLocal * 24.0 + floor(vDensity * 8.0));
+#endif
+  }
+  float roughness = clamp(0.70 - terrain * 0.12 * mediumLod - detail * 0.07 * nearLod, 0.35, 0.92);
+  vec3 shapedN = normalize(N + vec3(terrain, detail, -terrain) * (0.045 * mediumLod + 0.025 * nearLod));
+  float tex = 0.82 + 0.12 * terrain * mediumLod + 0.06 * detail * nearLod;
   // 岩石本色里掺一点恒星的颜色：行星是被这颗恒星照亮的
   vec3 rock = mix(vec3(0.28, 0.31, 0.40), vColor, 0.30) * tex;
 
@@ -257,15 +308,15 @@ void main() {
   //
   // 这里携带的是问题回答的最近公开发布时间／更新时间：近期仍有公开活动的
   // 问题反照率高、带一层大气轮缘，久远或无公开时间的更暗、更粗糙。
-  float d = max(0.0, dot(N, L));
-  float term = smoothstep(-0.06, 0.28, dot(N, L));
+  float d = max(0.0, dot(shapedN, L));
+  float term = smoothstep(-0.06, 0.28, dot(shapedN, L));
   float albedo = mix(0.30, 1.0, vFresh);
-  col = rock * albedo * (0.05 + 0.95 * d) * term;
+  col = rock * albedo * (0.05 + (1.0 - roughness * 0.08) * d) * term;
   float atmo = pow(1.0 - max(0.0, dot(N, V)), 3.0) * vFresh * 0.55;
   col += vec3(0.42, 0.58, 0.95) * atmo * (0.25 + 0.75 * d);
 
   // 存在真实 created binding：夜面透出一点暖光。
-  if (vOwn > 0.5) {
+  if (vCreated > 0.5) {
     float rim = pow(1.0 - max(0.0, dot(N, V)), 2.2);
     vec3 glow = vec3(1.0, 0.80, 0.48);
     col += glow * (0.09 + rim * 0.36) * (1.0 - term * 0.5);
@@ -275,12 +326,22 @@ void main() {
   // 语义抹平，选中态不该篡改数据本身在说的事
   if (vSel > 0.5) {
     float rim = pow(1.0 - max(0.0, dot(N, V)), 1.8);
-    col += vec3(0.52, 0.72, 1.0) * (0.14 + rim * 1.6);
+    float scanPhase = mix(0.82, fract(uT * 0.00012), uMotion);
+    float longitude = atan(vLocal.z, vLocal.x) / 6.28318530718 + 0.5;
+    float latitude = asin(clamp(vLocal.y, -1.0, 1.0)) / 3.14159265359 + 0.5;
+    float longitudeScan = 1.0 - smoothstep(0.018, 0.055, abs(longitude - scanPhase));
+    float latitudeScan = 1.0 - smoothstep(0.018, 0.055, abs(latitude - (1.0 - scanPhase)));
+    float scan = max(longitudeScan, latitudeScan);
+    col += vec3(0.52, 0.72, 1.0) * (0.14 + rim * 1.6 + scan * 0.72);
   }
 
   gl_FragColor = vec4(col * vAlpha * uGain, 1.0);
 }
 `
+
+function planetFragmentShader(familyIndex: number): string {
+  return `#define PLANET_FAMILY ${familyIndex}\n${PLANET_FRAG}`
+}
 
 // ── 行星轨道 ──
 
@@ -368,10 +429,14 @@ export interface BodyLayer {
   setUniform(name: string, value: number): void
   setMode(mode: Mode, u: Universe, wormIdx: number): void
   setFocus(starId: string | null): void
+  /** 只更新当前聚焦恒星系的材质 LOD，并保留每实例上一帧状态以实现滞回。 */
+  updatePlanetLods(camera: THREE.Camera, elapsedMs: number, projectionScale: number): void
   /** 供拾取与飞入复用，顺序与 u.stars 一致 */
   data: StarDatum[]
   /** 全部行星，顺序即实例顺序 */
   planets: PlanetDatum[]
+  /** CPU 拾取使用的全局行星下标与家族批次下标映射。 */
+  planetIndexMap: PlanetInstanceIndexMap
   /** 当前恒星系的预索引行星，避免拾取扫描整个宇宙。 */
   planetsForStar(star: StarDatum): readonly PlanetDatum[]
   /** 置选中；传 -1 清空 */
@@ -471,8 +536,8 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   const pColor = new Float32Array(pn * 3)
   const pOrb = new Float32Array(pn * 4)
   const pMeta = new Float32Array(pn * 4)
-  const pMaterial0 = new Float32Array(pn * 4)
-  const pMaterial1 = new Float32Array(pn * 4)
+  const pSurface = new Float32Array(pn * 4)
+  const pChronicle = new Float32Array(pn * 4)
   const pDim = new Float32Array(pn).fill(1)
   const pSel = new Float32Array(pn)
   const pStarIndex = new Int32Array(pn)
@@ -500,15 +565,15 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
     pColor.set(d.color, i * 3)
     pOrb.set([r, phase, period, rad], i * 4)
     pMeta.set([(p.material.created ? 2 : 0) + p.material.freshness, d.seed, d.bodyR, d.period], i * 4)
-    pMaterial0.set([
+    pSurface.set([
       p.material.seed,
-      familyValue(p.material.family),
       p.material.answerDensity,
-      p.material.timeSpan ?? -1,
-    ], i * 4)
-    pMaterial1.set([
       p.material.freshness,
-      p.material.divergence ?? -1,
+      planetFamilyIndex(p.material.family),
+    ], i * 4)
+    pChronicle.set([
+      p.material.timeSpan ?? 0,
+      p.material.timeSpan === null ? 0 : 1,
       p.material.created ? 1 : 0,
       p.material.collected ? 1 : 0,
     ], i * 4)
@@ -529,23 +594,61 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   })
 
   const planetSphere = scope.use(new THREE.SphereGeometry(1, 20, 14))
-  const planetGeo = scope.use(new THREE.InstancedBufferGeometry())
-  planetGeo.index = planetSphere.index
-  planetGeo.setAttribute('position', planetSphere.getAttribute('position'))
-  planetGeo.instanceCount = pn
-  attachOrbitAttrs(planetGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pMaterial0, pMaterial1, pDim, pSel })
+  const planetGroups = groupPlanetInstances(planets.map(({ material }) => material))
+  const planetIndexMap = planetInstanceIndexMap(planetGroups, pn)
+  const planetBatches = planetGroups.map((planetGroup) => {
+    const count = planetGroup.globalIndices.length
+    const local = batchArrays(planetGroup.globalIndices, {
+      pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pSurface, pChronicle, pDim, pSel,
+    })
+    const geometry = scope.use(new THREE.InstancedBufferGeometry())
+    geometry.index = planetSphere.index
+    geometry.setAttribute('position', planetSphere.getAttribute('position'))
+    geometry.instanceCount = count
+    attachPlanetOrbitAttrs(geometry, local)
+    geometry.setAttribute('iSurface', new THREE.InstancedBufferAttribute(local.pSurface, 4))
+    geometry.setAttribute('iChronicle', new THREE.InstancedBufferAttribute(local.pChronicle, 4))
+    const basisDim = new Float32Array(count * 4)
+    const colorSelected = new Float32Array(count * 4)
+    const axisLod = new Float32Array(count * 4)
+    for (let localIndex = 0; localIndex < count; localIndex++) {
+      basisDim.set(local.pU.subarray(localIndex * 3, localIndex * 3 + 3), localIndex * 4)
+      basisDim[localIndex * 4 + 3] = local.pDim[localIndex]
+      colorSelected.set(local.pColor.subarray(localIndex * 3, localIndex * 3 + 3), localIndex * 4)
+      colorSelected[localIndex * 4 + 3] = local.pSel[localIndex]
+      axisLod.set(local.pStarAxis.subarray(localIndex * 3, localIndex * 3 + 3), localIndex * 4)
+    }
+    geometry.setAttribute('iBasisDim', new THREE.InstancedBufferAttribute(basisDim, 4))
+    geometry.setAttribute('iColorSelected', new THREE.InstancedBufferAttribute(colorSelected, 4))
+    geometry.setAttribute('iAxisLod', new THREE.InstancedBufferAttribute(axisLod, 4))
 
-  const planetMat = scope.use(new THREE.ShaderMaterial({
-    uniforms: { ...shared(), uGain: { value: GAIN.planet } },
-    vertexShader: PLANET_VERT,
-    fragmentShader: PLANET_FRAG,
-    transparent: true,
-    depthTest: true,
-    depthWrite: true,
-  }))
-  const planetMesh = new THREE.Mesh(planetGeo, planetMat)
-  planetMesh.renderOrder = 9
-  planetMesh.frustumCulled = false
+    const familyIndex = planetFamilyIndex(planetGroup.family)
+    const material = scope.use(new THREE.ShaderMaterial({
+      uniforms: { ...shared(), uGain: { value: GAIN.planet }, uMotion: { value: reduceMotion ? 0 : 1 } },
+      vertexShader: PLANET_VERT,
+      fragmentShader: planetFragmentShader(familyIndex),
+      transparent: true,
+      depthTest: true,
+      depthWrite: true,
+    }))
+    const mesh = new THREE.InstancedMesh(geometry, material, count)
+    mesh.userData.planetFamily = planetGroup.family
+    mesh.renderOrder = 9
+    mesh.frustumCulled = false
+    return {
+      family: planetGroup.family,
+      globalIndices: planetGroup.globalIndices,
+      geometry,
+      material,
+      mesh,
+      basisDim,
+      colorSelected,
+      axisLod,
+      basisDimAttribute: geometry.getAttribute('iBasisDim') as THREE.InstancedBufferAttribute,
+      colorSelectedAttribute: geometry.getAttribute('iColorSelected') as THREE.InstancedBufferAttribute,
+      axisLodAttribute: geometry.getAttribute('iAxisLod') as THREE.InstancedBufferAttribute,
+    }
+  })
 
   // 轨道环：底几何是一圈单位圆的线段，实例化到每条轨道上
   const SEG = 72
@@ -558,7 +661,7 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   const ringGeo = scope.use(new THREE.InstancedBufferGeometry())
   ringGeo.setAttribute('position', new THREE.BufferAttribute(ringPos, 3))
   ringGeo.instanceCount = pn
-  attachOrbitAttrs(ringGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pMaterial0, pMaterial1, pDim, pSel })
+  attachOrbitAttrs(ringGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pDim, pSel })
 
   const ringMat = scope.use(new THREE.ShaderMaterial({
     uniforms: { ...shared(), uGain: { value: GAIN.ring } },
@@ -574,24 +677,32 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   ringMesh.frustumCulled = false
 
   const group = new THREE.Group()
-  group.add(ringMesh, starMesh, planetMesh)
+  group.add(ringMesh, starMesh, ...planetBatches.map(({ mesh }) => mesh))
 
-  const mats = [starMat, planetMat, ringMat]
+  const mats = [starMat, ringMat, ...planetBatches.map(({ material }) => material)]
   const sMetaAttr = starGeo.getAttribute('iMeta') as THREE.InstancedBufferAttribute
-  const pDimAttr = planetGeo.getAttribute('iDim') as THREE.InstancedBufferAttribute
   const rDimAttr = ringGeo.getAttribute('iDim') as THREE.InstancedBufferAttribute
-  const pSelAttr = planetGeo.getAttribute('iSel') as THREE.InstancedBufferAttribute
   const rSelAttr = ringGeo.getAttribute('iSel') as THREE.InstancedBufferAttribute
   let selected = -1
   const planetsByStar = indexPlanetsByStar(planetData)
+  const planetLods: PlanetLod[] = planetData.map(() => 'far')
+  const noPlanets: readonly PlanetDatum[] = Object.freeze([])
+  let activeLodPlanets = noPlanets
+  const lodWorld = new THREE.Vector3()
+  const lodView = new THREE.Vector3()
+  const batchByFamily = new Map(planetBatches.map((batch) => [batch.family, batch]))
   let modeDims = data.map(() => 1)
   let focusedStarId: string | null = null
+  let focusedLodStar: StarDatum | null = null
   const dispose = scope.release()
   const applyDims = () => {
     for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(data[i].s.c, focusedStarId)
     for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(planetData[i].star.s.c, focusedStarId)
+    for (const batch of planetBatches) {
+      batch.globalIndices.forEach((globalIndex, localIndex) => { batch.basisDim[localIndex * 4 + 3] = pDim[globalIndex] })
+      batch.basisDimAttribute.needsUpdate = true
+    }
     sMetaAttr.needsUpdate = true
-    pDimAttr.needsUpdate = true
     rDimAttr.needsUpdate = true
   }
 
@@ -599,20 +710,68 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
     group,
     data,
     planets: planetData,
+    planetIndexMap,
     planetsForStar: (star) => planetsByStar.get(star) ?? [],
     setSelected(index) {
       if (index === selected) return
-      if (selected >= 0) pSel[selected] = 0
+      if (selected >= 0) {
+        pSel[selected] = 0
+        const previous = planetIndexMap.toLocal(selected)
+        if (previous) {
+          const batch = planetBatches.find(({ family }) => family === previous.family)!
+          batch.colorSelected[previous.instanceIndex * 4 + 3] = 0
+          batch.colorSelectedAttribute.needsUpdate = true
+        }
+      }
       selected = index >= 0 && index < pn ? index : -1
-      if (selected >= 0) pSel[selected] = 1
-      pSelAttr.needsUpdate = true
+      if (selected >= 0) {
+        pSel[selected] = 1
+        const current = planetIndexMap.toLocal(selected)!
+        const batch = planetBatches.find(({ family }) => family === current.family)!
+        batch.colorSelected[current.instanceIndex * 4 + 3] = 1
+        batch.colorSelectedAttribute.needsUpdate = true
+      }
       rSelAttr.needsUpdate = true
+    },
+    updatePlanetLods(camera, elapsedMs, projectionScale) {
+      const nextActive = focusedLodStar === null ? noPlanets : planetsByStar.get(focusedLodStar) ?? noPlanets
+      const changedBatches = new Set<(typeof planetBatches)[number]>()
+      const writeLod = (planet: PlanetDatum, lod: PlanetLod) => {
+        if (planetLods[planet.index] === lod) return
+        planetLods[planet.index] = lod
+        const local = planetIndexMap.toLocal(planet.index)!
+        const batch = batchByFamily.get(local.family)!
+        batch.axisLod[local.instanceIndex * 4 + 3] = lod === 'far' ? 0 : lod === 'medium' ? 1 : 2
+        changedBatches.add(batch)
+      }
+      if (nextActive !== activeLodPlanets) {
+        for (const planet of activeLodPlanets) writeLod(planet, 'far')
+        activeLodPlanets = nextActive
+      }
+      camera.updateMatrixWorld()
+      const bob = reduceMotion ? 0 : 1.35
+      for (const planet of activeLodPlanets) {
+        starWorldPosition(planet.star, elapsedMs, bob, lodWorld)
+        const theta = planet.phase + ((Math.PI * 2) / planet.period) * (elapsedMs / 1000)
+        const cosine = Math.cos(theta)
+        const sine = Math.sin(theta)
+        lodWorld.set(
+          lodWorld.x + (planet.u[0] * cosine + planet.v[0] * sine) * planet.orbitR,
+          lodWorld.y + (planet.u[1] * cosine + planet.v[1] * sine) * planet.orbitR,
+          lodWorld.z + (planet.u[2] * cosine + planet.v[2] * sine) * planet.orbitR,
+        )
+        lodView.copy(lodWorld).applyMatrix4(camera.matrixWorldInverse)
+        const projectedRadius = planet.radius * projectionScale / Math.max(1, -lodView.z)
+        writeLod(planet, nextPlanetLod(planetLods[planet.index], projectedRadius))
+      }
+      for (const batch of changedBatches) batch.axisLodAttribute.needsUpdate = true
     },
     setUniform(name, value) {
       for (const m of mats) if (m.uniforms[name]) m.uniforms[name].value = value
     },
     setFocus(starId) {
       focusedStarId = starId
+      focusedLodStar = starId === null ? null : data.find((datum) => datum.s.c === starId) ?? null
       applyDims()
     },
     setMode(mode, uni, wormIdx) {
@@ -623,11 +782,18 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   }
 }
 
+function attachPlanetOrbitAttrs(g: THREE.InstancedBufferGeometry, a: GlobalPlanetArrays) {
+  g.setAttribute('iStarPos', new THREE.InstancedBufferAttribute(a.pStarPos, 3))
+  g.setAttribute('iStarCenter', new THREE.InstancedBufferAttribute(a.pStarCenter, 3))
+  g.setAttribute('iOrb', new THREE.InstancedBufferAttribute(a.pOrb, 4))
+  g.setAttribute('iMeta', new THREE.InstancedBufferAttribute(a.pMeta, 4))
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6)
+}
+
 function attachOrbitAttrs(g: THREE.InstancedBufferGeometry, a: {
   pU: Float32Array; pV: Float32Array; pStarPos: Float32Array
   pStarCenter: Float32Array; pStarAxis: Float32Array; pColor: Float32Array
-  pOrb: Float32Array; pMeta: Float32Array; pMaterial0: Float32Array; pMaterial1: Float32Array
-  pDim: Float32Array; pSel: Float32Array
+  pOrb: Float32Array; pMeta: Float32Array; pDim: Float32Array; pSel: Float32Array
 }) {
   g.setAttribute('iU', new THREE.InstancedBufferAttribute(a.pU, 3))
   g.setAttribute('iV', new THREE.InstancedBufferAttribute(a.pV, 3))
@@ -637,20 +803,59 @@ function attachOrbitAttrs(g: THREE.InstancedBufferGeometry, a: {
   g.setAttribute('iColor', new THREE.InstancedBufferAttribute(a.pColor, 3))
   g.setAttribute('iOrb', new THREE.InstancedBufferAttribute(a.pOrb, 4))
   g.setAttribute('iMeta', new THREE.InstancedBufferAttribute(a.pMeta, 4))
-  g.setAttribute('iMaterial0', new THREE.InstancedBufferAttribute(a.pMaterial0, 4))
-  g.setAttribute('iMaterial1', new THREE.InstancedBufferAttribute(a.pMaterial1, 4))
   g.setAttribute('iDim', new THREE.InstancedBufferAttribute(a.pDim, 1))
   g.setAttribute('iSel', new THREE.InstancedBufferAttribute(a.pSel, 1))
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6)
 }
 
-function familyValue(family: PlanetFamily): number {
-  switch (family) {
-    case 'basalt': return 0
-    case 'strata': return 1 / 3
-    case 'cloud': return 2 / 3
-    case 'archive': return 1
+interface GlobalPlanetArrays {
+  pU: Float32Array
+  pV: Float32Array
+  pStarPos: Float32Array
+  pStarCenter: Float32Array
+  pStarAxis: Float32Array
+  pColor: Float32Array
+  pOrb: Float32Array
+  pMeta: Float32Array
+  pSurface: Float32Array
+  pChronicle: Float32Array
+  pDim: Float32Array
+  pSel: Float32Array
+}
+
+function batchArrays(globalIndices: readonly number[], source: GlobalPlanetArrays): GlobalPlanetArrays {
+  const result: GlobalPlanetArrays = {
+    pU: new Float32Array(globalIndices.length * 3),
+    pV: new Float32Array(globalIndices.length * 3),
+    pStarPos: new Float32Array(globalIndices.length * 3),
+    pStarCenter: new Float32Array(globalIndices.length * 3),
+    pStarAxis: new Float32Array(globalIndices.length * 3),
+    pColor: new Float32Array(globalIndices.length * 3),
+    pOrb: new Float32Array(globalIndices.length * 4),
+    pMeta: new Float32Array(globalIndices.length * 4),
+    pSurface: new Float32Array(globalIndices.length * 4),
+    pChronicle: new Float32Array(globalIndices.length * 4),
+    pDim: new Float32Array(globalIndices.length),
+    pSel: new Float32Array(globalIndices.length),
   }
+  const copy = (target: Float32Array, input: Float32Array, width: number, globalIndex: number, localIndex: number) => {
+    target.set(input.subarray(globalIndex * width, globalIndex * width + width), localIndex * width)
+  }
+  globalIndices.forEach((globalIndex, localIndex) => {
+    copy(result.pU, source.pU, 3, globalIndex, localIndex)
+    copy(result.pV, source.pV, 3, globalIndex, localIndex)
+    copy(result.pStarPos, source.pStarPos, 3, globalIndex, localIndex)
+    copy(result.pStarCenter, source.pStarCenter, 3, globalIndex, localIndex)
+    copy(result.pStarAxis, source.pStarAxis, 3, globalIndex, localIndex)
+    copy(result.pColor, source.pColor, 3, globalIndex, localIndex)
+    copy(result.pOrb, source.pOrb, 4, globalIndex, localIndex)
+    copy(result.pMeta, source.pMeta, 4, globalIndex, localIndex)
+    copy(result.pSurface, source.pSurface, 4, globalIndex, localIndex)
+    copy(result.pChronicle, source.pChronicle, 4, globalIndex, localIndex)
+    result.pDim[localIndex] = source.pDim[globalIndex]
+    result.pSel[localIndex] = source.pSel[globalIndex]
+  })
+  return result
 }
 
 /** 把一组正交基绕 axis 所在平面倾一个小角，给行星轨道一点层次。 */

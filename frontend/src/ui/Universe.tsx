@@ -88,9 +88,24 @@ export function PrivateUniverseView() {
     const canvas = canvasRef.current
     const labels = labelRef.current
     let disposed = false
+    let teardownDone = false
+    let resizeBound = false
     let rendererModuleLoaded = false
     let instance: Renderer | null = null
     let hintTimer: ReturnType<typeof setTimeout> | null = null
+    const onResize = () => instance?.resize()
+    const teardown = () => {
+      if (teardownDone) return
+      teardownDone = true
+      disposed = true
+      if (resizeBound) {
+        window.removeEventListener('resize', onResize)
+        resizeBound = false
+      }
+      instance?.destroy()
+      if (hintTimer !== null) clearTimeout(hintTimer)
+      if (rendererRef.current === instance) rendererRef.current = null
+    }
     const mountRenderer = async () => {
       const { Renderer: WebGLRenderer } = await import('../starmap/Renderer')
       rendererModuleLoaded = true
@@ -139,7 +154,10 @@ export function PrivateUniverseView() {
         if (!disposed) dispatchUi({ type: 'render-ready' })
       },
       onRenderError: (cause) => {
-        if (!disposed) dispatchUi({ type: 'render-failed', message: cause.message, recovery: 'remount' })
+        if (!disposed) {
+          teardown()
+          dispatchUi({ type: 'render-failed', message: cause.message, recovery: 'remount' })
+        }
       },
       })
       if (disposed) {
@@ -151,22 +169,20 @@ export function PrivateUniverseView() {
       r.setMode(mode, wormIdx)
       r.start()
       window.addEventListener('resize', onResize)
+      resizeBound = true
     }
-    const onResize = () => instance?.resize()
     void mountRenderer().catch((cause: unknown) => {
-      if (!disposed) dispatchUi({
-        type: 'render-failed',
-        message: cause instanceof Error ? cause.message : String(cause),
-        recovery: rendererModuleLoaded ? 'remount' : 'reload',
-      })
+      if (!disposed) {
+        const recovery = rendererModuleLoaded ? 'remount' : 'reload'
+        teardown()
+        dispatchUi({
+          type: 'render-failed',
+          message: cause instanceof Error ? cause.message : String(cause),
+          recovery,
+        })
+      }
     })
-    return () => {
-      disposed = true
-      window.removeEventListener('resize', onResize)
-      instance?.destroy()
-      if (hintTimer !== null) clearTimeout(hintTimer)
-      if (rendererRef.current === instance) rendererRef.current = null
-    }
+    return teardown
     // Renderer lifecycle follows the immutable universe index. Current mode is applied on mount
     // and subsequent changes flow through the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps

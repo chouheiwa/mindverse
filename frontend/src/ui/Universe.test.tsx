@@ -14,6 +14,7 @@ const testState = vi.hoisted(() => ({
   workspaceCalls: [] as boolean[],
   suspendCalls: 0,
   resumeCalls: 0,
+  destroyCalls: 0,
 }))
 
 const apiState = vi.hoisted(() => ({
@@ -30,7 +31,7 @@ vi.mock('../starmap/Renderer', () => ({
     }
     start() {}
     resize() {}
-    destroy() {}
+    destroy() { testState.destroyCalls += 1 }
     setMode() {}
     resetView() { testState.callbacks?.onPick?.(null) }
     skipGenesis() {}
@@ -87,6 +88,7 @@ beforeEach(() => {
   testState.workspaceCalls = []
   testState.suspendCalls = 0
   testState.resumeCalls = 0
+  testState.destroyCalls = 0
   apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
     matches: true,
@@ -122,6 +124,7 @@ describe('Universe question keyboard integration', () => {
 
   test('starts loading, becomes ready, and shows a remount fallback after renderer failure', async () => {
     const user = userEvent.setup()
+    const removeListener = vi.spyOn(window, 'removeEventListener')
     render(<UniverseView />)
     const root = await screen.findByTestId('universe-root')
     expect(root).toHaveAttribute('data-render-state', 'loading')
@@ -132,6 +135,8 @@ describe('Universe question keyboard integration', () => {
     act(() => testState.callbacks?.onRenderError?.(new Error('WebGL context lost')))
     expect(root).toHaveAttribute('data-render-state', 'failed')
     expect(screen.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
+    expect(testState.destroyCalls).toBe(1)
+    expect(removeListener).toHaveBeenCalledWith('resize', expect.any(Function))
     await user.click(screen.getByRole('button', { name: '重试 3D' }))
     await waitFor(() => expect(testState.callbacks).not.toBeNull())
     expect(root).toHaveAttribute('data-render-state', 'loading')

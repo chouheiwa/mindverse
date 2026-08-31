@@ -26,6 +26,16 @@ describe('ResourceScope', () => {
     expect(cleanup).toHaveBeenCalledOnce()
   })
 
+  test('defer after disposal returns the same already-run once cleanup', () => {
+    const cleanup = vi.fn()
+    const scope = new ResourceScope()
+    scope.dispose()
+
+    const deferred = scope.defer(cleanup)
+    deferred()
+    expect(cleanup).toHaveBeenCalledOnce()
+  })
+
   test('a partial construction failure cleans resources already registered once', () => {
     const calls: string[] = []
     expect(() => ResourceScope.construct((scope) => {

@@ -14,15 +14,15 @@ export class ResourceScope {
   private closed = false
 
   defer(cleanup: ResourceCleanup): ResourceCleanup {
-    if (this.closed) {
-      cleanup()
-      return cleanup
-    }
     let active = true
     const once = () => {
       if (!active) return
       active = false
       cleanup()
+    }
+    if (this.closed) {
+      once()
+      return once
     }
     this.cleanups.push(once)
     if (import.meta.env.MODE === 'test' && failAfter !== null) {

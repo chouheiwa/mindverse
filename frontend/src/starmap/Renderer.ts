@@ -520,6 +520,27 @@ export class Renderer {
     this.lastTouch = performance.now()
   }
 
+  /** Apply a live accessibility preference without replacing the active command token. */
+  setReducedMotion(reduced: boolean): void {
+    if (this.destroyed || this.reduceMotion === reduced) return
+    this.reduceMotion = reduced
+    if (!reduced) return
+    this.convergence = 1
+    const transition = this.probeTransition
+    if (!transition) return
+    if (this.probeTransitionTimer !== null) clearTimeout(this.probeTransitionTimer)
+    if (this.probeTransitionRaf) cancelAnimationFrame(this.probeTransitionRaf)
+    this.probeTransitionTimer = null
+    this.probeTransitionRaf = 0
+    this.inspectionCameraMix = 1
+    if (transition.kind === 'scan') {
+      this.probes.setScanning(false)
+      this.finishProbeTransition(transition, this.cb.onProbeScanComplete)
+    } else {
+      this.finishProbeTransition(transition, this.cb.onProbeArrived)
+    }
+  }
+
   focusProbePart(part: ProbePart | null): void {
     if (this.destroyed) return
     this.probes.setPartHighlight(part)
@@ -773,6 +794,7 @@ export class Renderer {
   }
 
   private onDown = (e: PointerEvent) => {
+    if (this.inspectionProbeId) return
     // Canvas picking owns the star-panel focus return path.
     this.canvas.focus({ preventScroll: true })
     this.lastTouch = performance.now()
@@ -784,6 +806,7 @@ export class Renderer {
   }
 
   private onMove = (e: PointerEvent) => {
+    if (this.inspectionProbeId) return
     if (!this.dragging) {
       // 悬停变指针。「每颗天体都能点」这件事得靠光标自己说，
       // 五百多次投影在一次 pointermove 里可以忽略不计
@@ -806,11 +829,13 @@ export class Renderer {
   }
 
   private onUp = (e: PointerEvent) => {
+    if (this.inspectionProbeId) return
     this.dragging = false
     if (this.moved < 6) this.pick(e.clientX, e.clientY)
   }
 
   private onWheel = (e: WheelEvent) => {
+    if (this.inspectionProbeId) return
     e.preventDefault()
     this.lastTouch = performance.now()
     const next = this.targetDist * (1 + Math.sign(e.deltaY) * 0.12)

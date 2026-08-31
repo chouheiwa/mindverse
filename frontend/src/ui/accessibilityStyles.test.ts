@@ -72,4 +72,11 @@ describe('question navigation accessibility styles', () => {
     expect(share).toMatch(/\.sp-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s)
     expect(share).toMatch(/\.sp-created button, \.sp-created a\s*\{[^}]*min-height:\s*44px/s)
   })
+
+  test('keeps probe inspection controls touch-sized and reduced-motion safe', () => {
+    const probe = css('./ProbeInspectionPanel.css')
+    expect(probe).toMatch(/\.probe-inspection button,\.probe-inspection a\s*\{[^}]*min-height:\s*44px/s)
+    expect(probe).toMatch(/\.probe-inspection-close\s*\{[^}]*min-width:\s*44px/s)
+    expect(probe).toMatch(/prefers-reduced-motion:\s*reduce/)
+  })
 })

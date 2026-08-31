@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import type { Generation, Mode, Star, Universe as U } from '../types'
+import type { ArticleProbe, Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone } from '../api'
 import type { Renderer } from '../starmap/Renderer'
 import { Loading } from './Loading'
@@ -14,7 +14,9 @@ import { Seed } from './Seed'
 import { QuestionWorkspaceGate } from './QuestionWorkspaceGate'
 import { SharePreview } from './SharePreview'
 import { RenderFallback } from './RenderFallback'
-import { initialUniverseExploration, initialUniverseUiState, universeUiReducer } from './explorationState'
+import { ProbeInspectionPanel } from './ProbeInspectionPanel'
+import type { ProbePart } from '../starmap/gl/probe'
+import { initialUniverseUiState, universeUiReducer } from './explorationState'
 import './Universe.css'
 
 const reduceMotion = () =>
@@ -52,11 +54,31 @@ export function PrivateUniverseView() {
   const [reload, setReload] = useState(0)
   const [rendererAttempt, setRendererAttempt] = useState(0)
   const [uiState, dispatchUi] = useReducer(universeUiReducer, initialUniverseUiState)
-  const activeExploration = uiState.exploration.kind === 'universe'
-    ? uiState.exploration : initialUniverseExploration
-  const { star, planet, questionEntry, mode, wormIdx } = activeExploration
-  const setStar = useCallback((value: Star | null) => dispatchUi({ type: 'set-star', star: value }), [])
-  const setPlanet = useCallback((value: PlanetDatum | null) => dispatchUi({ type: 'set-planet', planet: value }), [])
+  const exploration = uiState.exploration
+  const star = 'star' in exploration ? exploration.star : null
+  const planet = exploration.kind === 'planet-focus' ? exploration.planet : null
+  const { questionEntry, mode, wormIdx } = uiState
+  const probeState = exploration.kind === 'probe-approach' || exploration.kind === 'probe-inspection' || exploration.kind === 'probe-scanning'
+    ? exploration : null
+  const explorationRef = useRef(exploration)
+  explorationRef.current = exploration
+  const transitionTokenRef = useRef(0)
+  const probeCommandActiveRef = useRef(false)
+  const probeCommandKindRef = useRef<'approach' | 'scan' | null>(null)
+  const probeReturnFocusRef = useRef<HTMLButtonElement | null>(null)
+  const [selectedProbePart, setSelectedProbePart] = useState<ProbePart | null>(null)
+  const cancelActiveProbe = useCallback(() => {
+    if (!probeCommandActiveRef.current) return
+    probeCommandActiveRef.current = false
+    probeCommandKindRef.current = null
+    transitionTokenRef.current += 1
+    rendererRef.current?.exitProbeInspection()
+  }, [])
+  const setStar = useCallback((value: Star | null) => dispatchUi(value ? { type: 'focus-star', star: value } : { type: 'show-panorama' }), [])
+  const setPlanet = useCallback((value: PlanetDatum | null) => {
+    if (value) dispatchUi({ type: 'focus-planet', star: value.star.s, planet: value })
+    else dispatchUi({ type: 'clear-planet' })
+  }, [])
   const setQuestionEntry = useCallback((value: PlanetDatum | null) => dispatchUi({ type: 'set-question-entry', questionEntry: value }), [])
   const setMode = useCallback((value: Mode) => dispatchUi({ type: 'set-mode', mode: value }), [])
   const setWormIdx = useCallback((value: number) => dispatchUi({ type: 'set-worm', wormIdx: value }), [])
@@ -98,6 +120,9 @@ export function PrivateUniverseView() {
       if (teardownDone) return
       teardownDone = true
       disposed = true
+      probeCommandActiveRef.current = false
+      probeCommandKindRef.current = null
+      transitionTokenRef.current += 1
       if (resizeBound) {
         window.removeEventListener('resize', onResize)
         resizeBound = false
@@ -112,6 +137,7 @@ export function PrivateUniverseView() {
       if (disposed) return
       const r = new WebGLRenderer(canvas, labels, universeIndex, reduceMotion(), {
       onPick: (s) => {
+        cancelActiveProbe()
         if (s) {
           const active = document.activeElement
           panelFocusReturnRef.current = active instanceof HTMLElement && active.matches(
@@ -126,6 +152,8 @@ export function PrivateUniverseView() {
         if (s) setMode('all')
       },
       onPickPlanet: (selected) => {
+        if (probeCommandActiveRef.current && selected === null) return
+        cancelActiveProbe()
         setQuestionEntry(null)
         if (selected && !focusCardFromLaneRef.current) focusReturnRef.current = null
         setPlanet(selected)
@@ -158,6 +186,33 @@ export function PrivateUniverseView() {
           teardown()
           dispatchUi({ type: 'render-failed', message: cause.message, recovery: 'remount' })
         }
+      },
+      onProbeArrived: ({ probeId, token }) => {
+        if (transitionTokenRef.current === token) probeCommandKindRef.current = null
+        dispatchUi({ type: 'probe-arrived', probeId, token })
+      },
+      onProbeScanComplete: ({ probeId, token }) => {
+        if (transitionTokenRef.current === token) probeCommandKindRef.current = null
+        dispatchUi({ type: 'probe-scan-complete', probeId, token })
+      },
+      onProbePartChange: (part) => setSelectedProbePart(part),
+      onProbeError: ({ probeId, token }) => {
+        if (transitionTokenRef.current === token) {
+          const current = explorationRef.current
+          const commandKind = probeCommandKindRef.current
+          probeCommandKindRef.current = null
+          if (commandKind === 'approach') {
+            probeCommandActiveRef.current = false
+            rendererRef.current?.exitProbeInspection()
+          }
+          const returnTo = current.kind === 'probe-approach' || current.kind === 'probe-scanning'
+            ? current.returnTo : current.kind === 'planet-focus' ? current : null
+          if (commandKind === 'approach' && returnTo?.kind === 'planet-focus'
+            && 'id' in returnTo.star && typeof returnTo.star.id === 'string') {
+            rendererRef.current?.restoreQuestionPlanet(returnTo.star.id, returnTo.planet.question.id)
+          }
+        }
+        dispatchUi({ type: 'probe-error', probeId, token })
       },
       })
       if (disposed) {
@@ -212,6 +267,14 @@ export function PrivateUniverseView() {
   useEffect(() => { rendererRef.current?.setMode(mode, wormIdx) }, [mode, wormIdx])
 
   useEffect(() => {
+    if (typeof matchMedia === 'undefined') return
+    const query = matchMedia('(prefers-reduced-motion: reduce)')
+    const changed = (event: MediaQueryListEvent) => rendererRef.current?.setReducedMotion(event.matches)
+    query.addEventListener?.('change', changed)
+    return () => query.removeEventListener?.('change', changed)
+  }, [universeIndex, rendererAttempt])
+
+  useEffect(() => {
     const renderer = rendererRef.current
     renderer?.setWorkspaceOpen(questionEntry !== null)
     if (!questionEntry) return
@@ -225,6 +288,7 @@ export function PrivateUniverseView() {
   const pickConcept = useCallback((c: string) => {
     const s = universe?.stars.find((x) => x.c === c)
     if (s) {
+      cancelActiveProbe()
       setQuestionEntry(null)
       setPlanet(null)
       focusReturnRef.current = null
@@ -232,7 +296,7 @@ export function PrivateUniverseView() {
       rendererRef.current?.clearPlanet()
       setStar(s)
     }
-  }, [setPlanet, setQuestionEntry, setStar, universe])
+  }, [cancelActiveProbe, setPlanet, setQuestionEntry, setStar, universe])
 
   const restorePanelFocus = useCallback(() => {
     const target = panelFocusReturnRef.current
@@ -244,6 +308,7 @@ export function PrivateUniverseView() {
   }, [])
 
   const closeStarPanel = useCallback(() => {
+    cancelActiveProbe()
     setStar(null)
     setPlanet(null)
     setQuestionEntry(null)
@@ -251,9 +316,10 @@ export function PrivateUniverseView() {
     focusCardFromLaneRef.current = false
     rendererRef.current?.resetView()
     restorePanelFocus()
-  }, [restorePanelFocus, setPlanet, setQuestionEntry, setStar])
+  }, [cancelActiveProbe, restorePanelFocus, setPlanet, setQuestionEntry, setStar])
 
   const onMode = useCallback((m: Mode, trigger: HTMLButtonElement) => {
+    cancelActiveProbe()
     if (m !== 'all') panelFocusReturnRef.current = trigger
     setStar(null)
     setPlanet(null)
@@ -261,7 +327,7 @@ export function PrivateUniverseView() {
     focusReturnRef.current = null
     focusCardFromLaneRef.current = false
     dispatchUi({ type: 'toggle-mode', mode: m })
-  }, [setPlanet, setQuestionEntry, setStar])
+  }, [cancelActiveProbe, setPlanet, setQuestionEntry, setStar])
 
   const onEnterQuestion = useCallback((selected: PlanetDatum) => {
     focusCardFromLaneRef.current = false
@@ -298,7 +364,7 @@ export function PrivateUniverseView() {
   }, [planet?.question.id, setQuestionEntry])
 
   const enterQuestionFromPanel = useCallback((questionId: string, trigger: HTMLButtonElement) => {
-    if (!star || !('id' in star)) return
+    if (!star || !('id' in star) || typeof star.id !== 'string') return
     const selected = rendererRef.current?.selectQuestionPlanet(star.id, questionId)
     if (!selected) return
     focusReturnRef.current = trigger
@@ -323,6 +389,40 @@ export function PrivateUniverseView() {
   )
 
   const panelOpen = star !== null || mode !== 'all'
+
+  const inspectProbe = useCallback((owner: Star, probe: ArticleProbe, trigger: HTMLButtonElement) => {
+    const token = ++transitionTokenRef.current
+    probeCommandActiveRef.current = true
+    probeCommandKindRef.current = 'approach'
+    probeReturnFocusRef.current = trigger
+    setSelectedProbePart(null)
+    dispatchUi({ type: 'approach-probe', star: owner, probe, token })
+    rendererRef.current?.approachProbe(probe.id, token)
+  }, [])
+
+  const closeProbeInspection = useCallback(() => {
+    const returnTo = probeState?.returnTo
+    transitionTokenRef.current += 1
+    probeCommandActiveRef.current = false
+    probeCommandKindRef.current = null
+    rendererRef.current?.exitProbeInspection()
+    if (returnTo?.kind === 'planet-focus' && 'id' in returnTo.star && typeof returnTo.star.id === 'string') {
+      rendererRef.current?.restoreQuestionPlanet(returnTo.star.id, returnTo.planet.question.id)
+    }
+    setSelectedProbePart(null)
+    dispatchUi({ type: 'exit-probe' })
+    const trigger = probeReturnFocusRef.current
+    probeReturnFocusRef.current = null
+    requestAnimationFrame(() => (trigger?.isConnected ? trigger : canvasRef.current)?.focus({ preventScroll: true }))
+  }, [probeState])
+
+  const scanProbe = useCallback(() => {
+    if (!probeState || probeState.kind !== 'probe-inspection') return
+    const token = ++transitionTokenRef.current
+    probeCommandKindRef.current = 'scan'
+    dispatchUi({ type: 'scan-probe', token })
+    rendererRef.current?.startProbeScan(probeState.probe.id, token)
+  }, [probeState])
 
   if (seeding) {
     return <Seed onDone={() => { setSeeding(false); setError(null); setReload((n) => n + 1) }} />
@@ -455,7 +555,16 @@ export function PrivateUniverseView() {
         onClose={closeStarPanel}
         highlight={undefined}
         onEnterQuestion={enterQuestionFromPanel}
+        onInspectProbe={inspectProbe}
         onPickConcept={pickConcept} />
+      {probeState && probeState.kind !== 'probe-approach' && <ProbeInspectionPanel
+        probe={probeState.probe} canvas={canvasRef.current}
+        scanning={probeState.kind === 'probe-scanning'}
+        scanComplete={probeState.kind === 'probe-inspection' && probeState.scanComplete}
+        selectedPart={selectedProbePart}
+        onPoseChange={(pose) => rendererRef.current?.setProbeInspectionPose(pose)}
+        onPartChange={(part) => { setSelectedProbePart(part); rendererRef.current?.focusProbePart(part) }}
+        onScan={scanProbe} onClose={closeProbeInspection} />}
       <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
         shared={false}
         onWorm={(index) => { setQuestionEntry(null); setPlanet(null); setWormIdx(index) }}

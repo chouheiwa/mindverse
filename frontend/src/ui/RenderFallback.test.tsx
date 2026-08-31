@@ -32,15 +32,15 @@ describe('universe render state', () => {
     const failed = universeUiReducer(ready, {
       type: 'render-failed', message: 'shader compile failed', recovery: 'remount',
     })
-    expect(failed).toEqual({
+    expect(failed).toMatchObject({
       renderPhase: 'failed',
       exploration: { kind: 'render-fallback', message: 'shader compile failed', recovery: 'remount' },
     })
   })
 
   test('keeps navigation semantics in the same reducer root', () => {
-    const selected = universeUiReducer(initialUniverseUiState, { type: 'set-star', star: universe.stars[0] })
-    expect(selected.exploration).toMatchObject({ kind: 'universe', star: universe.stars[0] })
+    const selected = universeUiReducer(initialUniverseUiState, { type: 'focus-star', star: universe.stars[0] })
+    expect(selected.exploration).toMatchObject({ kind: 'star-focus', star: universe.stars[0] })
   })
 })
 

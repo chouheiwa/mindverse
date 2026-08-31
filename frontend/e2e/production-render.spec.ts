@@ -168,6 +168,42 @@ test('production universe satisfies the first-frame render contract', async ({ p
   expect(errors).toEqual([])
 })
 
+test('an article probe can be approached, controlled, scanned and closed accessibly', async ({ page }) => {
+  const errors = collectRuntimeErrors(page)
+  const fixture = await installUniverseFixture(page)
+  await openProductionUniverse(page)
+  await expectRendererReady(page)
+  const skip = page.getByRole('button', { name: '跳过 →' })
+  if (await skip.isVisible()) await skip.click()
+  const canvas = page.locator('canvas[aria-label="认知宇宙三维星图"]')
+  const bounds = await canvas.boundingBox()
+  if (!bounds) throw new Error('render canvas has no layout bounds')
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+  await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible()
+
+  const trigger = page.getByRole('button', { name: '检查探测器' }).first()
+  await trigger.click()
+  const inspectionTitle = page.getByRole('heading', { name: /检查探测器：/ })
+  await expect(inspectionTitle).toBeFocused({ timeout: 5_000 })
+  await page.getByRole('button', { name: '向左旋转' }).click()
+  await page.getByRole('button', { name: '聚焦部件：天线' }).click()
+  await page.getByRole('button', { name: '开始扫描' }).click()
+  const article = page.getByRole('link', { name: '查看原文章' })
+  await expect(article).toBeVisible({ timeout: 5_000 })
+  const expectedUrl = fixture.generation.universe?.probes?.[0]?.url
+  expect(expectedUrl).toBeTruthy()
+  await expect(article).toHaveAttribute('href', expectedUrl!)
+  await page.keyboard.press('Escape')
+  await expect(trigger).toBeFocused()
+
+  const glError = await canvas.evaluate((node: HTMLCanvasElement) => {
+    const gl = node.getContext('webgl2') ?? node.getContext('webgl')
+    return gl ? { actual: gl.getError(), expected: gl.NO_ERROR } : null
+  })
+  expect(glError?.actual).toBe(glError?.expected)
+  expect(errors).toEqual([])
+})
+
 test('a failed Renderer chunk records 503 and reload recovery reaches a 2xx ready render', async ({ page }) => {
   const errors = collectRuntimeErrors(page)
   const fixture = await installUniverseFixture(page)

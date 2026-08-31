@@ -195,6 +195,7 @@ interface ProbeCommandRenderer {
   startProbeScan(probeId: string, token: number): void
   setProbeInspectionPose(pose: ReturnType<ProbeInspectionController['reset']>): void
   focusProbePart(part: ProbePart | null): void
+  setReducedMotion(reduced: boolean): void
   exitProbeInspection(): void
   destroy(): void
   onDoubleClick(event: Pick<MouseEvent, 'clientX' | 'clientY'>): void
@@ -403,6 +404,19 @@ describe('Renderer probe inspection commands', () => {
     reduced.startProbeScan('probe:2', 13)
     expect(reducedScanning.mock.calls).toEqual([[true], [false]])
     expect(reducedComplete).toHaveBeenCalledWith({ probeId: 'probe:2', token: 13 })
+  })
+
+  test('switching to reduced motion immediately finishes the current token once', () => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
+    const renderer = commandRenderer(false, { onProbeScanComplete: complete })
+    renderer.startProbeScan('probe:1', 14)
+    renderer.setReducedMotion(true)
+    expect(complete).toHaveBeenCalledOnce()
+    expect(complete).toHaveBeenCalledWith({ probeId: 'probe:1', token: 14 })
+    expect((renderer.probes as Record<string, ReturnType<typeof vi.fn>>).setScanning).toHaveBeenLastCalledWith(false)
+    vi.runAllTimers()
+    expect(complete).toHaveBeenCalledOnce()
   })
 
   test('invalid or failed commands report only the matching tokened error', () => {

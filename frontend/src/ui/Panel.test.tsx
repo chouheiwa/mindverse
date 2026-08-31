@@ -25,9 +25,11 @@ const fixture: CurrentUniverse = {
 function renderPanel(selectedStar: CurrentStar = star, shared = false) {
   const index = indexUniverse(fixture)
   const onEnterQuestion = vi.fn()
+  const onInspectProbe = vi.fn()
   render(<Panel universe={index.universe} index={index} star={selectedStar}
-    onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={onEnterQuestion} shared={shared} />)
-  return { onEnterQuestion }
+    onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={onEnterQuestion}
+    onInspectProbe={onInspectProbe} shared={shared} />)
+  return { onEnterQuestion, onInspectProbe }
 }
 
 afterEach(cleanup)
@@ -36,7 +38,7 @@ describe('Panel semantic entries', () => {
   test('renders each question and probe once and enters from its own trigger', async () => {
     const user = userEvent.setup()
     const repeated = { ...star, questionIds: ['question:7', 'question:7'], probeIds: ['article:21', 'article:21'] }
-    const { onEnterQuestion } = renderPanel(repeated)
+    const { onEnterQuestion, onInspectProbe } = renderPanel(repeated)
     const questions = screen.getByRole('region', { name: '问题行星' })
     expect(within(questions).getAllByText('真实问题标题')).toHaveLength(1)
     expect(within(questions).getByText('1 个已收录回答')).toBeInTheDocument()
@@ -53,6 +55,9 @@ describe('Panel semantic entries', () => {
     expect(screen.getByRole('complementary')).not.toHaveAttribute('aria-live')
     expect(within(probes).getAllByText('真实文章标题')).toHaveLength(1)
     expect(within(probes).getByRole('link', { name: '查看知乎原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
+    const inspect = within(probes).getByRole('button', { name: '检查探测器' })
+    await user.click(inspect)
+    expect(onInspectProbe).toHaveBeenCalledWith(repeated, fixture.probes![0], inspect)
     expect(within(probes).getByText(/Alice/)).toBeInTheDocument()
     expect(within(probes).getByText(/12 赞同/)).toBeInTheDocument()
     expect(within(probes).getByText('公开发现')).toBeInTheDocument()
@@ -66,7 +71,7 @@ describe('Panel semantic entries', () => {
     const changed = { ...fixture, probes: [bound, neutral], stars: [{ ...star, probeIds: ['article:21', 'article:22'] }] }
     const index = indexUniverse(changed)
     render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared={false} />)
     const probes = screen.getByRole('region', { name: '文章探测器 · 旁轨材料' })
     expect(within(probes).getByText('我创作')).toBeInTheDocument()
     expect(within(probes).getByText('我收藏')).toBeInTheDocument()
@@ -87,14 +92,14 @@ describe('Panel semantic entries', () => {
     }
     const index = indexUniverse(changed)
     const { container } = render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared />)
     expect(container).toBeEmptyDOMElement()
   })
 
   test('does not mount an offscreen close button or tab target without a star', () => {
     const index = indexUniverse(fixture)
     const { container } = render(<Panel universe={index.universe} index={index} star={null}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared={false} />)
     expect(container).toBeEmptyDOMElement()
     expect(screen.queryAllByRole('button')).toHaveLength(0)
     expect(screen.queryAllByRole('link')).toHaveLength(0)
@@ -114,7 +119,7 @@ describe('Panel semantic entries', () => {
     }
     const index = indexUniverse(seedUniverse)
     render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared={false} />)
     expect(screen.getAllByText(/公开样本内容/).length).toBeGreaterThan(0)
     expect(screen.getByRole('heading', { name: '构成它的公开样本内容' })).toBeVisible()
     expect(screen.queryByText(/我创作|我收藏|个人内容档案|个人关系/)).not.toBeInTheDocument()
@@ -129,7 +134,7 @@ describe('Panel semantic entries', () => {
     }
     const index = indexUniverse(legacy)
     render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared={false} />)
     expect(screen.getByText('尚无已收录的问题行星。')).toBeInTheDocument()
     expect(screen.getByText('尚无已收录的文章探测器。')).toBeInTheDocument()
   })
@@ -144,7 +149,7 @@ describe('Panel semantic entries', () => {
     }] }
     const index = indexUniverse(changed)
     render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared={false} />)
     const region = screen.getByRole('region', { name: '问题行星' })
     expect(region.querySelectorAll('.entry-actions button')).toHaveLength(8)
     let shown = 8
@@ -171,14 +176,14 @@ describe('Panel semantic entries', () => {
     }] }
     const index = indexUniverse(changed)
     render(<Panel universe={index.universe} index={index} star={index.universe.stars[0]}
-      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} shared={false} />)
+      onClose={() => {}} onPickConcept={() => {}} onEnterQuestion={() => {}} onInspectProbe={() => {}} shared={false} />)
     const region = screen.getByRole('region', { name: '文章探测器 · 旁轨材料' })
     expect(within(region).getAllByRole('link', { name: '查看知乎原文章' })).toHaveLength(8)
     await user.click(within(region).getByRole('button', { name: '加载更多文章' }))
     expect(within(region).getAllByRole('link', { name: '查看知乎原文章' })).toHaveLength(16)
-    expect(within(region).getAllByRole('link', { name: '查看知乎原文章' })[8]).toHaveFocus()
+    expect(within(region).getAllByRole('button', { name: '检查探测器' })[8]).toHaveFocus()
     await user.click(within(region).getByRole('button', { name: '加载更多文章' }))
-    expect(within(region).getAllByRole('link', { name: '查看知乎原文章' })[16]).toHaveFocus()
+    expect(within(region).getAllByRole('button', { name: '检查探测器' })[16]).toHaveFocus()
     expect(within(region).queryByRole('button', { name: '加载更多文章' })).not.toBeInTheDocument()
     expect(within(region).getByRole('status')).toHaveTextContent('已显示 20 项，共 20 项')
     const published = within(region).getAllByText(/2026年9月1日/)[0]
@@ -196,7 +201,7 @@ describe('Panel semantic entries', () => {
     const second = { ...first, id: 'star:v1:private:another' }
     const changed = { ...fixture, questions, answers: [], stars: [first] }
     const index = indexUniverse(changed)
-    const props = { universe: index.universe, index, onClose: () => {}, onPickConcept: () => {}, onEnterQuestion: () => {}, shared: false }
+    const props = { universe: index.universe, index, onClose: () => {}, onPickConcept: () => {}, onEnterQuestion: () => {}, onInspectProbe: () => {}, shared: false }
     const view = render(<Panel {...props} star={first} />)
     await user.click(screen.getByRole('button', { name: '加载更多问题' }))
     expect(screen.getAllByRole('button', { name: '进入问题行星' })).toHaveLength(16)

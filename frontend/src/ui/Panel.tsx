@@ -12,6 +12,7 @@ interface Props {
   /** Task 8 owns ShareView rendering. This component fails closed in shared mode. */
   shared: boolean
   onEnterQuestion: (questionId: string, trigger: HTMLButtonElement) => void
+  onInspectProbe: (star: Star, probe: ArticleProbe, trigger: HTMLButtonElement) => void
   /** 当前选中行星对应内容的链接，用来在列表里标出「就是这一条」 */
   highlight?: string
 }
@@ -43,10 +44,11 @@ function ProbeRelation({ probe, personal }: { probe: ArticleProbe; personal: boo
   </span>
 }
 
-function SemanticEntries({ index, star, onEnterQuestion, personal }: {
+function SemanticEntries({ index, star, onEnterQuestion, onInspectProbe, personal }: {
   index: UniverseIndex
   star: Star
   onEnterQuestion: Props['onEnterQuestion']
+  onInspectProbe: Props['onInspectProbe']
   personal: boolean
 }) {
   const questions = questionsForStar(index, star)
@@ -54,7 +56,7 @@ function SemanticEntries({ index, star, onEnterQuestion, personal }: {
   const [questionLimit, setQuestionLimit] = useState(ENTRY_LIMIT)
   const [probeLimit, setProbeLimit] = useState(ENTRY_LIMIT)
   const questionActions = useRef(new Map<string, HTMLButtonElement>())
-  const probeActions = useRef(new Map<string, HTMLAnchorElement>())
+  const probeActions = useRef(new Map<string, HTMLButtonElement>())
   const questionFocusId = useRef<string | null>(null)
   const probeFocusId = useRef<string | null>(null)
   useLayoutEffect(() => {
@@ -121,10 +123,13 @@ function SemanticEntries({ index, star, onEnterQuestion, personal }: {
               {!!counts.length && <> · {counts.join(' · ')}</>}
             </span>
             <div className="entry-provenance"><ProbeRelation probe={probe} personal={personal} /></div>
-            <a ref={(node) => {
-              if (node) probeActions.current.set(probe.id, node)
-              else probeActions.current.delete(probe.id)
-            }} className="entry-original" href={probe.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原文章">查看原文章 ↗</a>
+            <div className="entry-actions">
+              <button ref={(node) => {
+                if (node) probeActions.current.set(probe.id, node)
+                else probeActions.current.delete(probe.id)
+              }} type="button" onClick={(event) => onInspectProbe(star, probe, event.currentTarget)}>检查探测器</button>
+              <a className="entry-original" href={probe.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原文章">查看原文章 ↗</a>
+            </div>
           </li>
         })}
       </ol>
@@ -205,7 +210,7 @@ function EvidenceList({ items, highlight, fresh, personal }: {
   )
 }
 
-export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQuestion, shared, highlight }: Props) {
+export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQuestion, onInspectProbe, shared, highlight }: Props) {
   const personal = universe.meta.source !== 'seed'
   const cluster = star ? universe.clusters.find((c) => c.g === star.g) : null
   const dark: Dark | undefined = star ? universe.dark.find((d) => d.c === star.c) : undefined
@@ -253,7 +258,7 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
           </div>
 
           <SemanticEntries key={'id' in star ? star.id : star.c} index={index} star={star} personal={personal}
-            onEnterQuestion={onEnterQuestion} />
+            onEnterQuestion={onEnterQuestion} onInspectProbe={onInspectProbe} />
 
           <div>
             <h3>{personal ? '构成它的个人内容档案' : '构成它的公开样本内容'}</h3>

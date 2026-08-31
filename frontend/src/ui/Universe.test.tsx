@@ -15,6 +15,12 @@ const testState = vi.hoisted(() => ({
   suspendCalls: 0,
   resumeCalls: 0,
   destroyCalls: 0,
+  approachCalls: [] as Array<[string, number]>,
+  scanCalls: [] as Array<[string, number]>,
+  exitProbeCalls: 0,
+  poseCalls: [] as unknown[],
+  partCalls: [] as unknown[],
+  reducedCalls: [] as boolean[],
 }))
 
 const apiState = vi.hoisted(() => ({
@@ -49,6 +55,15 @@ vi.mock('../starmap/Renderer', () => ({
       testState.callbacks?.onPickPlanet?.(testState.planet)
       return testState.planet
     }
+    approachProbe(probeId: string, token: number) {
+      testState.approachCalls.push([probeId, token])
+      testState.callbacks?.onPickPlanet?.(null)
+    }
+    startProbeScan(probeId: string, token: number) { testState.scanCalls.push([probeId, token]) }
+    exitProbeInspection() { testState.exitProbeCalls += 1 }
+    setProbeInspectionPose(pose: unknown) { testState.poseCalls.push(pose) }
+    focusProbePart(part: unknown) { testState.partCalls.push(part) }
+    setReducedMotion(reduced: boolean) { testState.reducedCalls.push(reduced) }
   },
 }))
 
@@ -56,7 +71,7 @@ import { UniverseView } from './Universe'
 
 const star = {
   id: 'star:v1:private:8ed3f6ad685b959e', scope: 'private', externalQueryAllowed: false,
-  questionIds: ['question:7'], probeIds: [], c: 'Alpha', g: 0, p: [0, 0, 0] as [number, number, number],
+  questionIds: ['question:7'], probeIds: ['article:21'], c: 'Alpha', g: 0, p: [0, 0, 0] as [number, number, number],
   n: 1, o: 0, f: 1, hue: 218, sat: 50, pe: 1, bu: 0, fi: '2026.01', la: '2026.01', ev: [],
 } satisfies NonNullable<CurrentUniverse['stars']>[number]
 
@@ -71,7 +86,8 @@ const fixture = {
     url: 'https://www.zhihu.com/question/7/answer/8', authorName: 'Alice', publishedAt: 1,
     bindings: [], discoverySources: ['public_search'],
   }],
-  probes: [],
+  probes: [{ id: 'article:21', title: '真实文章标题', url: 'https://zhuanlan.zhihu.com/p/21',
+    authorName: 'Bob', bindings: [], discoverySources: ['public_search'] }],
 } satisfies CurrentUniverse
 
 const selectedPlanet = {
@@ -93,6 +109,12 @@ beforeEach(() => {
   testState.suspendCalls = 0
   testState.resumeCalls = 0
   testState.destroyCalls = 0
+  testState.approachCalls = []
+  testState.scanCalls = []
+  testState.exitProbeCalls = 0
+  testState.poseCalls = []
+  testState.partCalls = []
+  testState.reducedCalls = []
   apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
     matches: true,
@@ -113,6 +135,53 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
+
+  test('inspects and scans an article probe with token guards and restores its trigger on Escape', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    act(() => testState.callbacks?.onPick?.(star))
+    const trigger = await screen.findByRole('button', { name: '检查探测器' })
+    await user.click(trigger)
+    expect(testState.approachCalls).toEqual([['article:21', 1]])
+    expect(screen.queryByRole('heading', { name: /检查探测器/ })).not.toBeInTheDocument()
+
+    act(() => testState.callbacks?.onProbeArrived?.({ probeId: 'article:wrong', token: 1 }))
+    act(() => testState.callbacks?.onProbeArrived?.({ probeId: 'article:21', token: 99 }))
+    expect(screen.queryByRole('heading', { name: /检查探测器/ })).not.toBeInTheDocument()
+    act(() => testState.callbacks?.onProbeArrived?.({ probeId: 'article:21', token: 1 }))
+    expect(await screen.findByRole('heading', { name: '检查探测器：真实文章标题' })).toHaveFocus()
+    expect(screen.queryByRole('link', { name: '查看原文章' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '开始扫描' }))
+    expect(testState.scanCalls).toEqual([['article:21', 2]])
+    act(() => testState.callbacks?.onProbeScanComplete?.({ probeId: 'article:21', token: 1 }))
+    expect(screen.queryByRole('link', { name: '查看原文章' })).not.toBeInTheDocument()
+    act(() => testState.callbacks?.onProbeScanComplete?.({ probeId: 'article:21', token: 2 }))
+    expect(screen.getByRole('link', { name: '查看原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(trigger).toHaveFocus())
+    expect(testState.exitProbeCalls).toBeGreaterThan(0)
+  })
+
+  test('forwards runtime reduced-motion changes and removes the listener on unmount', async () => {
+    let listener: ((event: MediaQueryListEvent) => void) | null = null
+    const removeEventListener = vi.fn()
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn((_type: string, next: (event: MediaQueryListEvent) => void) => { listener = next }),
+      removeEventListener,
+    })))
+    const view = render(<StrictMode><UniverseView /></StrictMode>)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(listener).not.toBeNull())
+    act(() => listener?.({ matches: true } as MediaQueryListEvent))
+    expect(testState.reducedCalls).toContain(true)
+    view.unmount()
+    expect(removeEventListener).toHaveBeenCalledWith('change', expect.any(Function))
+  })
 
   test('labels seed data as public samples and never renders a 1970 personal-history claim', async () => {
     apiState.pollUntilDone.mockResolvedValue({

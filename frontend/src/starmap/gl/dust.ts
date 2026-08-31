@@ -3,6 +3,7 @@ import type { Mode, Universe } from '../../types'
 import { clusterAxis, orbitPeriod } from '../projection'
 import { starColor } from './blackbody'
 import { DEPTH_FADE, ORBIT } from './chunks'
+import { ResourceScope } from '../resourceScope'
 
 // 尘埃与边缘微光。
 //
@@ -70,6 +71,10 @@ export interface DustLayer {
 }
 
 export function makeDust(u: Universe, reduceMotion: boolean): DustLayer {
+  return ResourceScope.construct((scope) => makeDustScoped(u, reduceMotion, scope))
+}
+
+function makeDustScoped(u: Universe, reduceMotion: boolean, scope: ResourceScope): DustLayer {
   const centerOf = new Map<number, [number, number, number]>()
   const axisOf = new Map<number, [number, number, number]>()
   const hueOf = new Map<number, [number, number]>()
@@ -102,6 +107,7 @@ export function makeDust(u: Universe, reduceMotion: boolean): DustLayer {
     w.seed = i * 0.618
     w.start = jet(rnd)
   })
+  scope.use(dust.geo)
 
   // ── 边缘微光 ──
   const solos = u.solo
@@ -117,6 +123,7 @@ export function makeDust(u: Universe, reduceMotion: boolean): DustLayer {
     w.seed = i * 1.37 + 5
     w.start = jet(rnd)
   }) : null
+  if (solo) scope.use(solo.geo)
 
   const shared = {
     uT: { value: 0 },
@@ -126,17 +133,17 @@ export function makeDust(u: Universe, reduceMotion: boolean): DustLayer {
     uFar: { value: 4000 },
   }
 
-  const dustMat = new THREE.ShaderMaterial({
+  const dustMat = scope.use(new THREE.ShaderMaterial({
     uniforms: { ...shared, uGain: { value: 0.30 }, uTwinkle: { value: 0 } },
     vertexShader: VERT, fragmentShader: FRAG,
     blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true,
-  })
+  }))
   // 边缘微光会呼吸：它们是「差一点就成星」的东西，闪烁本身就是语义
-  const soloMat = new THREE.ShaderMaterial({
+  const soloMat = scope.use(new THREE.ShaderMaterial({
     uniforms: { ...shared, uGain: { value: 0.85 }, uTwinkle: { value: reduceMotion ? 0 : 0.55 } },
     vertexShader: VERT, fragmentShader: FRAG,
     blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true,
-  })
+  }))
 
   const group = new THREE.Group()
   const dustPts = new THREE.Points(dust.geo, dustMat)
@@ -153,6 +160,7 @@ export function makeDust(u: Universe, reduceMotion: boolean): DustLayer {
   }
 
   const mats = [dustMat, soloMat]
+  const dispose = scope.release()
 
   return {
     group,
@@ -174,11 +182,7 @@ export function makeDust(u: Universe, reduceMotion: boolean): DustLayer {
         solo.dimAttr.needsUpdate = true
       }
     },
-    dispose() {
-      dust.geo.dispose()
-      solo?.geo.dispose()
-      for (const m of mats) m.dispose()
-    },
+    dispose,
   }
 }
 

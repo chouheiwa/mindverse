@@ -105,3 +105,27 @@
   .uv-filtered { left: 18px; right: 18px }
 }
 @media (prefers-reduced-motion: reduce) { .uv-canvas { transition: none } }
+.render-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  overflow: auto;
+  padding: clamp(28px, 6vw, 80px);
+  color: #eef4ff;
+  background: radial-gradient(circle at 50% 0%, #142039 0, #05070d 55%);
+}
+
+.render-fallback > header,
+.render-fallback > nav {
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.render-fallback button,
+.render-fallback a {
+  margin: 4px 10px 4px 0;
+}
+
+.render-fallback nav {
+  margin-top: 36px;
+}

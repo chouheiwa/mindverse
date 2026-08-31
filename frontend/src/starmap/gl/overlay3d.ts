@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Universe } from '../../types'
 import { clusterAxis, orbitPeriod } from '../projection'
 import { DEPTH_FADE, ORBIT } from './chunks'
+import { ResourceScope } from '../resourceScope'
 
 // 两种模式叠加物，都放进 3D 里 —— 它们得跟着相机走，也得吃到 bloom。
 // 画在 2D 覆盖层上的发光物永远像贴纸。
@@ -124,8 +125,11 @@ export interface Overlay3D {
 }
 
 export function makeOverlay3D(u: Universe): Overlay3D {
+  return ResourceScope.construct((scope) => makeOverlay3DScoped(u, scope))
+}
+
+function makeOverlay3DScoped(u: Universe, scope: ResourceScope): Overlay3D {
   const group = new THREE.Group()
-  const disposables: { dispose(): void }[] = []
   const shared = () => ({
     uT: { value: 0 },
     uConverge: { value: 0 },
@@ -160,21 +164,21 @@ export function makeOverlay3D(u: Universe): Overlay3D {
   let wormMat: THREE.ShaderMaterial | null = null
   if (wp.length > 0) {
     const geo = new THREE.BufferGeometry()
+    scope.use(geo)
     geo.setAttribute('position', new THREE.Float32BufferAttribute(wp, 3))
     geo.setAttribute('aT', new THREE.Float32BufferAttribute(wt, 1))
     geo.setAttribute('aWorm', new THREE.Float32BufferAttribute(wi, 1))
     geo.computeBoundingSphere()
-    wormMat = new THREE.ShaderMaterial({
+    wormMat = scope.use(new THREE.ShaderMaterial({
       uniforms: { ...shared(), uActive: { value: 0 }, uColor: { value: AMBER.clone() }, uGain: { value: 2.6 } },
       vertexShader: WORM_VERT, fragmentShader: WORM_FRAG,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true,
-    })
+    }))
     wormPts = new THREE.Points(geo, wormMat)
     wormPts.renderOrder = 16
     wormPts.frustumCulled = false
     wormPts.visible = false
     group.add(wormPts)
-    disposables.push(geo, wormMat)
     mats.push(wormMat)
   }
 
@@ -212,6 +216,7 @@ export function makeOverlay3D(u: Universe): Overlay3D {
     })
 
     const geo = new THREE.BufferGeometry()
+    scope.use(geo)
     geo.setAttribute('position', new THREE.Float32BufferAttribute(dp, 3))
     geo.setAttribute('aCorner', new THREE.Float32BufferAttribute(dc, 2))
     geo.setAttribute('aCenter', new THREE.Float32BufferAttribute(dcen, 3))
@@ -221,18 +226,19 @@ export function makeOverlay3D(u: Universe): Overlay3D {
     geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(dseed, 1))
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6)
 
-    darkMat = new THREE.ShaderMaterial({
+    darkMat = scope.use(new THREE.ShaderMaterial({
       uniforms: { ...shared(), uEmphasis: { value: 0.14 }, uColor: { value: AMBER.clone() } },
       vertexShader: DARK_VERT, fragmentShader: DARK_FRAG,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true,
-    })
+    }))
     const mesh = new THREE.Mesh(geo, darkMat)
     mesh.renderOrder = 15
     mesh.frustumCulled = false
     group.add(mesh)
-    disposables.push(geo, darkMat)
     mats.push(darkMat)
   }
+
+  const dispose = scope.release()
 
   return {
     group,
@@ -242,7 +248,7 @@ export function makeOverlay3D(u: Universe): Overlay3D {
     setActiveWorm(i) { if (wormMat) wormMat.uniforms.uActive.value = i },
     setEmphasis(dark) { if (darkMat) darkMat.uniforms.uEmphasis.value = dark },
     setWormVisible(on) { if (wormPts) wormPts.visible = on },
-    dispose() { for (const d of disposables) d.dispose() },
+    dispose,
   }
 }
 

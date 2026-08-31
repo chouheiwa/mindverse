@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Mode, Star, Universe } from '../../types'
 import { DEPTH_FADE, ORBIT } from './chunks'
 import { IGNITE_MS, IGNITE_START, IGNITE_STEP, starData, type StarDatum } from './starData'
+import { ResourceScope } from '../resourceScope'
 
 // 恒星：core / glow / flare 三层点云叠在同一批坐标上。
 //
@@ -183,6 +184,10 @@ export interface StarLayer {
 }
 
 export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] = starData(u)): StarLayer {
+  return ResourceScope.construct((scope) => makeStarsScoped(u, reduceMotion, data, scope))
+}
+
+function makeStarsScoped(u: Universe, reduceMotion: boolean, data: StarDatum[], scope: ResourceScope): StarLayer {
   const stars = u.stars
   const n = stars.length
 
@@ -218,6 +223,7 @@ export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] 
   })
 
   const geo = new THREE.BufferGeometry()
+  scope.use(geo)
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
   geo.setAttribute('aStart', new THREE.BufferAttribute(start, 3))
   geo.setAttribute('aCenter', new THREE.BufferAttribute(center, 3))
@@ -247,7 +253,7 @@ export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] 
   }
 
   const mk = (frag: string, mul: number, gain: number, extra: Record<string, { value: number }> = {}) =>
-    new THREE.ShaderMaterial({
+    scope.use(new THREE.ShaderMaterial({
       uniforms: { ...shared, uSizeMul: { value: mul }, uGain: { value: gain }, uFlareShape: { value: 0 }, uFadeToBody: { value: 0 },
         uNearMul: { value: 7 }, uMaxPx: { value: 520 }, ...extra },
       vertexShader: VERT,
@@ -256,7 +262,7 @@ export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] 
       depthWrite: false,
       depthTest: false,
       transparent: true,
-    })
+    }))
 
   const matGlow = mk(FRAG_GLOW, MUL.glow, GAIN.glow, { uNearMul: { value: 7.5 }, uMaxPx: { value: 520 } })
   const matCore = mk(FRAG_CORE, MUL.core, GAIN.core, { uFadeToBody: { value: 1 }, uMaxPx: { value: 90 } })
@@ -278,6 +284,7 @@ export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] 
 
   const mats = [matGlow, matCore, matFlare]
   const dimAttr = geo.getAttribute('aDim') as THREE.BufferAttribute
+  const dispose = scope.release()
 
   return {
     group,
@@ -290,10 +297,7 @@ export function makeStars(u: Universe, reduceMotion: boolean, data: StarDatum[] 
       for (let i = 0; i < n; i++) dim[i] = renderDim(stars[i], mode, uni, wormIdx)
       dimAttr.needsUpdate = true
     },
-    dispose() {
-      geo.dispose()
-      for (const m of mats) m.dispose()
-    },
+    dispose,
   }
 }
 
@@ -337,4 +341,3 @@ export function renderDim(s: Star, mode: Mode, u: Universe, wormIdx: number): nu
   const d = modeDim(s, mode, u, wormIdx)
   return u.dark.some((x) => x.c === s.c) ? Math.min(d, 0.3) : d
 }
-

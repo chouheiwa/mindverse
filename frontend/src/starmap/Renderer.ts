@@ -15,6 +15,7 @@ import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
 import { resumeRenderClock } from './renderClock'
+import { RendererSignals, ResourceScope } from './resourceScope'
 
 /**
  * 星图渲染器。
@@ -44,6 +45,8 @@ export interface RendererCallbacks {
    */
   onAnchor?: (x: number, y: number, visible: boolean) => void
   onGenesisEnd?: () => void
+  onRenderReady?: () => void
+  onRenderError?: (cause: Error) => void
 }
 
 const CONVERGE_FROM = 1800
@@ -70,6 +73,7 @@ const SYSTEM_NEAR = 4.5
  * 恒星糊满屏，外圈行星也不至于小成一个点。
  */
 const PLANET_NEAR = 1.2
+const E2E_SHADER_FAILURE_MARK = 'mindverse:e2e-shader-failed'
 function planetDist(orbitR: number) {
   return clamp(orbitR * 0.8, 2.8, 6.0)
 }
@@ -153,6 +157,8 @@ export class Renderer {
   private u: Universe
   private reduceMotion: boolean
   private cb: RendererCallbacks
+  private resources = new ResourceScope()
+  private signals: RendererSignals
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -167,6 +173,7 @@ export class Renderer {
     this.u = u
     this.reduceMotion = reduceMotion
     this.cb = cb
+    this.signals = new RendererSignals(cb.onRenderReady, cb.onRenderError)
     this.genesisDone = reduceMotion
     this.convergence = reduceMotion ? 1 : 0
     this.quality = quality
@@ -175,6 +182,7 @@ export class Renderer {
     this.dist = this.R * 4.6
     this.targetDist = this.R * 1.62
 
+    try {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,          // 交给 composer 的 MSAA，在 HDR 目标上做
@@ -182,6 +190,14 @@ export class Renderer {
       powerPreference: 'high-performance',
       stencil: false,
     })
+    this.resources.defer(() => this.renderer.dispose())
+
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
+      && new URLSearchParams(location.search).get('e2eShaderFail') === 'once'
+      && sessionStorage.getItem(E2E_SHADER_FAILURE_MARK) !== '1') {
+      sessionStorage.setItem(E2E_SHADER_FAILURE_MARK, '1')
+      throw new Error('E2E injected shader initialization failure')
+    }
     this.renderer.setClearColor(0x000000, 1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     // tone mapping 在 composer 里做，渲染器这一层必须放行，否则会压两次
@@ -192,12 +208,19 @@ export class Renderer {
 
     const data = starData(u)
     this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u))
+    this.resources.defer(() => this.nebula.dispose())
     this.stars = makeStars(u, reduceMotion, data)
+    this.resources.defer(() => this.stars.dispose())
     this.bodies = makeBodies(index, reduceMotion)
+    this.resources.defer(() => this.bodies.dispose())
     this.dust = makeDust(u, reduceMotion)
+    this.resources.defer(() => this.dust.dispose())
     this.rings = makeRings(u)
+    if (this.rings) this.resources.defer(() => this.rings?.dispose())
     this.overlay = makeOverlay3D(u)
+    this.resources.defer(() => this.overlay.dispose())
     this.labels = new Labels(labelCanvas, u)
+    this.resources.defer(() => this.labels.dispose())
 
     this.scene.add(this.nebula.group, this.dust.group, this.bodies.group, this.stars.group, this.overlay.group)
     if (this.rings) this.scene.add(this.rings.object)
@@ -216,6 +239,7 @@ export class Renderer {
       depthBuffer: true,
       stencilBuffer: false,
     })
+    this.resources.defer(() => this.composer.dispose())
     this.composer.addPass(new RenderPass(this.scene, this.camera))
 
     const bloom = new BloomEffect({
@@ -247,7 +271,14 @@ export class Renderer {
 
     this.applyMode()
     this.bindPointer()
+    this.resources.defer(() => this.unbindPointer())
+    this.resources.defer(() => this.stop())
     this.resize()
+    } catch (cause) {
+      this.signals.destroy()
+      this.resources.dispose()
+      throw cause
+    }
   }
 
   // ── 对外 ──
@@ -279,18 +310,10 @@ export class Renderer {
   }
 
   destroy() {
+    if (this.destroyed) return
     this.destroyed = true
-    this.stop()
-    this.unbindPointer()
-    this.labels.clear()
-    this.nebula.dispose()
-    this.stars.dispose()
-    this.bodies.dispose()
-    this.dust.dispose()
-    this.rings?.dispose()
-    this.overlay.dispose()
-    this.composer.dispose()
-    this.renderer.dispose()
+    this.signals.destroy()
+    this.resources.dispose()
   }
 
   setMode(mode: Mode, wormIdx = this.wormIdx) {
@@ -360,8 +383,11 @@ export class Renderer {
   // ── 主循环 ──
 
   private frame = (now: number) => {
-    this.raf = requestAnimationFrame(this.frame)
+    this.raf = 0
+    if (this.destroyed) return
     if (this.lost) return
+
+    try {
 
     if (this.t0 === null) {
       this.t0 = now
@@ -462,12 +488,21 @@ export class Renderer {
     }
 
     this.composer.render()
+    this.signals.frameSucceeded()
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+      sessionStorage.removeItem(E2E_SHADER_FAILURE_MARK)
+    }
     this.labels.tooClose = this.R * 0.2
     this.labels.draw(this.camera, conv, this.mode, this.wormIdx, near, far)
 
     if (!this.genesisDone && (skipK >= 1 || A > this.stars.igniteEnd)) {
       this.genesisDone = true
       this.cb.onGenesisEnd?.()
+    }
+    if (!this.destroyed && this.suspendedAt === null) this.raf = requestAnimationFrame(this.frame)
+    } catch (cause) {
+      this.stop()
+      this.signals.frameFailed(cause)
     }
   }
 
@@ -508,6 +543,8 @@ export class Renderer {
   private onContextLost = (e: Event) => {
     e.preventDefault()
     this.lost = true
+    this.stop()
+    this.signals.frameFailed(new Error('WebGL context lost'))
   }
 
   private onContextRestored = () => {

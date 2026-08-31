@@ -3,6 +3,7 @@ import type { Mode, Universe } from '../../types'
 import { clusterAxis, orbitRing } from '../projection'
 import { starColor } from './blackbody'
 import { DEPTH_FADE } from './chunks'
+import { ResourceScope } from '../resourceScope'
 
 // 轨道环。
 //
@@ -49,6 +50,10 @@ export interface RingLayer {
 }
 
 export function makeRings(u: Universe): RingLayer | null {
+  return ResourceScope.construct((scope) => makeRingsScoped(u, scope))
+}
+
+function makeRingsScoped(u: Universe, scope: ResourceScope): RingLayer | null {
   const segsPos: number[] = []
   const segsCol: number[] = []
   const segsGroup: number[] = []
@@ -78,13 +83,14 @@ export function makeRings(u: Universe): RingLayer | null {
 
   const n = segsGroup.length
   const geo = new THREE.BufferGeometry()
+  scope.use(geo)
   geo.setAttribute('position', new THREE.Float32BufferAttribute(segsPos, 3))
   geo.setAttribute('aColor', new THREE.Float32BufferAttribute(segsCol, 3))
   const dim = new Float32Array(n).fill(1)
   geo.setAttribute('aDim', new THREE.BufferAttribute(dim, 1))
   geo.computeBoundingSphere()
 
-  const mat = new THREE.ShaderMaterial({
+  const mat = scope.use(new THREE.ShaderMaterial({
     uniforms: {
       uConverge: { value: 0 },
       uNear: { value: 1 },
@@ -97,7 +103,7 @@ export function makeRings(u: Universe): RingLayer | null {
     depthWrite: false,
     depthTest: false,
     transparent: true,
-  })
+  }))
 
   const object = new THREE.LineSegments(geo, mat)
   object.renderOrder = 4
@@ -105,6 +111,7 @@ export function makeRings(u: Universe): RingLayer | null {
 
   const groups = segsGroup
   const dimAttr = geo.getAttribute('aDim') as THREE.BufferAttribute
+  const dispose = scope.release()
 
   return {
     object,
@@ -118,6 +125,6 @@ export function makeRings(u: Universe): RingLayer | null {
       }
       dimAttr.needsUpdate = true
     },
-    dispose() { geo.dispose(); mat.dispose() },
+    dispose,
   }
 }

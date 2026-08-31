@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { Mode, Universe } from '../../types'
 import { starColor } from './blackbody'
+import { ResourceScope, type ResourceCleanup } from '../resourceScope'
 
 // 星群名。
 //
@@ -18,11 +19,22 @@ export class Labels {
   private h = 0
   private v = new THREE.Vector3()
   private v2 = new THREE.Vector3()
+  private disposeResources: ResourceCleanup
 
   constructor(canvas: HTMLCanvasElement, u: Universe) {
-    this.canvas = canvas
-    this.u = u
-    this.ctx = canvas.getContext('2d')!
+    const scope = new ResourceScope()
+    try {
+      this.canvas = canvas
+      this.u = u
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('2D label canvas is unavailable')
+      this.ctx = context
+      scope.defer(() => this.clear())
+      this.disposeResources = scope.release()
+    } catch (cause) {
+      scope.dispose()
+      throw cause
+    }
   }
 
   resize(w: number, h: number, dpr: number) {
@@ -35,6 +47,10 @@ export class Labels {
 
   clear() {
     this.ctx.clearRect(0, 0, this.w, this.h)
+  }
+
+  dispose() {
+    this.disposeResources()
   }
 
   /** 比这更近的星群质心不画名字 —— 飞进恒星系时它会横在画面正中。 */

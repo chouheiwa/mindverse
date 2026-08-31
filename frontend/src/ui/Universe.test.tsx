@@ -119,6 +119,23 @@ describe('Universe question keyboard integration', () => {
     expect(screen.queryByText(/1970/)).not.toBeInTheDocument()
     expect(screen.queryByText(/你的知乎|真实的知乎收藏与创作/)).not.toBeInTheDocument()
   })
+
+  test('starts loading, becomes ready, and shows a remount fallback after renderer failure', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    const root = await screen.findByTestId('universe-root')
+    expect(root).toHaveAttribute('data-render-state', 'loading')
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    act(() => testState.callbacks?.onRenderReady?.())
+    expect(root).toHaveAttribute('data-render-state', 'ready')
+
+    act(() => testState.callbacks?.onRenderError?.(new Error('WebGL context lost')))
+    expect(root).toHaveAttribute('data-render-state', 'failed')
+    expect(screen.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重试 3D' }))
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    expect(root).toHaveAttribute('data-render-state', 'loading')
+  })
   test('opens the only public sharing action and restores focus after close', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)
@@ -175,6 +192,7 @@ describe('Universe question keyboard integration', () => {
     const user = userEvent.setup()
     render(<UniverseView />)
     await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
     act(() => testState.callbacks?.onPick?.(star))
     const trigger = await screen.findByRole('button', { name: '进入问题行星' })
     trigger.focus()

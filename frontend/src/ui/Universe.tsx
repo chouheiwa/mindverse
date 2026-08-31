@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone } from '../api'
 import type { Renderer } from '../starmap/Renderer'
@@ -13,6 +13,8 @@ import type { PlanetDatum } from '../starmap/gl/bodies'
 import { Seed } from './Seed'
 import { QuestionWorkspaceGate } from './QuestionWorkspaceGate'
 import { SharePreview } from './SharePreview'
+import { RenderFallback } from './RenderFallback'
+import { initialUniverseExploration, initialUniverseUiState, universeUiReducer } from './explorationState'
 import './Universe.css'
 
 const reduceMotion = () =>
@@ -34,16 +36,11 @@ export function PrivateUniverseView() {
   const [universe, setUniverse] = useState<U | null>(null)
   const [filtered, setFiltered] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  const [star, setStar] = useState<Star | null>(null)
-  const [planet, setPlanet] = useState<PlanetDatum | null>(null)
-  const [questionEntry, setQuestionEntry] = useState<PlanetDatum | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const cardSizeRef = useRef({ width: 332, height: 180 })
   const focusReturnRef = useRef<HTMLButtonElement | null>(null)
   const panelFocusReturnRef = useRef<HTMLElement | null>(null)
   const focusCardFromLaneRef = useRef(false)
-  const [mode, setMode] = useState<Mode>('all')
-  const [wormIdx, setWormIdx] = useState(0)
   const [genesisDone, setGenesisDone] = useState(reduceMotion())
   const [hint, setHint] = useState(false)
   const [sharing, setSharing] = useState(false)
@@ -53,6 +50,16 @@ export function PrivateUniverseView() {
     () => new URLSearchParams(location.search).get('seed') === '1',
   )
   const [reload, setReload] = useState(0)
+  const [rendererAttempt, setRendererAttempt] = useState(0)
+  const [uiState, dispatchUi] = useReducer(universeUiReducer, initialUniverseUiState)
+  const activeExploration = uiState.exploration.kind === 'universe'
+    ? uiState.exploration : initialUniverseExploration
+  const { star, planet, questionEntry, mode, wormIdx } = activeExploration
+  const setStar = useCallback((value: Star | null) => dispatchUi({ type: 'set-star', star: value }), [])
+  const setPlanet = useCallback((value: PlanetDatum | null) => dispatchUi({ type: 'set-planet', planet: value }), [])
+  const setQuestionEntry = useCallback((value: PlanetDatum | null) => dispatchUi({ type: 'set-question-entry', questionEntry: value }), [])
+  const setMode = useCallback((value: Mode) => dispatchUi({ type: 'set-mode', mode: value }), [])
+  const setWormIdx = useCallback((value: number) => dispatchUi({ type: 'set-worm', wormIdx: value }), [])
   const universeIndex = useMemo(() => universe ? indexUniverse(universe) : null, [universe])
   const questionPlanets = useMemo(
     () => universeIndex && star ? selectPlanetData(universeIndex, star) : [],
@@ -81,10 +88,12 @@ export function PrivateUniverseView() {
     const canvas = canvasRef.current
     const labels = labelRef.current
     let disposed = false
+    let rendererModuleLoaded = false
     let instance: Renderer | null = null
     let hintTimer: ReturnType<typeof setTimeout> | null = null
     const mountRenderer = async () => {
       const { Renderer: WebGLRenderer } = await import('../starmap/Renderer')
+      rendererModuleLoaded = true
       if (disposed) return
       const r = new WebGLRenderer(canvas, labels, universeIndex, reduceMotion(), {
       onPick: (s) => {
@@ -126,6 +135,12 @@ export function PrivateUniverseView() {
         setHint(true)
         hintTimer = setTimeout(() => setHint(false), 6000)
       },
+      onRenderReady: () => {
+        if (!disposed) dispatchUi({ type: 'render-ready' })
+      },
+      onRenderError: (cause) => {
+        if (!disposed) dispatchUi({ type: 'render-failed', message: cause.message, recovery: 'remount' })
+      },
       })
       if (disposed) {
         r.destroy()
@@ -139,7 +154,11 @@ export function PrivateUniverseView() {
     }
     const onResize = () => instance?.resize()
     void mountRenderer().catch((cause: unknown) => {
-      if (!disposed) setError(cause instanceof Error ? cause.message : String(cause))
+      if (!disposed) dispatchUi({
+        type: 'render-failed',
+        message: cause instanceof Error ? cause.message : String(cause),
+        recovery: rendererModuleLoaded ? 'remount' : 'reload',
+      })
     })
     return () => {
       disposed = true
@@ -151,7 +170,7 @@ export function PrivateUniverseView() {
     // Renderer lifecycle follows the immutable universe index. Current mode is applied on mount
     // and subsequent changes flow through the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [universeIndex])
+  }, [universeIndex, rendererAttempt])
 
   useEffect(() => {
     const element = cardRef.current
@@ -197,7 +216,7 @@ export function PrivateUniverseView() {
       rendererRef.current?.clearPlanet()
       setStar(s)
     }
-  }, [universe])
+  }, [setPlanet, setQuestionEntry, setStar, universe])
 
   const restorePanelFocus = useCallback(() => {
     const target = panelFocusReturnRef.current
@@ -216,7 +235,7 @@ export function PrivateUniverseView() {
     focusCardFromLaneRef.current = false
     rendererRef.current?.resetView()
     restorePanelFocus()
-  }, [restorePanelFocus])
+  }, [restorePanelFocus, setPlanet, setQuestionEntry, setStar])
 
   const onMode = useCallback((m: Mode, trigger: HTMLButtonElement) => {
     if (m !== 'all') panelFocusReturnRef.current = trigger
@@ -225,8 +244,8 @@ export function PrivateUniverseView() {
     setQuestionEntry(null)
     focusReturnRef.current = null
     focusCardFromLaneRef.current = false
-    setMode((cur) => (cur === m && m !== 'all' ? 'all' : m))
-  }, [])
+    dispatchUi({ type: 'toggle-mode', mode: m })
+  }, [setPlanet, setQuestionEntry, setStar])
 
   const onEnterQuestion = useCallback((selected: PlanetDatum) => {
     focusCardFromLaneRef.current = false
@@ -234,7 +253,7 @@ export function PrivateUniverseView() {
     rendererRef.current?.clearPlanet()
     // clearPlanet synchronously emits onPickPlanet(null); write entry last.
     setQuestionEntry(selected)
-  }, [])
+  }, [setPlanet, setQuestionEntry])
 
   const restoreLaneFocus = useCallback(() => {
     requestAnimationFrame(() => (focusReturnRef.current ?? canvasRef.current)?.focus())
@@ -244,7 +263,7 @@ export function PrivateUniverseView() {
     setPlanet(null)
     rendererRef.current?.clearPlanet()
     restoreLaneFocus()
-  }, [restoreLaneFocus])
+  }, [restoreLaneFocus, setPlanet])
 
   const selectQuestionFromLane = useCallback((datum: QuestionPlanetDatum, trigger: HTMLButtonElement) => {
     const alreadySelected = planet?.question.id === datum.question.id
@@ -260,7 +279,7 @@ export function PrivateUniverseView() {
         cardRef.current?.querySelector<HTMLButtonElement>('[data-question-primary]')?.focus()
       })
     }
-  }, [planet?.question.id])
+  }, [planet?.question.id, setQuestionEntry])
 
   const enterQuestionFromPanel = useCallback((questionId: string, trigger: HTMLButtonElement) => {
     if (!star || !('id' in star)) return
@@ -271,11 +290,11 @@ export function PrivateUniverseView() {
     setPlanet(null)
     rendererRef.current?.clearPlanet()
     setQuestionEntry(selected)
-  }, [star])
+  }, [setPlanet, setQuestionEntry, star])
 
   const leaveQuestionEntry = useCallback(() => {
     setQuestionEntry(null)
-  }, [])
+  }, [setQuestionEntry])
 
   const restoreQuestionCamera = useCallback(() => {
     if (!questionEntry || !('id' in questionEntry.star.s)) return
@@ -306,13 +325,32 @@ export function PrivateUniverseView() {
     )
   }
 
+  const retryRenderer = () => {
+    if (uiState.exploration.kind !== 'render-fallback') return
+    if (uiState.exploration.recovery === 'reload') {
+      location.reload()
+      return
+    }
+    dispatchUi({ type: 'render-loading' })
+    setRendererAttempt((attempt) => attempt + 1)
+  }
+
+  if (uiState.exploration.kind === 'render-fallback') {
+    return (
+      <div data-testid="universe-root" data-render-state={uiState.renderPhase}>
+        <RenderFallback index={universeIndex} message={uiState.exploration.message}
+          onRetry={retryRenderer} onSeed={() => { setSeeding(true); dispatchUi({ type: 'render-loading' }) }} />
+      </div>
+    )
+  }
+
   const m = universe.meta
   const hasSpan = m.span[0] > 0 && m.span[1] > 0
   const y0 = hasSpan ? new Date(m.span[0] * 1000).getFullYear() : null
   const y1 = hasSpan ? new Date(m.span[1] * 1000).getFullYear() : null
 
   return (
-    <>
+    <div data-testid="universe-root" data-render-state={uiState.renderPhase}>
       <canvas ref={canvasRef} className="uv-canvas" tabIndex={0} aria-label="认知宇宙三维星图" />
       <canvas ref={labelRef} className="uv-canvas uv-labels" />
       <div className="vignette" />
@@ -406,6 +444,6 @@ export function PrivateUniverseView() {
         shared={false}
         onWorm={(index) => { setQuestionEntry(null); setPlanet(null); setWormIdx(index) }}
         onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />
-    </>
+    </div>
   )
 }

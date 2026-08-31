@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
 
 const configDir = fileURLToPath(new URL('.', import.meta.url))
 
@@ -21,8 +21,40 @@ function cleanAssets(dir: string): Plugin {
     },
   }
 }
+
+function emitBuildMetadata(): Plugin {
+  const portableModuleId = (moduleId: string) => {
+    if (moduleId.startsWith('\0')) return moduleId
+    const normalized = moduleId.replaceAll('\\', '/')
+    const nodeModulesIndex = normalized.lastIndexOf('/node_modules/')
+    if (nodeModulesIndex >= 0) return normalized.slice(nodeModulesIndex + 1)
+    return relative(configDir, moduleId).replaceAll('\\', '/')
+  }
+
+  return {
+    name: 'emit-build-metadata',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      const chunks = Object.values(bundle)
+        .filter((output) => output.type === 'chunk')
+        .map((chunk) => ({
+          file: chunk.fileName,
+          name: chunk.name,
+          imports: chunk.imports,
+          dynamicImports: chunk.dynamicImports,
+          moduleIds: Object.keys(chunk.modules).map(portableModuleId),
+        }))
+      this.emitFile({
+        type: 'asset',
+        fileName: '.vite/build-metadata.json',
+        source: JSON.stringify({ chunks }, null, 2),
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), cleanAssets(resolve(configDir, '../web/assets'))],
+  plugins: [react(), cleanAssets(resolve(configDir, '../web/assets')), emitBuildMetadata()],
   base: '/',
   build: {
     outDir: resolve(configDir, '../web'),

@@ -533,7 +533,7 @@ export class Renderer {
   private applyFocus() {
     const star = this.focusStar?.s ?? null
     this.labelStrategy.setFocus(this.focusStar)
-    this.bodies.setFocus(star?.c ?? null)
+    this.bodies.setFocus(star === null ? null : 'id' in star && typeof star.id === 'string' ? star.id : star.c)
     this.rings?.setFocus(star?.g ?? null)
     this.overlay.setFocus(star)
   }

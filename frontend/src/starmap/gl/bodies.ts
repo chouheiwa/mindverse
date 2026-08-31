@@ -211,7 +211,8 @@ void main() {
   starW += iAxisLod.xyz * sin(uT / (6400.0 + mod(iMeta.y * 311.0, 5200.0)) + iMeta.y) * uBob;
 
   float th = iOrb.y + 6.28318530718 / iOrb.z * (uT * 0.001);
-  vec3 planetV = normalize(cross(iAxisLod.xyz, iBasisDim.xyz));
+  // Three 的内建 normal 槽携带每实例恒星系轴；这样可恢复正确 V，且不超过 16 个顶点槽。
+  vec3 planetV = normalize(cross(normal, iBasisDim.xyz));
   vec3 centerW = starW + (iBasisDim.xyz * cos(th) + planetV * sin(th)) * iOrb.x;
   vec3 nrm = normalize(position);
   vec3 world = centerW + nrm * iOrb.w;
@@ -533,6 +534,7 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   const pStarPos = new Float32Array(pn * 3)
   const pStarCenter = new Float32Array(pn * 3)
   const pStarAxis = new Float32Array(pn * 3)
+  const pSystemAxis = new Float32Array(pn * 3)
   const pColor = new Float32Array(pn * 3)
   const pOrb = new Float32Array(pn * 4)
   const pMeta = new Float32Array(pn * 4)
@@ -562,6 +564,7 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
     pStarPos.set(d.p, i * 3)
     pStarCenter.set(d.center, i * 3)
     pStarAxis.set(d.axis, i * 3)
+    pSystemAxis.set(d.sysAxis, i * 3)
     pColor.set(d.color, i * 3)
     pOrb.set([r, phase, period, rad], i * 4)
     pMeta.set([(p.material.created ? 2 : 0) + p.material.freshness, d.seed, d.bodyR, d.period], i * 4)
@@ -599,13 +602,14 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   const planetBatches = planetGroups.map((planetGroup) => {
     const count = planetGroup.globalIndices.length
     const local = batchArrays(planetGroup.globalIndices, {
-      pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pSurface, pChronicle, pDim, pSel,
+      pU, pV, pStarPos, pStarCenter, pStarAxis, pSystemAxis, pColor, pOrb, pMeta, pSurface, pChronicle, pDim, pSel,
     })
     const geometry = scope.use(new THREE.InstancedBufferGeometry())
     geometry.index = planetSphere.index
     geometry.setAttribute('position', planetSphere.getAttribute('position'))
     geometry.instanceCount = count
     attachPlanetOrbitAttrs(geometry, local)
+    geometry.setAttribute('normal', new THREE.InstancedBufferAttribute(local.pSystemAxis, 3))
     geometry.setAttribute('iSurface', new THREE.InstancedBufferAttribute(local.pSurface, 4))
     geometry.setAttribute('iChronicle', new THREE.InstancedBufferAttribute(local.pChronicle, 4))
     const basisDim = new Float32Array(count * 4)
@@ -631,7 +635,7 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
       depthTest: true,
       depthWrite: true,
     }))
-    const mesh = new THREE.InstancedMesh(geometry, material, count)
+    const mesh = scope.use(new THREE.InstancedMesh(geometry, material, count))
     mesh.userData.planetFamily = planetGroup.family
     mesh.renderOrder = 9
     mesh.frustumCulled = false
@@ -692,12 +696,12 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   const lodView = new THREE.Vector3()
   const batchByFamily = new Map(planetBatches.map((batch) => [batch.family, batch]))
   let modeDims = data.map(() => 1)
-  let focusedStarId: string | null = null
+  let focusedStarConcept: string | null = null
   let focusedLodStar: StarDatum | null = null
   const dispose = scope.release()
   const applyDims = () => {
-    for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(data[i].s.c, focusedStarId)
-    for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(planetData[i].star.s.c, focusedStarId)
+    for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(data[i].s.c, focusedStarConcept)
+    for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(planetData[i].star.s.c, focusedStarConcept)
     for (const batch of planetBatches) {
       batch.globalIndices.forEach((globalIndex, localIndex) => { batch.basisDim[localIndex * 4 + 3] = pDim[globalIndex] })
       batch.basisDimAttribute.needsUpdate = true
@@ -770,8 +774,8 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
       for (const m of mats) if (m.uniforms[name]) m.uniforms[name].value = value
     },
     setFocus(starId) {
-      focusedStarId = starId
-      focusedLodStar = starId === null ? null : data.find((datum) => datum.s.c === starId) ?? null
+      focusedLodStar = starId === null ? null : data.find((datum) => ('id' in datum.s ? datum.s.id : datum.s.c) === starId) ?? null
+      focusedStarConcept = focusedLodStar?.s.c ?? null
       applyDims()
     },
     setMode(mode, uni, wormIdx) {
@@ -814,6 +818,7 @@ interface GlobalPlanetArrays {
   pStarPos: Float32Array
   pStarCenter: Float32Array
   pStarAxis: Float32Array
+  pSystemAxis: Float32Array
   pColor: Float32Array
   pOrb: Float32Array
   pMeta: Float32Array
@@ -830,6 +835,7 @@ function batchArrays(globalIndices: readonly number[], source: GlobalPlanetArray
     pStarPos: new Float32Array(globalIndices.length * 3),
     pStarCenter: new Float32Array(globalIndices.length * 3),
     pStarAxis: new Float32Array(globalIndices.length * 3),
+    pSystemAxis: new Float32Array(globalIndices.length * 3),
     pColor: new Float32Array(globalIndices.length * 3),
     pOrb: new Float32Array(globalIndices.length * 4),
     pMeta: new Float32Array(globalIndices.length * 4),
@@ -847,6 +853,7 @@ function batchArrays(globalIndices: readonly number[], source: GlobalPlanetArray
     copy(result.pStarPos, source.pStarPos, 3, globalIndex, localIndex)
     copy(result.pStarCenter, source.pStarCenter, 3, globalIndex, localIndex)
     copy(result.pStarAxis, source.pStarAxis, 3, globalIndex, localIndex)
+    copy(result.pSystemAxis, source.pSystemAxis, 3, globalIndex, localIndex)
     copy(result.pColor, source.pColor, 3, globalIndex, localIndex)
     copy(result.pOrb, source.pOrb, 4, globalIndex, localIndex)
     copy(result.pMeta, source.pMeta, 4, globalIndex, localIndex)

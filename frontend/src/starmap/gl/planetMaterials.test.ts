@@ -5,6 +5,7 @@ import type { AnswerSatellite } from '../../types'
 import type { CurrentStar, Universe } from '../../types'
 import * as THREE from 'three'
 import { makeBodies, type PlanetDatum } from './bodies'
+import { starWorldPosition } from './starData'
 import {
   buildMaterialTimeline,
   groupPlanetInstances,
@@ -356,6 +357,8 @@ describe('planet surface batching and LOD', () => {
     expect(shaders.map((shader) => shader.uniforms.uMotion.value)).toEqual([0, 0, 0, 0])
     expect(shaders.map((shader) => shader.fragmentShader.match(/#define PLANET_FAMILY (\d)/)?.[1])).toEqual(['0', '1', '2', '3'])
     for (const shader of shaders) {
+      expect(shader.vertexShader).toContain('vec3 planetV = normalize(cross(normal, iBasisDim.xyz));')
+      expect(shader.vertexShader).toContain('(iBasisDim.xyz * cos(th) + planetV * sin(th)) * iOrb.x')
       expect(shader.vertexShader).toContain('iSurface')
       expect(shader.vertexShader).toContain('iChronicle')
       expect(shader.fragmentShader).toContain('smoothstep(12.0, 18.0, vPlanetPx)')
@@ -395,6 +398,27 @@ describe('planet surface batching and LOD', () => {
     const lodLocal = layer.planetIndexMap.toLocal(first)!
     const lodBatch = batches.find((candidate) => candidate.userData.planetFamily === lodLocal.family)!
     const lodState = lodBatch.geometry.getAttribute('iAxisLod') as THREE.InstancedBufferAttribute
+    const gpuSystemAxis = lodBatch.geometry.getAttribute('normal') as THREE.InstancedBufferAttribute
+    const shaderAttributeLocations = Object.values(lodBatch.geometry.attributes)
+      .reduce((sum, attribute) => sum + (attribute.itemSize === 16 ? 4 : 1), 4)
+    expect(shaderAttributeLocations).toBeLessThanOrEqual(16)
+    const shaderAtQuarterOrbit = new THREE.Vector3(
+      gpuSystemAxis.getX(lodLocal.instanceIndex), gpuSystemAxis.getY(lodLocal.instanceIndex), gpuSystemAxis.getZ(lodLocal.instanceIndex),
+    ).cross(new THREE.Vector3(...lodPlanet.u)).normalize().multiplyScalar(lodPlanet.orbitR)
+    const cpuAtQuarterOrbit = new THREE.Vector3(...lodPlanet.v).multiplyScalar(lodPlanet.orbitR)
+    const rebuiltFromUnrelatedStarAxis = new THREE.Vector3(...lodPlanet.star.axis)
+      .cross(new THREE.Vector3(...lodPlanet.u)).normalize().multiplyScalar(lodPlanet.orbitR)
+    expect(shaderAtQuarterOrbit.distanceTo(cpuAtQuarterOrbit)).toBeLessThan(1e-6)
+    expect(shaderAtQuarterOrbit.distanceTo(rebuiltFromUnrelatedStarAxis)).toBeGreaterThan(0.01)
+    const quarterOrbitElapsed = ((((Math.PI / 2 - lodPlanet.phase) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2))
+      * lodPlanet.period / (Math.PI * 2) * 1000
+    const starAtQuarterOrbit = starWorldPosition(lodPlanet.star, quarterOrbitElapsed, 0, new THREE.Vector3())
+    const cpuWorldAtQuarterOrbit = starAtQuarterOrbit.clone().add(cpuAtQuarterOrbit)
+    const gpuWorldAtQuarterOrbit = starAtQuarterOrbit.clone().add(shaderAtQuarterOrbit)
+    expect(gpuWorldAtQuarterOrbit.distanceTo(cpuWorldAtQuarterOrbit)).toBeLessThan(1e-6)
+    const ringV = ring.geometry.getAttribute('iV') as THREE.InstancedBufferAttribute
+    expect(new THREE.Vector3(ringV.getX(first), ringV.getY(first), ringV.getZ(first)).distanceTo(new THREE.Vector3(...lodPlanet.v)))
+      .toBeLessThan(1e-6)
     const planetWorld = new THREE.Vector3(
       (lodPlanet.u[0] * Math.cos(lodPlanet.phase) + lodPlanet.v[0] * Math.sin(lodPlanet.phase)) * lodPlanet.orbitR,
       (lodPlanet.u[1] * Math.cos(lodPlanet.phase) + lodPlanet.v[1] * Math.sin(lodPlanet.phase)) * lodPlanet.orbitR,
@@ -403,7 +427,7 @@ describe('planet surface batching and LOD', () => {
     const camera = new THREE.PerspectiveCamera(55, 1, .5, 100)
     camera.position.copy(planetWorld).add(new THREE.Vector3(0, 0, 10))
     camera.lookAt(planetWorld)
-    layer.setFocus(star.c)
+    layer.setFocus(star.id)
     const setProjectedRadius = (radius: number) => {
       layer.updatePlanetLods(camera, 0, radius * 10 / lodPlanet.radius)
       return lodState.getW(lodLocal.instanceIndex)
@@ -425,6 +449,66 @@ describe('planet surface batching and LOD', () => {
       .map((batch) => batch.material as THREE.ShaderMaterial)
     expect(movingMaterials.map((shader) => shader.uniforms.uMotion.value)).toEqual([1, 1, 1, 1])
     movingLayer.dispose()
+  })
+
+  test('uses the focused star id when two stars share one concept and resets LOD uploads on switch and null', () => {
+    const questions = [0, 1].map((i) => ({ id: `question:same:${i}`, questionId: `${i}`, title: `${i}`, url: '', answerIds: [] }))
+    const stars = [0, 1].map((i): CurrentStar => ({
+      id: `star:same:${i}`, c: 'same-concept', g: 1, p: [i * 20, 0, -20], n: 1, o: 0, f: 0,
+      hue: 210, sat: .5, pe: 0, bu: 0, fi: '', la: '', ev: [], scope: 'public',
+      externalQueryAllowed: false, questionIds: [questions[i].id], probeIds: [],
+    }))
+    const universe = {
+      schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
+      meta: { items: 2, concepts: 1, clusters: 1, own: 0, fav: 0, span: [0, 0] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
+      clusters: [{ g: 1, name: 'same', lead: 'same-concept', c: [10, 0, -20] as [number, number, number], n: 2, o: 0, f: 0, hue: 210, sat: .5, mem: ['same-concept'] }],
+      stars, particles: [], wormholes: [], solo: [], dark: [], nebula: [], questions, answers: [], probes: [],
+    } satisfies Universe
+    const index: UniverseIndex = {
+      universe,
+      starsById: new Map(stars.map((star) => [star.id, star])),
+      questionsById: new Map(questions.map((question) => [question.id, question])),
+      answersById: new Map(), probesById: new Map(),
+    }
+    const layer = makeBodies(index, true)
+    const batches = layer.group.children.filter((child): child is THREE.InstancedMesh =>
+      child instanceof THREE.InstancedMesh && Boolean(child.geometry.getAttribute('iSurface')))
+    const lodAttributeFor = (globalIndex: number) => {
+      const local = layer.planetIndexMap.toLocal(globalIndex)!
+      const batch = batches.find((candidate) => candidate.userData.planetFamily === local.family)!
+      return { local, attribute: batch.geometry.getAttribute('iAxisLod') as THREE.InstancedBufferAttribute }
+    }
+    const first = layer.planets.find((planet) => 'id' in planet.star.s && planet.star.s.id === stars[0].id)!.index
+    const second = layer.planets.find((planet) => 'id' in planet.star.s && planet.star.s.id === stars[1].id)!.index
+    const firstLod = lodAttributeFor(first)
+    const secondLod = lodAttributeFor(second)
+    const camera = new THREE.PerspectiveCamera(55, 1, .5, 200)
+    camera.position.set(0, 0, 0)
+    camera.lookAt(0, 0, -20)
+
+    layer.setFocus(stars[1].id)
+    layer.updatePlanetLods(camera, 0, 100_000)
+    layer.updatePlanetLods(camera, 0, 100_000)
+    expect(firstLod.attribute.getW(firstLod.local.instanceIndex)).toBe(0)
+    expect(secondLod.attribute.getW(secondLod.local.instanceIndex)).toBe(2)
+    const firstBeforeSwitch = firstLod.attribute.version
+    const secondBeforeSwitch = secondLod.attribute.version
+
+    layer.setFocus(stars[0].id)
+    layer.updatePlanetLods(camera, 0, 100_000)
+    layer.updatePlanetLods(camera, 0, 100_000)
+    expect(firstLod.attribute.getW(firstLod.local.instanceIndex)).toBe(2)
+    expect(secondLod.attribute.getW(secondLod.local.instanceIndex)).toBe(0)
+    expect(firstLod.attribute.version).toBeGreaterThan(firstBeforeSwitch)
+    expect(secondLod.attribute.version).toBeGreaterThan(secondBeforeSwitch)
+
+    const firstBeforeNull = firstLod.attribute.version
+    layer.setFocus(null)
+    layer.updatePlanetLods(camera, 0, 100_000)
+    expect(firstLod.attribute.getW(firstLod.local.instanceIndex)).toBe(0)
+    expect(secondLod.attribute.getW(secondLod.local.instanceIndex)).toBe(0)
+    expect(firstLod.attribute.version).toBeGreaterThan(firstBeforeNull)
+    layer.dispose()
   })
 })
 

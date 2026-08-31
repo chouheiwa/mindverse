@@ -135,15 +135,18 @@ test('a body layer failure after its second material unwinds every registered re
 test('a fourth planet-family material failure unwinds all prior family resources once', () => {
   const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
   const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+  const meshDispose = vi.spyOn(THREE.InstancedMesh.prototype, 'dispose')
   try {
-    __failResourceAfterForTests(12)
-    expect(() => makeBodies(familyIndex, true)).toThrow('injected resource failure after 12')
+    __failResourceAfterForTests(15)
+    expect(() => makeBodies(familyIndex, true)).toThrow('injected resource failure after 15')
     expect(geometryDispose).toHaveBeenCalledTimes(7)
     expect(materialDispose).toHaveBeenCalledTimes(5)
+    expect(meshDispose).toHaveBeenCalledTimes(3)
   } finally {
     __failResourceAfterForTests(null)
     geometryDispose.mockRestore()
     materialDispose.mockRestore()
+    meshDispose.mockRestore()
   }
 })
 
@@ -177,13 +180,36 @@ test('a body attribute failure unwinds preceding geometries and material once in
 test('a successfully constructed body layer disposes every GPU resource idempotently', () => {
   const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
   const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+  const meshDispose = vi.spyOn(THREE.InstancedMesh.prototype, 'dispose')
   const layer = makeBodies(familyIndex, true)
+  const planetMeshes = layer.group.children.filter((child): child is THREE.InstancedMesh => child instanceof THREE.InstancedMesh)
   layer.dispose()
   layer.dispose()
   expect(geometryDispose).toHaveBeenCalledTimes(8)
   expect(materialDispose).toHaveBeenCalledTimes(6)
+  expect(meshDispose).toHaveBeenCalledTimes(4)
+  expect(new Set(meshDispose.mock.instances)).toEqual(new Set(planetMeshes))
   geometryDispose.mockRestore()
   materialDispose.mockRestore()
+  meshDispose.mockRestore()
+})
+
+test('a failure immediately after the first planet mesh registration rolls it back once', () => {
+  const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
+  const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+  const meshDispose = vi.spyOn(THREE.InstancedMesh.prototype, 'dispose')
+  try {
+    __failResourceAfterForTests(7)
+    expect(() => makeBodies(familyIndex, true)).toThrow('injected resource failure after 7')
+    expect(meshDispose).toHaveBeenCalledOnce()
+    expect(geometryDispose).toHaveBeenCalledTimes(4)
+    expect(materialDispose).toHaveBeenCalledTimes(2)
+  } finally {
+    __failResourceAfterForTests(null)
+    geometryDispose.mockRestore()
+    materialDispose.mockRestore()
+    meshDispose.mockRestore()
+  }
 })
 
 const rendererStub = {

@@ -68,6 +68,20 @@ async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
   expect(Math.abs(sizing.backingWidth - sizing.cssWidth * sizing.dpr)).toBeLessThanOrEqual(1)
   expect(Math.abs(sizing.backingHeight - sizing.cssHeight * sizing.dpr)).toBeLessThanOrEqual(1)
 
+  const webglLimits = await canvas.evaluate(async (node: HTMLCanvasElement) => {
+    const gl = node.getContext('webgl2') ?? node.getContext('webgl')
+    if (!gl) throw new Error('WebGL context unavailable during capability check')
+    while (gl.getError() !== gl.NO_ERROR) { /* discard errors raised before the observed frames */ }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    return {
+      maxVertexAttributes: gl.getParameter(gl.MAX_VERTEX_ATTRIBS) as number,
+      error: gl.getError(),
+      noError: gl.NO_ERROR,
+    }
+  })
+  expect(webglLimits.maxVertexAttributes).toBeGreaterThanOrEqual(16)
+  expect(webglLimits.error).toBe(webglLimits.noError)
+
   const nonBackgroundPixels = await canvas.evaluate(async (node: HTMLCanvasElement) => {
     return await new Promise<number>((resolve, reject) => requestAnimationFrame(() => {
       const gl = node.getContext('webgl2') ?? node.getContext('webgl')

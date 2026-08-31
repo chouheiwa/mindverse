@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { Cluster } from '../types'
-import { starLabelOpacity, visibleClusterLabels, visibleStarLabels } from './labelVisibility'
+import { LabelStrategyCache, starLabelOpacity, visibleClusterLabels, visibleStarLabels } from './labelVisibility'
 import type { StarDatum } from './gl/starData'
 
 const cluster = (g: number, n: number): Cluster => ({
@@ -42,4 +42,38 @@ test('star-label owner opacity switches a to b and restores panorama on null', (
   expect(visibleStarLabels(stars, stars[1]).map(({ star, opacity }) => [star.s.c, opacity]))
     .toEqual([['a', 0.12], ['b', 1]])
   expect(visibleStarLabels(stars, null)).toEqual([])
+})
+
+test('label strategy caches frame reads and invalidates only on focus changes', () => {
+  const clusters = [cluster(3, 2), cluster(4, 1)]
+  const stars = [
+    { s: { c: 'a', g: 3 } },
+    { s: { c: 'b', g: 3 } },
+    { s: { c: 'outside', g: 4 } },
+  ] as StarDatum[]
+  const cache = new LabelStrategyCache(clusters, stars)
+  const panorama = cache.clusterLabels
+  const panoramaStars = cache.starLabels
+  for (let frame = 0; frame < 120; frame++) {
+    expect(cache.clusterLabels).toBe(panorama)
+    expect(cache.starLabels).toBe(panoramaStars)
+  }
+  expect(cache.revision).toBe(0)
+
+  cache.setFocus(stars[0])
+  expect(cache.revision).toBe(1)
+  expect(cache.clusterLabels.map((item) => item.g)).toEqual([3])
+  expect(cache.starLabels.map(({ star, opacity }) => [star.s.c, opacity])).toEqual([['a', 1], ['b', 0.12]])
+  const focusedA = cache.clusterLabels
+  cache.setFocus(stars[0])
+  expect(cache.revision).toBe(1)
+  expect(cache.clusterLabels).toBe(focusedA)
+
+  cache.setFocus(stars[1])
+  expect(cache.revision).toBe(2)
+  expect(cache.starLabels.map(({ star, opacity }) => [star.s.c, opacity])).toEqual([['a', 0.12], ['b', 1]])
+  cache.setFocus(null)
+  expect(cache.revision).toBe(3)
+  expect(cache.clusterLabels).toEqual(panorama)
+  expect(cache.starLabels).toEqual([])
 })

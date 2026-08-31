@@ -67,12 +67,24 @@ test('body planet/orbit emphasis restores exact instance arrays across a to b to
     .map((child) => (child as THREE.Mesh).geometry as THREE.BufferGeometry)
     .filter((geometry) => geometry.getAttribute('iDim'))
     .map((geometry) => geometry.getAttribute('iDim') as THREE.BufferAttribute)
+  const starMeta = (layer.group.children
+    .map((child) => (child as THREE.Mesh).geometry as THREE.BufferGeometry)
+    .find((geometry) => geometry.getAttribute('iMeta') && !geometry.getAttribute('iDim'))!
+    .getAttribute('iMeta')) as THREE.BufferAttribute
+  const versions = attrs.map((attr) => attr.version)
+  const starVersion = starMeta.version
   layer.setFocus('a')
   expect(attrs.map(values)).toEqual([[1, Math.fround(0.12)], [1, Math.fround(0.12)]])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([1, 1])
+  expect(starMeta.version).toBe(starVersion + 1)
   layer.setFocus('b')
   expect(attrs.map(values)).toEqual([[Math.fround(0.12), 1], [Math.fround(0.12), 1]])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([2, 2])
+  expect(starMeta.version).toBe(starVersion + 2)
   layer.setFocus(null)
   expect(attrs.map(values)).toEqual([[1, 1], [1, 1]])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([3, 3])
+  expect(starMeta.version).toBe(starVersion + 3)
   layer.dispose()
 })
 
@@ -82,29 +94,37 @@ test('cluster rings restore exact emphasis across a to b to null', () => {
   const attr = (layer!.object.geometry as THREE.BufferGeometry).getAttribute('aDim') as THREE.BufferAttribute
   const current = 192
   const other = 192
+  const version = attr.version
   layer!.setFocus(1)
   expect(values(attr)).toEqual([...Array(current).fill(1), ...Array(other).fill(Math.fround(0.12))])
+  expect(attr.version).toBe(version + 1)
   layer!.setFocus(2)
   expect(values(attr)).toEqual([...Array(current).fill(Math.fround(0.12)), ...Array(other).fill(1)])
+  expect(attr.version).toBe(version + 2)
   layer!.setFocus(null)
   expect(values(attr)).toEqual(Array(current + other).fill(1))
+  expect(attr.version).toBe(version + 3)
   layer!.dispose()
 })
 
 test('wormhole and dark-matter helpers restore exact emphasis across a to b to null', () => {
   const layer = makeOverlay3D(universe)
   const attrs = layer.group.children.map((child) => ((child as THREE.Mesh).geometry as THREE.BufferGeometry).getAttribute('aFocus') as THREE.BufferAttribute)
+  const versions = attrs.map((attr) => attr.version)
   layer.setFocus(stars[0])
   expect(attrs.map(values)).toEqual([
     [...Array(95).fill(1), ...Array(95).fill(Math.fround(0.12))],
     [...Array(6).fill(1), ...Array(6).fill(Math.fround(0.12))],
   ])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([1, 1])
   layer.setFocus(stars[1])
   expect(attrs.map(values)).toEqual([
     [...Array(95).fill(Math.fround(0.12)), ...Array(95).fill(1)],
     [...Array(6).fill(Math.fround(0.12)), ...Array(6).fill(1)],
   ])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([2, 2])
   layer.setFocus(null)
   expect(attrs.map(values)).toEqual([Array(190).fill(1), Array(12).fill(1)])
+  expect(attrs.map((attr, i) => attr.version - versions[i])).toEqual([3, 3])
   layer.dispose()
 })

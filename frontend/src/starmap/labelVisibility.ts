@@ -30,3 +30,28 @@ export function visibleStarLabels(
     .filter((star) => star.s.g === focusStar.s.g)
     .map((star) => ({ star, opacity: ownerOpacity(star.s.c, focusStar.s.c) }))
 }
+
+/** 只在 focus 变化时重算标签策略；帧循环只读稳定数组。 */
+export class LabelStrategyCache {
+  readonly sourceClusters: readonly Cluster[]
+  readonly sourceStars: readonly StarDatum[]
+  clusterLabels: Cluster[]
+  starLabels: StarLabelVisibility[] = []
+  revision = 0
+  private focusStarId: string | null = null
+
+  constructor(clusters: readonly Cluster[], stars: readonly StarDatum[]) {
+    this.sourceClusters = clusters
+    this.sourceStars = stars
+    this.clusterLabels = visibleClusterLabels(clusters, null)
+  }
+
+  setFocus(focusStar: StarDatum | null): void {
+    const nextId = focusStar?.s.c ?? null
+    if (nextId === this.focusStarId) return
+    this.focusStarId = nextId
+    this.clusterLabels = visibleClusterLabels(this.sourceClusters, focusStar?.s.g ?? null)
+    this.starLabels = visibleStarLabels(this.sourceStars, focusStar)
+    this.revision += 1
+  }
+}

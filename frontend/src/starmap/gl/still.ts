@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Universe } from '../../types'
 import { makeNebula } from './nebula'
-import { cinematicEnvironment } from './cinematic'
+import { cinematicEnvironment, type CinematicEnvironment } from './cinematic'
 import { makeStars } from './stars'
 import { makeDust } from './dust'
 import { makeRings } from './rings'
@@ -19,6 +19,22 @@ import { FOV, nebulaPalette, sceneRadius } from './scene'
 
 /** 星云烘焙在静帧里降一档：一次性开销，没必要为一张 540 宽的图烤 512。 */
 const BAKE = 256
+
+export function stillCinematicEnvironment(): CinematicEnvironment {
+  return { ...cinematicEnvironment('high'), nebulaBake: BAKE }
+}
+
+export function makeStillBloomEffect(environment: CinematicEnvironment): BloomEffect {
+  return new BloomEffect({
+    blendFunction: BlendFunction.ADD,
+    mipmapBlur: true,
+    luminanceThreshold: 0.68,
+    luminanceSmoothing: 0.30,
+    intensity: environment.bloom,
+    radius: 0.74,
+    levels: 8,
+  })
+}
 
 /** 星群名在静帧里的落点，交给卡片用同一套相机把文字压上去。 */
 export interface StillLabel {
@@ -58,7 +74,8 @@ export function renderStill(u: Universe, w: number, h: number): Still {
   camera.lookAt(0, 0, 0)
 
   const scene = new THREE.Scene()
-  const nebula = makeNebula(renderer, R, nebulaPalette(u), { ...cinematicEnvironment('high'), nebulaBake: BAKE })
+  const environment = stillCinematicEnvironment()
+  const nebula = makeNebula(renderer, R, nebulaPalette(u), environment)
   const stars = makeStars(u, false)
   const dust = makeDust(u, false)
   const rings = makeRings(u)
@@ -94,15 +111,7 @@ export function renderStill(u: Universe, w: number, h: number): Still {
   composer.addPass(new RenderPass(scene, camera))
   composer.addPass(new EffectPass(
     camera,
-    new BloomEffect({
-      blendFunction: BlendFunction.ADD,
-      mipmapBlur: true,
-      luminanceThreshold: 0.68,
-      luminanceSmoothing: 0.30,
-      intensity: 1.02,
-      radius: 0.74,
-      levels: 8,
-    }),
+    makeStillBloomEffect(environment),
     new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL }),
   ))
   composer.render()

@@ -17,7 +17,7 @@ import { measureFrameTiming, resumeRenderClock } from './renderClock'
 import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
-import { visibleClusterLabels, visibleStarLabels, type StarLabelVisibility } from './labelVisibility'
+import { LabelStrategyCache } from './labelVisibility'
 
 /**
  * 星图渲染器。
@@ -93,7 +93,7 @@ export class Renderer {
   private rings: RingLayer | null
   private overlay: Overlay3D
   private labels: Labels
-  private labelStars: StarLabelVisibility[] = []
+  private labelStrategy: LabelStrategyCache
 
   private raf = 0
   private w = 0
@@ -212,6 +212,7 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, this.R * 90)
 
     const data = starData(u)
+    this.labelStrategy = new LabelStrategyCache(u.clusters, data)
     this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u), environment)
     this.resources.defer(() => this.nebula.dispose())
     this.stars = makeStars(u, reduceMotion, data)
@@ -497,8 +498,8 @@ export class Renderer {
     this.labels.draw(
       this.camera,
       conv,
-      visibleClusterLabels(this.u.clusters, this.focusStar?.s.g ?? null),
-      this.labelStars,
+      this.labelStrategy.clusterLabels,
+      this.labelStrategy.starLabels,
       A,
       this.reduceMotion ? 0 : 1.35,
       near,
@@ -530,7 +531,7 @@ export class Renderer {
 
   private applyFocus() {
     const star = this.focusStar?.s ?? null
-    this.labelStars = visibleStarLabels(this.bodies.data, this.focusStar)
+    this.labelStrategy.setFocus(this.focusStar)
     this.bodies.setFocus(star?.c ?? null)
     this.rings?.setFocus(star?.g ?? null)
     this.overlay.setFocus(star)

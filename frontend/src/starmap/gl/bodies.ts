@@ -6,6 +6,13 @@ import { starData, type StarDatum } from './starData'
 import { renderDim } from './stars'
 import { PLANET_CONVERGENCE_START, PLANET_STAR_LOD_END_PX, PLANET_STAR_LOD_START_PX, indexPlanetsByStar } from '../planetVisibility'
 import { ownerOpacity } from '../focusEmphasis'
+import { ResourceScope } from '../resourceScope'
+import {
+  buildMaterialTimeline,
+  planetMaterialInput,
+  type PlanetFamily,
+  type PlanetMaterialInput,
+} from './planetMaterials'
 
 // 有体积的天体：恒星球体、行星、行星轨道。
 //
@@ -166,6 +173,10 @@ attribute vec4 iOrb;
 //   own   ∈{0,1}  是否本人创作
 //   fresh ∈[0,1)  内容的新旧，1 近 0 远
 attribute vec4 iMeta;
+// x=seed y=family z=answerDensity w=timeSpan (-1 means unavailable)
+attribute vec4 iMaterial0;
+// x=freshness y=divergence (-1 means unavailable) z=created w=collected
+attribute vec4 iMaterial1;
 attribute float iDim;
 attribute float iSel;
 
@@ -208,8 +219,8 @@ void main() {
   vN = normalize(normalMatrix * nrm);
   vL = mvS.xyz - mv.xyz;
   vV = -mv.xyz;
-  vOwn = step(2.0, iMeta.x);
-  vFresh = iMeta.x - vOwn * 2.0;
+  vOwn = iMaterial1.z;
+  vFresh = iMaterial1.x;
   vSeed = iOrb.y;
   vSel = iSel;
   vColor = iColor;
@@ -340,6 +351,8 @@ export interface PlanetDatum {
   collected: boolean
   latestPublicAt?: number
   answers: QuestionPlanetDatum['answers']
+  /** Present on renderer-built planets; optional keeps external read-only fixtures compatible. */
+  material?: PlanetMaterialInput
   orbitIndex: number
   /** 实例下标，用于置选中态 */
   index: number
@@ -368,13 +381,17 @@ export interface BodyLayer {
 }
 
 export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLayer {
+  return ResourceScope.construct((scope) => makeBodiesScoped(index, reduceMotion, scope))
+}
+
+function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: ResourceScope): BodyLayer {
   const u = index.universe
   const data = starData(u)
   const n = data.length
 
   // ── 恒星球体 ──
-  const sphere = new THREE.SphereGeometry(1, 32, 20)
-  const starGeo = new THREE.InstancedBufferGeometry()
+  const sphere = scope.use(new THREE.SphereGeometry(1, 32, 20))
+  const starGeo = scope.use(new THREE.InstancedBufferGeometry())
   starGeo.index = sphere.index
   starGeo.setAttribute('position', sphere.getAttribute('position'))
   starGeo.instanceCount = n
@@ -415,7 +432,7 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     uBob: { value: reduceMotion ? 0 : 1.35 },
   })
 
-  const starMat = new THREE.ShaderMaterial({
+  const starMat = scope.use(new THREE.ShaderMaterial({
     uniforms: {
       ...shared(),
       uIgniteMs: { value: 700 },
@@ -427,7 +444,7 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     transparent: true,
     depthTest: true,
     depthWrite: true,
-  })
+  }))
   const starMesh = new THREE.Mesh(starGeo, starMat)
   starMesh.renderOrder = 9
   starMesh.frustumCulled = false
@@ -435,33 +452,15 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
   // ── 行星与轨道 ──
   //
   // 每个由恒星显式引用、并存在于全局索引的问题生成一颗星系内行星。
-  // 新鲜度按全宇宙问题回答的公开时间跨度归一化，而不是各恒星自己的跨度 ——
-  // 否则每个星系里都必然有一颗「最新的」，跨系之间就没法比。
+  // 材质输入在 CPU 侧统一从已收录答案派生；Shader 只接收归一化数值。
   const selectedQuestions = data.map((d) => selectPlanetData(index, d.s))
-  let lo = Infinity, hi = -Infinity
-  for (const system of selectedQuestions) {
-    for (const question of system) {
-      const at = question.latestPublicAt
-      if (at !== undefined) {
-        if (at < lo) lo = at
-        if (at > hi) hi = at
-      }
-    }
-  }
-  const span = Math.max(1, hi - lo)
-  const freshOf = (at: number | undefined) => {
-    if (at === undefined || !Number.isFinite(lo) || !Number.isFinite(hi)) return 0.45
-    // 收在 [0,0.999]：1.0 会让打包进 iMeta.x 的 own 位读错
-    return Math.min(0.999, Math.max(0, (at - lo) / span))
-  }
-
-  const planets: { d: StarDatum; idx: number; datum: QuestionPlanetDatum; own: number; fresh: number }[] = []
+  const timeline = buildMaterialTimeline(selectedQuestions.flatMap((system) => system.flatMap(({ answers }) => answers)))
+  const planets: { d: StarDatum; idx: number; datum: QuestionPlanetDatum; material: PlanetMaterialInput }[] = []
   data.forEach((d, starIndex) => selectedQuestions[starIndex].forEach((datum, idx) => planets.push({
     d,
     idx,
     datum,
-    own: datum.created ? 1 : 0,
-    fresh: freshOf(datum.latestPublicAt),
+    material: planetMaterialInput(datum, timeline),
   })))
   const pn = planets.length
 
@@ -473,6 +472,8 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
   const pColor = new Float32Array(pn * 3)
   const pOrb = new Float32Array(pn * 4)
   const pMeta = new Float32Array(pn * 4)
+  const pMaterial0 = new Float32Array(pn * 4)
+  const pMaterial1 = new Float32Array(pn * 4)
   const pDim = new Float32Array(pn).fill(1)
   const pSel = new Float32Array(pn)
   const pStarIndex = new Int32Array(pn)
@@ -490,8 +491,7 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     // 开普勒式：外圈更慢
     const period = 7 + 2.4 * Math.pow(r, 1.5)
     const phase = ((p.idx * 137.508 + d.seed * 31.7) * Math.PI) / 180
-    const answerScale = Math.min(1, Math.log1p(p.datum.answerCount) / Math.log1p(30))
-    const rad = PLANET_MIN + (PLANET_MAX - PLANET_MIN) * answerScale
+    const rad = PLANET_MIN + (PLANET_MAX - PLANET_MIN) * p.material.answerDensity
 
     pU.set(uu, i * 3)
     pV.set(vv, i * 3)
@@ -500,7 +500,19 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     pStarAxis.set(d.axis, i * 3)
     pColor.set(d.color, i * 3)
     pOrb.set([r, phase, period, rad], i * 4)
-    pMeta.set([p.own * 2 + p.fresh, d.seed, d.bodyR, d.period], i * 4)
+    pMeta.set([(p.material.created ? 2 : 0) + p.material.freshness, d.seed, d.bodyR, d.period], i * 4)
+    pMaterial0.set([
+      p.material.seed,
+      familyValue(p.material.family),
+      p.material.answerDensity,
+      p.material.timeSpan ?? -1,
+    ], i * 4)
+    pMaterial1.set([
+      p.material.freshness,
+      p.material.divergence ?? -1,
+      p.material.created ? 1 : 0,
+      p.material.collected ? 1 : 0,
+    ], i * 4)
     pStarIndex[i] = starIndexOf.get(d)!
     planetData.push({
       star: d,
@@ -510,27 +522,28 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
       collected: p.datum.collected,
       latestPublicAt: p.datum.latestPublicAt,
       answers: p.datum.answers,
+      material: p.material,
       orbitIndex: p.datum.orbitIndex,
       index: i,
       u: uu, v: vv, orbitR: r, phase, period, radius: rad,
     })
   })
 
-  const planetSphere = new THREE.SphereGeometry(1, 20, 14)
-  const planetGeo = new THREE.InstancedBufferGeometry()
+  const planetSphere = scope.use(new THREE.SphereGeometry(1, 20, 14))
+  const planetGeo = scope.use(new THREE.InstancedBufferGeometry())
   planetGeo.index = planetSphere.index
   planetGeo.setAttribute('position', planetSphere.getAttribute('position'))
   planetGeo.instanceCount = pn
-  attachOrbitAttrs(planetGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pDim, pSel })
+  attachOrbitAttrs(planetGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pMaterial0, pMaterial1, pDim, pSel })
 
-  const planetMat = new THREE.ShaderMaterial({
+  const planetMat = scope.use(new THREE.ShaderMaterial({
     uniforms: { ...shared(), uGain: { value: GAIN.planet } },
     vertexShader: PLANET_VERT,
     fragmentShader: PLANET_FRAG,
     transparent: true,
     depthTest: true,
     depthWrite: true,
-  })
+  }))
   const planetMesh = new THREE.Mesh(planetGeo, planetMat)
   planetMesh.renderOrder = 9
   planetMesh.frustumCulled = false
@@ -543,12 +556,12 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     const a1 = ((i + 1) / SEG) * Math.PI * 2
     ringPos.set([Math.cos(a0), Math.sin(a0), 0, Math.cos(a1), Math.sin(a1), 0], i * 6)
   }
-  const ringGeo = new THREE.InstancedBufferGeometry()
+  const ringGeo = scope.use(new THREE.InstancedBufferGeometry())
   ringGeo.setAttribute('position', new THREE.BufferAttribute(ringPos, 3))
   ringGeo.instanceCount = pn
-  attachOrbitAttrs(ringGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pDim, pSel })
+  attachOrbitAttrs(ringGeo, { pU, pV, pStarPos, pStarCenter, pStarAxis, pColor, pOrb, pMeta, pMaterial0, pMaterial1, pDim, pSel })
 
-  const ringMat = new THREE.ShaderMaterial({
+  const ringMat = scope.use(new THREE.ShaderMaterial({
     uniforms: { ...shared(), uGain: { value: GAIN.ring } },
     vertexShader: RING_VERT,
     fragmentShader: RING_FRAG,
@@ -556,7 +569,7 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
     blending: THREE.AdditiveBlending,
     depthTest: false,
     depthWrite: false,
-  })
+  }))
   const ringMesh = new THREE.LineSegments(ringGeo, ringMat)
   ringMesh.renderOrder = 8.5
   ringMesh.frustumCulled = false
@@ -574,6 +587,7 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
   const planetsByStar = indexPlanetsByStar(planetData)
   let modeDims = data.map(() => 1)
   let focusedStarId: string | null = null
+  const dispose = scope.release()
   const applyDims = () => {
     for (let i = 0; i < n; i++) sMeta[i * 2 + 1] = modeDims[i] * ownerOpacity(data[i].s.c, focusedStarId)
     for (let i = 0; i < pn; i++) pDim[i] = modeDims[pStarIndex[i]] * ownerOpacity(planetData[i].star.s.c, focusedStarId)
@@ -606,21 +620,15 @@ export function makeBodies(index: UniverseIndex, reduceMotion: boolean): BodyLay
       modeDims = data.map((d) => renderDim(d.s, mode, uni, wormIdx))
       applyDims()
     },
-    dispose() {
-      sphere.dispose()
-      planetSphere.dispose()
-      starGeo.dispose()
-      planetGeo.dispose()
-      ringGeo.dispose()
-      for (const m of mats) m.dispose()
-    },
+    dispose,
   }
 }
 
 function attachOrbitAttrs(g: THREE.InstancedBufferGeometry, a: {
   pU: Float32Array; pV: Float32Array; pStarPos: Float32Array
   pStarCenter: Float32Array; pStarAxis: Float32Array; pColor: Float32Array
-  pOrb: Float32Array; pMeta: Float32Array; pDim: Float32Array; pSel: Float32Array
+  pOrb: Float32Array; pMeta: Float32Array; pMaterial0: Float32Array; pMaterial1: Float32Array
+  pDim: Float32Array; pSel: Float32Array
 }) {
   g.setAttribute('iU', new THREE.InstancedBufferAttribute(a.pU, 3))
   g.setAttribute('iV', new THREE.InstancedBufferAttribute(a.pV, 3))
@@ -630,9 +638,20 @@ function attachOrbitAttrs(g: THREE.InstancedBufferGeometry, a: {
   g.setAttribute('iColor', new THREE.InstancedBufferAttribute(a.pColor, 3))
   g.setAttribute('iOrb', new THREE.InstancedBufferAttribute(a.pOrb, 4))
   g.setAttribute('iMeta', new THREE.InstancedBufferAttribute(a.pMeta, 4))
+  g.setAttribute('iMaterial0', new THREE.InstancedBufferAttribute(a.pMaterial0, 4))
+  g.setAttribute('iMaterial1', new THREE.InstancedBufferAttribute(a.pMaterial1, 4))
   g.setAttribute('iDim', new THREE.InstancedBufferAttribute(a.pDim, 1))
   g.setAttribute('iSel', new THREE.InstancedBufferAttribute(a.pSel, 1))
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6)
+}
+
+function familyValue(family: PlanetFamily): number {
+  switch (family) {
+    case 'basalt': return 0
+    case 'strata': return 1 / 3
+    case 'cloud': return 2 / 3
+    case 'archive': return 1
+  }
 }
 
 /** 把一组正交基绕 axis 所在平面倾一个小角，给行星轨道一点层次。 */

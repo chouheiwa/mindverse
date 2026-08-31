@@ -5,6 +5,8 @@ import * as THREE from 'three'
 import type { Universe } from '../types'
 import { makeNebula } from './gl/nebula'
 import { cinematicEnvironment } from './gl/cinematic'
+import { makeBodies } from './gl/bodies'
+import type { UniverseIndex } from '../domain/universe'
 
 const emptyUniverse = {
   schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
@@ -12,6 +14,11 @@ const emptyUniverse = {
   clusters: [], stars: [], particles: [], wormholes: [], solo: [], dark: [], nebula: [],
   questions: [], answers: [], probes: [],
 } as Universe
+
+const emptyIndex: UniverseIndex = {
+  universe: emptyUniverse,
+  starsById: new Map(), questionsById: new Map(), answersById: new Map(), probesById: new Map(),
+}
 
 test('renderer-style partial construction unwinds returned layers and renderer in reverse order', () => {
   const calls: string[] = []
@@ -85,6 +92,33 @@ test('a successfully constructed star layer disposes each GPU resource once', ()
   layer.dispose()
   layer.dispose()
   expect(geometryDispose).toHaveBeenCalledOnce()
+  expect(materialDispose).toHaveBeenCalledTimes(3)
+  geometryDispose.mockRestore()
+  materialDispose.mockRestore()
+})
+
+test('a body layer failure after its second material unwinds every registered resource once', () => {
+  const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
+  const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+  try {
+    __failResourceAfterForTests(6)
+    expect(() => makeBodies(emptyIndex, true)).toThrow('injected resource failure after 6')
+    expect(geometryDispose).toHaveBeenCalledTimes(4)
+    expect(materialDispose).toHaveBeenCalledTimes(2)
+  } finally {
+    __failResourceAfterForTests(null)
+    geometryDispose.mockRestore()
+    materialDispose.mockRestore()
+  }
+})
+
+test('a successfully constructed body layer disposes every GPU resource idempotently', () => {
+  const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
+  const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+  const layer = makeBodies(emptyIndex, true)
+  layer.dispose()
+  layer.dispose()
+  expect(geometryDispose).toHaveBeenCalledTimes(5)
   expect(materialDispose).toHaveBeenCalledTimes(3)
   geometryDispose.mockRestore()
   materialDispose.mockRestore()

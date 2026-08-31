@@ -77,6 +77,10 @@ const fixture = {
 const selectedPlanet = {
   question: fixture.questions[0], answers: fixture.answers, answerCount: 1,
   created: false, collected: false, latestPublicAt: 1, star: { s: star } as unknown as PlanetDatum['star'],
+  material: {
+    seed: .1, family: 'basalt', answerDensity: .2, timeSpan: null, freshness: .35,
+    divergence: null, created: false, collected: false,
+  },
   index: 0, orbitIndex: 1, u: [1, 0, 0], v: [0, 1, 0], orbitR: 2.1, phase: 0, period: 10, radius: .1,
 } satisfies PlanetDatum
 

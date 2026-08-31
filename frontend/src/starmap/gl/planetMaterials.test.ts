@@ -4,8 +4,11 @@ import type { UniverseIndex } from '../../domain/universe'
 import type { AnswerSatellite } from '../../types'
 import type { CurrentStar, Universe } from '../../types'
 import * as THREE from 'three'
-import { makeBodies } from './bodies'
+import { makeBodies, type PlanetDatum } from './bodies'
 import { buildMaterialTimeline, planetMaterialInput } from './planetMaterials'
+
+type MaterialIsRequired = object extends Pick<PlanetDatum, 'material'> ? false : true
+const materialIsRequired: MaterialIsRequired = true
 
 function answer(id: string, overrides: Partial<AnswerSatellite> = {}): AnswerSatellite {
   return {
@@ -40,6 +43,10 @@ function datum(answers: readonly AnswerSatellite[], overrides: Partial<QuestionP
 }
 
 describe('planet material inputs', () => {
+  test('requires renderer planet data to carry its normalized material input', () => {
+    expect(materialIsRequired).toBe(true)
+  })
+
   test('is stable and derives seed and family only from the question id', () => {
     const answers = [answer('answer:1', { publishedAt: 100 })]
     const timeline = buildMaterialTimeline(answers)
@@ -64,6 +71,14 @@ describe('planet material inputs', () => {
       answer('answer:2', { publishedAt: 200, updatedAt: 300 }),
     ]
     const question = { id: 'question:7', questionId: '7', title: 'Question', url: '', answerIds: answers.map(({ id }) => id) }
+    const orphanAnswer = answer('answer:orphan', {
+      questionId: 'question:orphan', publishedAt: 50, updatedAt: 500,
+      bindings: [{ relation: 'collected', folders: ['Orphan'] }],
+    })
+    const orphanQuestion = {
+      id: 'question:orphan', questionId: 'orphan', title: 'Not selected by a star', url: '',
+      answerIds: [orphanAnswer.id],
+    }
     const star: CurrentStar = {
       id: 'star:1', c: 'concept', g: 1, p: [0, 0, 0], n: 2, o: 1, f: 0,
       hue: 210, sat: .5, pe: 0, bu: 0, fi: '', la: '', ev: [], scope: 'public',
@@ -74,13 +89,13 @@ describe('planet material inputs', () => {
       meta: { items: 2, concepts: 1, clusters: 1, own: 1, fav: 0, span: [0, 0] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
       clusters: [{ g: 1, name: 'one', lead: 'concept', c: [0, 0, 0] as [number, number, number], n: 2, o: 1, f: 0, hue: 210, sat: .5, mem: ['concept'] }],
       stars: [star], particles: [], wormholes: [], solo: [], dark: [], nebula: [],
-      questions: [question], answers, probes: [],
+      questions: [question, orphanQuestion], answers: [...answers, orphanAnswer], probes: [],
     } satisfies Universe
     const index: UniverseIndex = {
       universe,
       starsById: new Map([[star.id, star]]),
-      questionsById: new Map([[question.id, question]]),
-      answersById: new Map(answers.map((item) => [item.id, item])),
+      questionsById: new Map([[question.id, question], [orphanQuestion.id, orphanQuestion]]),
+      answersById: new Map([...answers, orphanAnswer].map((item) => [item.id, item])),
       probesById: new Map(),
     }
 
@@ -90,16 +105,20 @@ describe('planet material inputs', () => {
       .find((geometry) => geometry.getAttribute('iMaterial0'))!
     const material0 = Array.from(planetGeometry.getAttribute('iMaterial0').array)
     const material1 = Array.from(planetGeometry.getAttribute('iMaterial1').array)
-    const material = layer.planets[0].material!
+    const material = layer.planets[0].material
 
-    expect(material).toEqual(planetMaterialInput(datum(answers), buildMaterialTimeline(answers)))
+    const withoutOrphan = planetMaterialInput(datum(answers), buildMaterialTimeline(answers))
+    expect(material).toEqual(planetMaterialInput(datum(answers), buildMaterialTimeline([...answers, orphanAnswer])))
+    expect(material.freshness).toBeCloseTo(250 / 450)
+    expect(material.timeSpan).toBe(withoutOrphan.timeSpan)
+    expect(material).toMatchObject({ created: true, collected: false })
     expect(material0).toEqual([
       Math.fround(material.seed),
       expect.any(Number),
       Math.fround(material.answerDensity),
       Math.fround(material.timeSpan!),
     ])
-    expect(material1).toEqual([1, -1, 1, 0])
+    expect(material1).toEqual([Math.fround(250 / 450), -1, 1, 0])
     layer.dispose()
   })
 
@@ -156,6 +175,16 @@ describe('planet material inputs', () => {
     expect(planetMaterialInput(datum(answers), buildMaterialTimeline(answers)).timeSpan).toBe(0)
   })
 
+  test('clamps an extreme finite publication span before it reaches a float attribute', () => {
+    const answers = [
+      answer('answer:first', { publishedAt: 1 }),
+      answer('answer:last', { publishedAt: Number.MAX_VALUE }),
+    ]
+
+    expect(planetMaterialInput(datum(answers), buildMaterialTimeline(answers)).timeSpan)
+      .toBe(Number.MAX_SAFE_INTEGER)
+  })
+
   test('updated time raises freshness but never contributes to the question publication span', () => {
     const first = answer('answer:first', { publishedAt: 100 })
     const second = answer('answer:second', { publishedAt: 200 })
@@ -166,7 +195,7 @@ describe('planet material inputs', () => {
 
     expect(after.freshness).toBeGreaterThan(before.freshness)
     expect(after.timeSpan).toBe(before.timeSpan)
-    expect(after.timeSpan).toBeCloseTo(100 / 900)
+    expect(after.timeSpan).toBe(100)
   })
 
   test('reads ownership only from admitted answer bindings and never invents divergence', () => {

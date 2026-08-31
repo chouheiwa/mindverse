@@ -91,7 +91,9 @@ export function planetMaterialInput(
   let timeSpan: number | null = null
   if (publicationTimes.length >= 2) {
     const duration = Math.max(...publicationTimes) - Math.min(...publicationTimes)
-    timeSpan = timeline.duration === 0 ? 0 : clampUnit(duration / timeline.duration)
+    timeSpan = Number.isFinite(duration)
+      ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, duration))
+      : Number.MAX_SAFE_INTEGER
   }
 
   const density = Math.log1p(datum.question.answerIds.length) / ANSWER_DENSITY_REFERENCE

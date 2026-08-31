@@ -351,8 +351,7 @@ export interface PlanetDatum {
   collected: boolean
   latestPublicAt?: number
   answers: QuestionPlanetDatum['answers']
-  /** Present on renderer-built planets; optional keeps external read-only fixtures compatible. */
-  material?: PlanetMaterialInput
+  material: PlanetMaterialInput
   orbitIndex: number
   /** 实例下标，用于置选中态 */
   index: number
@@ -454,7 +453,7 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   // 每个由恒星显式引用、并存在于全局索引的问题生成一颗星系内行星。
   // 材质输入在 CPU 侧统一从已收录答案派生；Shader 只接收归一化数值。
   const selectedQuestions = data.map((d) => selectPlanetData(index, d.s))
-  const timeline = buildMaterialTimeline(selectedQuestions.flatMap((system) => system.flatMap(({ answers }) => answers)))
+  const timeline = buildMaterialTimeline([...index.answersById.values()])
   const planets: { d: StarDatum; idx: number; datum: QuestionPlanetDatum; material: PlanetMaterialInput }[] = []
   data.forEach((d, starIndex) => selectedQuestions[starIndex].forEach((datum, idx) => planets.push({
     d,

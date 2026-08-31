@@ -112,6 +112,33 @@ test('a body layer failure after its second material unwinds every registered re
   }
 })
 
+test('a body attribute failure unwinds preceding geometries and material once in reverse order', () => {
+  const disposals: string[] = []
+  const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
+    .mockImplementation(function (this: THREE.BufferGeometry) { disposals.push(this.type) })
+  const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')
+    .mockImplementation(function (this: THREE.ShaderMaterial) { disposals.push(this.type) })
+  const originalSetAttribute = THREE.InstancedBufferGeometry.prototype.setAttribute
+  let attributeCall = 0
+  const setAttribute = vi.spyOn(THREE.InstancedBufferGeometry.prototype, 'setAttribute')
+    .mockImplementation(function (this: THREE.InstancedBufferGeometry, name, attribute) {
+      attributeCall += 1
+      if (attributeCall === 10) throw new Error('injected planet attribute failure')
+      return originalSetAttribute.call(this, name, attribute)
+    })
+  try {
+    expect(() => makeBodies(emptyIndex, true)).toThrow('injected planet attribute failure')
+    expect(disposals).toEqual([
+      'InstancedBufferGeometry', 'SphereGeometry', 'ShaderMaterial',
+      'InstancedBufferGeometry', 'SphereGeometry',
+    ])
+  } finally {
+    setAttribute.mockRestore()
+    geometryDispose.mockRestore()
+    materialDispose.mockRestore()
+  }
+})
+
 test('a successfully constructed body layer disposes every GPU resource idempotently', () => {
   const geometryDispose = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose')
   const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, 'dispose')

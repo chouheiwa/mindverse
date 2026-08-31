@@ -20,6 +20,10 @@ const planet = (relations: Partial<Pick<PlanetDatum, 'created' | 'collected'>> =
   collected: false,
   latestPublicAt: 35,
   answers: [],
+  material: {
+    seed: .1, family: 'basalt', answerDensity: .2, timeSpan: null, freshness: .35,
+    divergence: null, created: false, collected: false,
+  },
   orbitIndex: 1,
   star: {} as PlanetDatum['star'],
   index: 0,

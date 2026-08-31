@@ -202,6 +202,7 @@ export class Renderer {
   private probeIds = new Set<string>()
   private probeOwnersById: ReadonlyMap<string, readonly StarDatum[]> = new Map()
   private inspectionProbeId: string | null = null
+  private arrivedProbeId: string | null = null
   private inspectionPose: InspectionPose = { ...STANDARD_INSPECTION_POSE }
   private probeTransition: ProbeTransition | null = null
   private probeTransitionTimer: ReturnType<typeof setTimeout> | null = null
@@ -442,6 +443,7 @@ export class Renderer {
     this.cancelProbeTransition()
     const transition = { kind: 'approach' as const, probeId, token }
     this.probeTransition = transition
+    this.arrivedProbeId = null
     try {
       this.requireProbe(probeId)
       const owners = this.probeOwnersById.get(probeId) ?? []
@@ -449,6 +451,7 @@ export class Renderer {
       const owner = owners.find((candidate) => currentStarId(candidate) === focusedStarId) ?? owners[0]
       if (!owner) throw new Error(`Probe has no owner: ${probeId}`)
       this.clearPlanet()
+      if (!this.isCurrentProbeTransition(transition)) return
       this.focusStar = owner
       this.applyFocus()
       this.targetDist = SYSTEM_DIST
@@ -470,10 +473,10 @@ export class Renderer {
             this.probeTransitionRaf = 0
             this.finishProbeTransition(transition, this.cb.onProbeArrived)
           } else {
-            this.probeTransitionRaf = requestAnimationFrame(advance)
+            this.scheduleProbeFrame(transition, advance)
           }
         }
-        this.probeTransitionRaf = requestAnimationFrame(advance)
+        this.scheduleProbeFrame(transition, advance)
       }
     } catch (cause) {
       this.failProbeTransition(transition, cause)
@@ -487,6 +490,7 @@ export class Renderer {
     this.probeTransition = transition
     try {
       this.requireProbe(probeId)
+      this.requireReadyProbeInspection(probeId)
       this.inspectionProbeId = probeId
       this.probes.inspect(probeId)
       this.probes.setScanning(true)
@@ -517,10 +521,15 @@ export class Renderer {
   }
 
   exitProbeInspection(): void {
+    const hadProbeState = this.probeTransition !== null
+      || this.inspectionProbeId !== null
+      || this.arrivedProbeId !== null
     this.cancelProbeTransition()
     this.inspectionProbeId = null
+    this.arrivedProbeId = null
     this.inspectionPose = { ...STANDARD_INSPECTION_POSE }
     this.inspectionCameraMix = 0
+    if (!hadProbeState) return
     this.probes.inspect(null)
     this.probes.setScanning(false)
     this.probes.setPartHighlight(null)
@@ -693,8 +702,7 @@ export class Renderer {
     }
     if (!this.destroyed && this.suspendedAt === null) this.raf = requestAnimationFrame(this.frame)
     } catch (cause) {
-      this.stop()
-      this.signals.frameFailed(cause)
+      this.handleFatalFrameFailure(cause)
     }
   }
 
@@ -727,7 +735,7 @@ export class Renderer {
     c.addEventListener('pointerup', this.onUp)
     c.addEventListener('wheel', this.onWheel, { passive: false })
     c.addEventListener('dblclick', this.onDoubleClickBound)
-    c.addEventListener('webglcontextlost', this.onContextLost)
+    c.addEventListener('webglcontextlost', this.onContextLostBound)
     c.addEventListener('webglcontextrestored', this.onContextRestored)
   }
 
@@ -738,15 +746,22 @@ export class Renderer {
     c.removeEventListener('pointerup', this.onUp)
     c.removeEventListener('wheel', this.onWheel)
     c.removeEventListener('dblclick', this.onDoubleClickBound)
-    c.removeEventListener('webglcontextlost', this.onContextLost)
+    c.removeEventListener('webglcontextlost', this.onContextLostBound)
     c.removeEventListener('webglcontextrestored', this.onContextRestored)
   }
 
-  private onContextLost = (e: Event) => {
+  private onContextLostBound = (event: Event) => this.onContextLost(event)
+
+  private onContextLost(e: Pick<Event, 'preventDefault'>): void {
     e.preventDefault()
     this.lost = true
+    this.handleFatalFrameFailure(new Error('WebGL context lost'))
+  }
+
+  private handleFatalFrameFailure(cause: unknown): void {
     this.stop()
-    this.signals.frameFailed(new Error('WebGL context lost'))
+    this.exitProbeInspection()
+    this.signals.frameFailed(cause)
   }
 
   private onContextRestored = () => {
@@ -844,6 +859,32 @@ export class Renderer {
     if (!this.probeIds.has(probeId)) throw new Error(`Unknown probe: ${probeId}`)
   }
 
+  private requireReadyProbeInspection(probeId: string): void {
+    if (this.arrivedProbeId !== probeId || this.inspectionProbeId !== probeId) {
+      throw new Error(`Probe inspection is not ready: ${probeId}`)
+    }
+    const focusedStarId = this.focusStar ? currentStarId(this.focusStar) : null
+    const hasFocusedOwner = (this.probeOwnersById.get(probeId) ?? [])
+      .some((owner) => currentStarId(owner) === focusedStarId)
+    if (!hasFocusedOwner) throw new Error(`Probe owner is not focused: ${probeId}`)
+    if (!this.probes.inspectionTarget(this.inspectionTarget)) {
+      throw new Error(`Probe near target is not visible: ${probeId}`)
+    }
+  }
+
+  private isCurrentProbeTransition(transition: ProbeTransition): boolean {
+    return !this.destroyed && this.probeTransition === transition
+  }
+
+  private scheduleProbeFrame(transition: ProbeTransition, callback: FrameRequestCallback): void {
+    const handle = requestAnimationFrame(callback)
+    if (!this.isCurrentProbeTransition(transition)) {
+      cancelAnimationFrame(handle)
+      return
+    }
+    this.probeTransitionRaf = handle
+  }
+
   private cancelProbeTransition(): void {
     if (this.probeTransitionTimer !== null) clearTimeout(this.probeTransitionTimer)
     if (this.probeTransitionRaf) cancelAnimationFrame(this.probeTransitionRaf)
@@ -857,6 +898,7 @@ export class Renderer {
     callback: ((event: { probeId: string; token: number }) => void) | undefined,
   ): void {
     if (this.destroyed || this.probeTransition !== transition) return
+    if (transition.kind === 'approach') this.arrivedProbeId = transition.probeId
     this.probeTransition = null
     this.probeTransitionTimer = null
     callback?.({ probeId: transition.probeId, token: transition.token })

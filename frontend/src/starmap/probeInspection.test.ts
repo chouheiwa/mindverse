@@ -3,7 +3,13 @@ import * as THREE from 'three'
 import { indexUniverse } from '../domain/universe'
 import type { CurrentStar, NormalizedCurrentUniverse } from '../types'
 import { Renderer, probeOwnersById } from './Renderer'
-import type { ProbePart } from './gl/probe'
+import {
+  makeProbe,
+  probeLayerSnapshot,
+  type ProbeFrame,
+  type ProbeLayer,
+  type ProbePart,
+} from './gl/probe'
 import { starData, type StarDatum } from './gl/starData'
 import {
   ProbeInspectionController,
@@ -34,6 +40,49 @@ function sharedProbeFixture(): NormalizedCurrentUniverse {
     particles: [], wormholes: [], solo: [], dark: [], nebula: [],
     questions: [], answers: [], probes: [sharedProbe],
   }
+}
+
+function scanProbeFixture(): NormalizedCurrentUniverse {
+  const fixture = sharedProbeFixture()
+  const secondProbe = {
+    id: 'article:22', title: 'Alpha article', url: 'https://zhuanlan.zhihu.com/p/22',
+    bindings: [], discoverySources: ['public_search' as const],
+  }
+  fixture.meta.items = 2
+  fixture.probes.push(secondProbe)
+  fixture.stars[1].probeIds = [sharedProbe.id, secondProbe.id]
+  return fixture
+}
+
+function updateProbeNear(layer: ProbeLayer, stars: readonly StarDatum[], focusedStarId: string): void {
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1_000)
+  camera.lookAt(0, 0, -1)
+  camera.updateMatrixWorld(true)
+  const currentStars = stars.filter(({ s }) => 'id' in s)
+  const frame: ProbeFrame = {
+    elapsedMs: 0,
+    camera,
+    projectionScale: 10_000,
+    focusedStarId,
+    convergence: 1,
+    starWorldPositions: new Map(currentStars.map(({ s }) => [
+      'id' in s ? s.id : '', new THREE.Vector3(...s.p),
+    ])),
+    starOpacities: new Map(currentStars.map(({ s }) => ['id' in s ? s.id : '', 1])),
+  }
+  layer.update(frame)
+}
+
+function realProbeRenderer(reduceMotion: boolean, callbacks: Record<string, unknown> = {}) {
+  const fixture = scanProbeFixture()
+  const index = indexUniverse(fixture)
+  const stars = starData(fixture)
+  const layer = makeProbe(index, stars)
+  const renderer = commandRenderer(reduceMotion, callbacks)
+  renderer.probeIds = new Set(index.probesById.keys())
+  renderer.probeOwnersById = probeOwnersById(index, stars)
+  renderer.probes = layer
+  return { renderer, layer, stars }
 }
 
 describe('ProbeInspectionController constraints', () => {
@@ -149,6 +198,8 @@ interface ProbeCommandRenderer {
   exitProbeInspection(): void
   destroy(): void
   onDoubleClick(event: Pick<MouseEvent, 'clientX' | 'clientY'>): void
+  onContextLost(event: Pick<Event, 'preventDefault'>): void
+  handleFatalFrameFailure(cause: unknown): void
 }
 
 function commandRenderer(reduceMotion: boolean, callbacks: Record<string, unknown> = {}) {
@@ -161,7 +212,9 @@ function commandRenderer(reduceMotion: boolean, callbacks: Record<string, unknow
     ['probe:1', [owner]],
     ['probe:2', [owner]],
   ])
-  renderer.focusStar = null
+  renderer.focusStar = owner
+  renderer.arrivedProbeId = 'probe:1'
+  renderer.inspectionProbeId = 'probe:1'
   renderer.clearPlanet = vi.fn()
   renderer.applyFocus = vi.fn()
   renderer.probeTransition = null
@@ -173,14 +226,17 @@ function commandRenderer(reduceMotion: boolean, callbacks: Record<string, unknow
     inspect: vi.fn(),
     setScanning: vi.fn(),
     setPartHighlight: vi.fn(),
+    inspectionTarget: vi.fn(() => true),
     raycastPart: vi.fn(() => 'scanner-lens'),
   }
   renderer.canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) }
   renderer.camera = new THREE.PerspectiveCamera()
   renderer.raycaster = new THREE.Raycaster()
   renderer.pointerNdc = new THREE.Vector2()
+  renderer.inspectionTarget = new THREE.Vector3()
   renderer.resources = { dispose: vi.fn() }
-  renderer.signals = { destroy: vi.fn() }
+  renderer.signals = { destroy: vi.fn(), frameFailed: vi.fn() }
+  renderer.raf = 0
   return renderer
 }
 
@@ -208,6 +264,46 @@ describe('Renderer probe inspection commands', () => {
     vi.advanceTimersByTime(2_000)
     expect(arrived).toHaveBeenCalledTimes(1)
     expect(arrived).toHaveBeenCalledWith({ probeId: 'probe:2', token: 2 })
+  })
+
+  test('a selected-planet callback reentering approach keeps every visual and RAF owned by B', () => {
+    const ownerA = { s: sharedStar('star:a', 'A') } as StarDatum
+    const ownerB = { s: sharedStar('star:b', 'B') } as StarDatum
+    const request = vi.fn()
+      .mockReturnValueOnce(201)
+      .mockReturnValueOnce(202)
+    const cancel = vi.fn()
+    vi.stubGlobal('requestAnimationFrame', request)
+    vi.stubGlobal('cancelAnimationFrame', cancel)
+    const arrivedA = vi.fn()
+    const arrivedB = vi.fn()
+    const renderer = commandRenderer(false)
+    renderer.probeOwnersById = new Map([
+      ['probe:1', [ownerA]],
+      ['probe:2', [ownerB]],
+    ])
+    renderer.selected = { index: 4 }
+    renderer.bodies = { setSelected: vi.fn() }
+    renderer.cb = {
+      onPickPlanet: () => renderer.approachProbe('probe:2', 2),
+      onProbeArrived: (event: { probeId: string }) => {
+        if (event.probeId === 'probe:1') arrivedA(event)
+        else arrivedB(event)
+      },
+    }
+    delete renderer.clearPlanet
+
+    renderer.approachProbe('probe:1', 1)
+
+    expect(renderer.focusStar).toBe(ownerB)
+    expect(renderer.inspectionProbeId).toBe('probe:2')
+    expect(renderer.probeTransition).toMatchObject({ probeId: 'probe:2', token: 2 })
+    expect(renderer.probeTransitionRaf).toBe(201)
+    expect(request).toHaveBeenCalledOnce()
+    renderer.exitProbeInspection()
+    expect(cancel).toHaveBeenCalledWith(201)
+    expect(arrivedA).not.toHaveBeenCalled()
+    expect(arrivedB).not.toHaveBeenCalled()
   })
 
   test('normal approach owns and cancels its animation frame', () => {
@@ -246,6 +342,48 @@ describe('Renderer probe inspection commands', () => {
     expect(arrived).not.toHaveBeenCalled()
   })
 
+  test('context loss cancels approach RAF and synchronously clears probe visuals once', () => {
+    const arrived = vi.fn()
+    const lateFrames: FrameRequestCallback[] = []
+    const request = vi.fn((callback: FrameRequestCallback) => {
+      lateFrames.push(callback)
+      return 81
+    })
+    const cancel = vi.fn()
+    vi.stubGlobal('requestAnimationFrame', request)
+    vi.stubGlobal('cancelAnimationFrame', cancel)
+    const renderer = commandRenderer(false, { onProbeArrived: arrived })
+    const prevented = vi.fn()
+    renderer.approachProbe('probe:1', 9)
+    const probes = renderer.probes as Record<string, ReturnType<typeof vi.fn>>
+    const falseBeforeFatal = probes.setScanning.mock.calls.filter(([value]) => value === false).length
+    renderer.onContextLost({ preventDefault: prevented })
+    lateFrames[0]?.(2_000)
+
+    expect(prevented).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledWith(81)
+    expect(probes.inspect.mock.calls.filter(([value]) => value === null)).toHaveLength(1)
+    expect(probes.setScanning.mock.calls.filter(([value]) => value === false)).toHaveLength(falseBeforeFatal + 1)
+    expect(probes.setPartHighlight.mock.calls.filter(([value]) => value === null)).toHaveLength(1)
+    expect(arrived).not.toHaveBeenCalled()
+  })
+
+  test('a fatal composer-frame failure cancels scan timer without completing it', () => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
+    const renderer = commandRenderer(false, { onProbeScanComplete: complete })
+    renderer.startProbeScan('probe:1', 10)
+    renderer.handleFatalFrameFailure(new Error('composer render failed'))
+    renderer.destroy()
+    vi.runAllTimers()
+
+    const probes = renderer.probes as Record<string, ReturnType<typeof vi.fn>>
+    expect(probes.inspect.mock.calls.filter(([value]) => value === null)).toHaveLength(1)
+    expect(probes.setScanning.mock.calls.filter(([value]) => value === false)).toHaveLength(1)
+    expect(probes.setPartHighlight.mock.calls.filter(([value]) => value === null)).toHaveLength(1)
+    expect(complete).not.toHaveBeenCalled()
+  })
+
   test('scan completion keeps the probe id and token in normal and reduced motion', () => {
     vi.useFakeTimers()
     const normalComplete = vi.fn()
@@ -259,6 +397,8 @@ describe('Renderer probe inspection commands', () => {
     const reducedComplete = vi.fn(() => {
       expect(reducedScanning).toHaveBeenLastCalledWith(false)
     })
+    reduced.arrivedProbeId = 'probe:2'
+    reduced.inspectionProbeId = 'probe:2'
     reduced.cb = { onProbeScanComplete: reducedComplete }
     reduced.startProbeScan('probe:2', 13)
     expect(reducedScanning.mock.calls).toEqual([[true], [false]])
@@ -334,4 +474,80 @@ describe('Renderer probe inspection commands', () => {
     expect(failed).toHaveBeenCalledOnce()
     expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 29 })
   })
+
+  test('real probe layer rejects scanning from panorama without starting visual work', () => {
+    const failed = vi.fn()
+    const { renderer, layer } = realProbeRenderer(false, { onProbeError: failed })
+    try {
+      renderer.focusStar = null
+      renderer.startProbeScan(sharedProbe.id, 31)
+      expect(failed).toHaveBeenCalledOnce()
+      expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 31 })
+      expect(probeLayerSnapshot(layer).scanning).toBe(false)
+    } finally {
+      layer.dispose()
+    }
+  })
+
+  test('real probe layer rejects scanning while approach has not arrived', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 91))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const failed = vi.fn()
+    const { renderer, layer, stars } = realProbeRenderer(false, { onProbeError: failed })
+    try {
+      renderer.approachProbe(sharedProbe.id, 32)
+      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      updateProbeNear(layer, stars, focusedId)
+      renderer.startProbeScan(sharedProbe.id, 33)
+      expect(failed).toHaveBeenCalledOnce()
+      expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 33 })
+      expect(probeLayerSnapshot(layer).scanning).toBe(false)
+    } finally {
+      layer.dispose()
+    }
+  })
+
+  test.each([
+    { name: 'panorama', approachProbeId: sharedProbe.id, mutate: (renderer: Record<string, unknown>) => { renderer.focusStar = null }, scanProbeId: sharedProbe.id },
+    { name: 'another owner', approachProbeId: 'article:22', mutate: (renderer: Record<string, unknown>, stars: readonly StarDatum[]) => { renderer.focusStar = stars[0] }, scanProbeId: 'article:22' },
+    { name: 'another probe', approachProbeId: sharedProbe.id, mutate: () => undefined, scanProbeId: 'article:22' },
+  ])('real probe layer rejects $name after another inspection is ready', ({ approachProbeId, mutate, scanProbeId }) => {
+    const failed = vi.fn()
+    const { renderer, layer, stars } = realProbeRenderer(true, { onProbeError: failed })
+    try {
+      renderer.approachProbe(approachProbeId, 34)
+      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      updateProbeNear(layer, stars, focusedId)
+      mutate(renderer, stars)
+      renderer.startProbeScan(scanProbeId, 35)
+      expect(failed).toHaveBeenCalledOnce()
+      expect(failed.mock.calls[0][0]).toMatchObject({ probeId: scanProbeId, token: 35 })
+      expect(probeLayerSnapshot(layer).scanning).toBe(false)
+    } finally {
+      layer.dispose()
+    }
+  })
+
+  test('real probe layer scans only the arrived same probe with the focused owner and visible near target', () => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
+    const { renderer, layer, stars } = realProbeRenderer(true, { onProbeScanComplete: complete })
+    try {
+      renderer.approachProbe(sharedProbe.id, 36)
+      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      updateProbeNear(layer, stars, focusedId)
+      renderer.reduceMotion = false
+      renderer.startProbeScan(sharedProbe.id, 37)
+      expect(probeLayerSnapshot(layer).scanning).toBe(true)
+      vi.runAllTimers()
+      expect(probeLayerSnapshot(layer).scanning).toBe(false)
+      expect(complete).toHaveBeenCalledWith({ probeId: sharedProbe.id, token: 37 })
+    } finally {
+      layer.dispose()
+    }
+  })
 })
+
+function currentDatumId(datum: StarDatum): string {
+  return 'id' in datum.s ? datum.s.id : ''
+}

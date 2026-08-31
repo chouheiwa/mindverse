@@ -156,8 +156,10 @@ describe('Universe question keyboard integration', () => {
 
     await user.click(screen.getByRole('button', { name: '开始扫描' }))
     expect(testState.scanCalls).toEqual([['article:21', 2]])
-    act(() => testState.callbacks?.onProbeError?.({ probeId: 'article:21', token: 2, cause: new Error('scan failed') }))
+    act(() => testState.callbacks?.onProbeError?.({ probeId: 'article:21', token: 2, cause: new Error('secret /tmp/scan.stack') }))
     expect(screen.getByRole('heading', { name: '检查探测器：真实文章标题' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('扫描失败，请重试。')
+    expect(screen.queryByText(/secret|scan\.stack/)).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: '查看原文章' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '开始扫描' }))
     expect(testState.scanCalls).toEqual([['article:21', 2], ['article:21', 3]])
@@ -166,9 +168,36 @@ describe('Universe question keyboard integration', () => {
     act(() => testState.callbacks?.onProbeScanComplete?.({ probeId: 'article:21', token: 3 }))
     expect(screen.getByRole('link', { name: '查看原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
 
+    await user.click(screen.getByRole('button', { name: '重新扫描' }))
+    expect(screen.getByRole('status')).toHaveTextContent('正在扫描当前探测器。')
+    expect(screen.getByRole('link', { name: '查看原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
+    act(() => testState.callbacks?.onProbeError?.({ probeId: 'article:wrong', token: 4, cause: new Error('late') }))
+    expect(screen.getByRole('status')).toHaveTextContent('正在扫描当前探测器。')
+    act(() => testState.callbacks?.onProbeError?.({ probeId: 'article:21', token: 4, cause: new Error('again') }))
+    expect(screen.getByRole('status')).toHaveTextContent('扫描失败，请重试。')
+    expect(screen.getByRole('link', { name: '查看原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
+
     await user.keyboard('{Escape}')
     await waitFor(() => expect(trigger).toHaveFocus())
     expect(testState.exitProbeCalls).toBeGreaterThan(0)
+  })
+
+  test('falls back to the canvas when the inspection trigger is no longer connected', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    act(() => testState.callbacks?.onPick?.(star))
+    const trigger = await screen.findByRole('button', { name: '检查探测器' })
+    await user.click(trigger)
+    act(() => testState.callbacks?.onProbeArrived?.({ probeId: 'article:21', token: 1 }))
+    await screen.findByRole('dialog', { name: '检查探测器：真实文章标题' })
+    vi.spyOn(trigger, 'isConnected', 'get').mockReturnValue(false)
+    const canvas = document.querySelector<HTMLCanvasElement>('.uv-canvas:not(.uv-labels)')
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(canvas).toHaveFocus())
   })
 
   test('forwards runtime reduced-motion changes and removes the listener on unmount', async () => {

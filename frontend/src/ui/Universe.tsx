@@ -21,6 +21,8 @@ import './Universe.css'
 
 const reduceMotion = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const safeProbeScanError = (cause: unknown) => cause instanceof Error && cause.name === 'AbortError'
+  ? '扫描已中断，请重试。' : '扫描失败，请重试。'
 
 export function UniverseView() {
   return <PrivateUniverseView />
@@ -196,7 +198,7 @@ export function PrivateUniverseView() {
         dispatchUi({ type: 'probe-scan-complete', probeId, token })
       },
       onProbePartChange: (part) => setSelectedProbePart(part),
-      onProbeError: ({ probeId, token }) => {
+      onProbeError: ({ probeId, token, cause }) => {
         if (transitionTokenRef.current === token) {
           const current = explorationRef.current
           const commandKind = probeCommandKindRef.current
@@ -212,7 +214,7 @@ export function PrivateUniverseView() {
             rendererRef.current?.restoreQuestionPlanet(returnTo.star.id, returnTo.planet.question.id)
           }
         }
-        dispatchUi({ type: 'probe-error', probeId, token })
+        dispatchUi({ type: 'probe-error', probeId, token, message: safeProbeScanError(cause) })
       },
       })
       if (disposed) {
@@ -560,7 +562,8 @@ export function PrivateUniverseView() {
       {probeState && probeState.kind !== 'probe-approach' && <ProbeInspectionPanel
         probe={probeState.probe} canvas={canvasRef.current}
         scanning={probeState.kind === 'probe-scanning'}
-        scanComplete={probeState.kind === 'probe-inspection' && probeState.scanComplete}
+        scanComplete={probeState.scanComplete}
+        scanError={probeState.kind === 'probe-inspection' ? probeState.scanError : null}
         selectedPart={selectedProbePart}
         onPoseChange={(pose) => rendererRef.current?.setProbeInspectionPose(pose)}
         onPartChange={(part) => { setSelectedProbePart(part); rendererRef.current?.focusProbePart(part) }}

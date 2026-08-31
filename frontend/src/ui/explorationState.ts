@@ -9,7 +9,7 @@ export type ExplorationState =
   | { kind: 'panorama' }
   | ReturnState
   | { kind: 'probe-approach'; star: Star; probe: ArticleProbe; token: number; returnTo: ReturnState }
-  | { kind: 'probe-inspection'; star: Star; probe: ArticleProbe; scanComplete: boolean; returnTo: ReturnState }
+  | { kind: 'probe-inspection'; star: Star; probe: ArticleProbe; scanComplete: boolean; scanError: string | null; returnTo: ReturnState }
   | { kind: 'probe-scanning'; star: Star; probe: ArticleProbe; token: number; scanComplete: boolean; returnTo: ReturnState }
   | RenderFallback
 
@@ -30,7 +30,7 @@ export type UniverseUiAction =
   | { type: 'probe-arrived'; probeId: string; token: number }
   | { type: 'scan-probe'; token: number }
   | { type: 'probe-scan-complete'; probeId: string; token: number }
-  | { type: 'probe-error'; probeId: string; token: number }
+  | { type: 'probe-error'; probeId: string; token: number; message: string }
   | { type: 'exit-probe' }
   | { type: 'set-question-entry'; questionEntry: PlanetDatum | null }
   | { type: 'set-mode'; mode: Mode } | { type: 'toggle-mode'; mode: Mode }
@@ -60,7 +60,8 @@ export function universeUiReducer(state: UniverseUiState, action: UniverseUiActi
     case 'probe-arrived': {
       const current = state.exploration
       if (current.kind !== 'probe-approach' || current.token !== action.token || current.probe.id !== action.probeId) return state
-      return { ...state, exploration: { kind: 'probe-inspection', star: current.star, probe: current.probe, scanComplete: false, returnTo: current.returnTo } }
+      return { ...state, exploration: { kind: 'probe-inspection', star: current.star, probe: current.probe,
+        scanComplete: false, scanError: null, returnTo: current.returnTo } }
     }
     case 'scan-probe': {
       const current = state.exploration
@@ -70,7 +71,8 @@ export function universeUiReducer(state: UniverseUiState, action: UniverseUiActi
     case 'probe-scan-complete': {
       const current = state.exploration
       if (current.kind !== 'probe-scanning' || current.token !== action.token || current.probe.id !== action.probeId) return state
-      return { ...state, exploration: { kind: 'probe-inspection', star: current.star, probe: current.probe, scanComplete: true, returnTo: current.returnTo } }
+      return { ...state, exploration: { kind: 'probe-inspection', star: current.star, probe: current.probe,
+        scanComplete: true, scanError: null, returnTo: current.returnTo } }
     }
     case 'probe-error': {
       const current = state.exploration
@@ -78,7 +80,7 @@ export function universeUiReducer(state: UniverseUiState, action: UniverseUiActi
         || current.token !== action.token || current.probe.id !== action.probeId) return state
       if (current.kind === 'probe-approach') return { ...state, exploration: current.returnTo }
       return { ...state, exploration: { kind: 'probe-inspection', star: current.star, probe: current.probe,
-        scanComplete: current.scanComplete, returnTo: current.returnTo } }
+        scanComplete: current.scanComplete, scanError: action.message, returnTo: current.returnTo } }
     }
     case 'exit-probe': return isProbeState(state.exploration) ? { ...state, exploration: state.exploration.returnTo } : state
     case 'set-question-entry': return { ...state, questionEntry: action.questionEntry }

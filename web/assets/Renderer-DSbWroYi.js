@@ -1,4 +1,4 @@
-import{c as e,o as t}from"./api-vGgttR-j.js";import{A as n,B as r,C as i,F as a,G as o,H as s,I as c,L as l,M as u,Q as d,R as f,S as p,T as m,U as h,V as g,W as _,Z as v,a as y,b,c as x,g as S,i as C,j as ee,k as w,l as te,m as ne,n as re,o as T,p as E,q as ie,s as D,t as ae,u as O,v as k,w as oe,x as A,y as se,z as j}from"./three-D9i4NVAn.js";import{a as ce,i as le,n as ue,o as M,r as de,s as fe,t as pe}from"./postprocessing-wtPlhSw8.js";import{n as me,r as N}from"./Universe-BDIAbubB.js";var P=`
+import{c as e,o as t}from"./api-vGgttR-j.js";import{A as n,B as r,C as i,F as a,G as o,H as s,I as c,L as l,M as u,Q as d,R as f,S as p,T as m,U as h,V as g,W as _,Z as v,a as y,b,c as x,g as S,i as C,j as ee,k as w,l as te,m as ne,n as re,o as T,p as E,q as ie,s as D,t as ae,u as O,v as k,w as oe,x as A,y as se,z as j}from"./three-D9i4NVAn.js";import{a as ce,i as le,n as ue,o as M,r as de,s as fe,t as pe}from"./postprocessing-wtPlhSw8.js";import{n as me,r as N}from"./Universe-C2aeTUh8.js";var P=`
 vec3 orbitAround(vec3 p, vec3 c, vec3 axis, float period, float t) {
   vec3 o = p - c;
   float r = length(o);

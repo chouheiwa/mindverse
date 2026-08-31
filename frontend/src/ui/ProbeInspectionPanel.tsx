@@ -5,7 +5,7 @@ import type { ArticleProbe } from '../types'
 import './ProbeInspectionPanel.css'
 
 interface Props {
-  probe: ArticleProbe; canvas: HTMLCanvasElement | null; scanning: boolean; scanComplete: boolean
+  probe: ArticleProbe; canvas: HTMLCanvasElement | null; scanning: boolean; scanComplete: boolean; scanError: string | null
   selectedPart: ProbePart | null; onPoseChange: (pose: InspectionPose) => void
   onPartChange: (part: ProbePart | null) => void; onScan: () => void; onClose: () => void
 }
@@ -17,14 +17,50 @@ const PARTS: readonly [ProbePart, string][] = [
 ]
 const CAMERA_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', '+', '-', '='])
 
-export function ProbeInspectionPanel({ probe, canvas, scanning, scanComplete, selectedPart,
+export function ProbeInspectionPanel({ probe, canvas, scanning, scanComplete, scanError, selectedPart,
   onPoseChange, onPartChange, onScan, onClose }: Props) {
+  const dialogRef = useRef<HTMLElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const [controller] = useState(() => new ProbeInspectionController())
   const callbacksRef = useRef({ onPoseChange, onClose })
   useEffect(() => { callbacksRef.current = { onPoseChange, onClose } }, [onClose, onPoseChange])
-  useLayoutEffect(() => { titleRef.current?.focus({ preventScroll: true }) }, [probe.id])
+  useLayoutEffect(() => { titleRef.current?.focus({ preventScroll: true }) }, [probe.id, scanning])
   useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const restored: Array<() => void> = []
+    let branch: HTMLElement = dialog
+    while (branch.parentElement) {
+      const parent = branch.parentElement
+      for (const sibling of Array.from(parent.children)) {
+        if (!(sibling instanceof HTMLElement) || sibling === branch) continue
+        if (sibling === canvas) {
+          const ariaHidden = sibling.getAttribute('aria-hidden')
+          const tabIndex = sibling.getAttribute('tabindex')
+          sibling.setAttribute('aria-hidden', 'true')
+          sibling.setAttribute('tabindex', '-1')
+          restored.push(() => {
+            if (ariaHidden === null) sibling.removeAttribute('aria-hidden'); else sibling.setAttribute('aria-hidden', ariaHidden)
+            if (tabIndex === null) sibling.removeAttribute('tabindex'); else sibling.setAttribute('tabindex', tabIndex)
+          })
+        } else {
+          const inert = sibling.hasAttribute('inert')
+          const ariaHidden = sibling.getAttribute('aria-hidden')
+          sibling.setAttribute('inert', '')
+          sibling.setAttribute('aria-hidden', 'true')
+          restored.push(() => {
+            if (!inert) sibling.removeAttribute('inert')
+            if (ariaHidden === null) sibling.removeAttribute('aria-hidden'); else sibling.setAttribute('aria-hidden', ariaHidden)
+          })
+        }
+      }
+      if (parent === document.body) break
+      branch = parent
+    }
+    return () => { for (const restore of restored.reverse()) restore() }
+  }, [canvas, probe.id])
+  useEffect(() => {
+    const dialog = dialogRef.current
     emitReset()
     const pointers = new Map<number, NormalizedPointer>()
     const emit = (pose: InspectionPose) => callbacksRef.current.onPoseChange(pose)
@@ -51,7 +87,23 @@ export function ProbeInspectionPanel({ probe, canvas, scanning, scanComplete, se
     const context = (event: Event) => event.preventDefault()
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); callbacksRef.current.onClose(); return }
+      if (event.key === 'Tab' && dialog?.contains(event.target as Node)) {
+        const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ))
+        const first = focusable[0]
+        const last = focusable.at(-1)
+        const active = document.activeElement
+        if (event.shiftKey && (active === first || !focusable.includes(active as HTMLElement))) {
+          event.preventDefault(); last?.focus()
+        } else if (!event.shiftKey && (active === last || !focusable.includes(active as HTMLElement))) {
+          event.preventDefault(); first?.focus()
+        }
+        return
+      }
       if (!CAMERA_KEYS.has(event.key)) return
+      const target = event.target
+      if (target instanceof HTMLElement && target !== canvas && target !== dialog && target !== titleRef.current) return
       event.preventDefault()
       const key = event.key === '=' ? '+' : event.key
       emit(controller.keyboard(key as 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | '+' | '-'))
@@ -59,12 +111,14 @@ export function ProbeInspectionPanel({ probe, canvas, scanning, scanComplete, se
     canvas?.addEventListener('pointerdown', down); canvas?.addEventListener('pointermove', move)
     canvas?.addEventListener('pointerup', end); canvas?.addEventListener('pointercancel', cancel)
     canvas?.addEventListener('lostpointercapture', cancel); canvas?.addEventListener('wheel', wheel, { passive: false })
-    canvas?.addEventListener('contextmenu', context); window.addEventListener('keydown', keyboard)
+    canvas?.addEventListener('contextmenu', context); canvas?.addEventListener('keydown', keyboard)
+    dialog?.addEventListener('keydown', keyboard)
     return () => {
       canvas?.removeEventListener('pointerdown', down); canvas?.removeEventListener('pointermove', move)
       canvas?.removeEventListener('pointerup', end); canvas?.removeEventListener('pointercancel', cancel)
       canvas?.removeEventListener('lostpointercapture', cancel); canvas?.removeEventListener('wheel', wheel)
-      canvas?.removeEventListener('contextmenu', context); window.removeEventListener('keydown', keyboard)
+      canvas?.removeEventListener('contextmenu', context); canvas?.removeEventListener('keydown', keyboard)
+      dialog?.removeEventListener('keydown', keyboard)
     }
     function emitReset() { callbacksRef.current.onPoseChange(controller.reset()) }
   }, [canvas, controller, probe.id])
@@ -72,7 +126,7 @@ export function ProbeInspectionPanel({ probe, canvas, scanning, scanComplete, se
   const apply = (operation: (controller: ProbeInspectionController) => InspectionPose) => {
     onPoseChange(operation(controller))
   }
-  return <aside className="probe-inspection" aria-labelledby="probe-inspection-title">
+  return <aside ref={dialogRef} className="probe-inspection" role="dialog" aria-modal="true" aria-labelledby="probe-inspection-title">
     <header>
       <p className="probe-inspection-kicker">文章探测器 · 近景检查</p>
       <h2 id="probe-inspection-title" ref={titleRef} tabIndex={-1}>检查探测器：{probe.title}</h2>
@@ -100,7 +154,7 @@ export function ProbeInspectionPanel({ probe, canvas, scanning, scanComplete, se
       {scanComplete && <a href={probe.url} target="_blank" rel="noopener noreferrer">查看原文章</a>}
     </div>
     <p className="probe-scan-status" role="status" aria-live="polite">
-      {scanning ? '正在扫描当前探测器。' : scanComplete ? '扫描完成，已开放当前文章链接。' : '尚未开始扫描。'}
+      {scanning ? '正在扫描当前探测器。' : scanError ?? (scanComplete ? '扫描完成，已开放当前文章链接。' : '尚未开始扫描。')}
     </p>
   </aside>
 }

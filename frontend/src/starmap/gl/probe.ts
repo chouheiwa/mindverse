@@ -30,6 +30,10 @@ export interface ProbeFrame {
   starOpacities: ReadonlyMap<string, number>
 }
 
+export interface ProbeOrbitAllocationDiagnostics {
+  allocationWork: number
+}
+
 export interface ProbeLayer {
   group: THREE.Group
   update(ctx: ProbeFrame): void
@@ -105,7 +109,6 @@ interface ProbeFrameMetrics {
   matrixWrites: number
   colorWrites: number
   dirtyBuffers: number
-  transientAllocations: number
 }
 
 interface InstanceLevelState {
@@ -113,6 +116,8 @@ interface InstanceLevelState {
   readonly previousIndices: Int32Array
   readonly alphas: Float32Array
   readonly previousAlphas: Float32Array
+  readonly upperIntervals: Uint8Array
+  readonly previousUpperIntervals: Uint8Array
   readonly matrixChanged: Uint8Array
   readonly colorChanged: Uint8Array
   count: number
@@ -168,9 +173,28 @@ function writeLodWeights(target: Record<ProbeLod, number>, lod: ProbeLod, projec
 }
 
 /** Stable, star-local orbit assignments. Questions are deliberately absent from this path. */
-export function probeOrbitData(index: UniverseIndex, stars: readonly StarDatum[]): readonly ProbeOrbitDatum[] {
-  return buildOrbitRecords(index, stars).map(({ key: _key, axis: _axis, u: _u, v: _v, speed: _speed, ...datum }) =>
+export function probeOrbitData(
+  index: UniverseIndex,
+  stars: readonly StarDatum[],
+  diagnostics?: ProbeOrbitAllocationDiagnostics,
+): readonly ProbeOrbitDatum[] {
+  if (diagnostics) diagnostics.allocationWork = 0
+  return buildOrbitRecords(index, stars, diagnostics).map(({ key: _key, axis: _axis, u: _u, v: _v, speed: _speed, ...datum }) =>
     Object.freeze(datum))
+}
+
+export function writeProbeFrame(
+  target: ProbeFrame,
+  elapsedMs: number,
+  projectionScale: number,
+  focusedStarId: string | null,
+  convergence: number,
+): ProbeFrame {
+  target.elapsedMs = elapsedMs
+  target.projectionScale = projectionScale
+  target.focusedStarId = focusedStarId
+  target.convergence = convergence
+  return target
 }
 
 export function probeLayerSnapshot(layer: ProbeLayer): ProbeLayerSnapshot {
@@ -231,6 +255,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     metalness: 0.25, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08,
     alphaHash: true, transparent: false, depthWrite: true, opacity: 0,
   }))
+  applyUpperAlphaHashInterval(nearLensMaterial)
   const nearLightMaterial = registerResource(nearStandard(lightParameters))
   const nearEtchingMaterial = registerResource(nearStandard(etchingParameters))
   const nearMaterials: THREE.Material[] = [
@@ -321,7 +346,7 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
     nearCandidateId: null,
     frame: {
       farInstances: 0, mediumInstances: 0, matrixWrites: 0,
-      colorWrites: 0, dirtyBuffers: 0, transientAllocations: 0,
+      colorWrites: 0, dirtyBuffers: 0,
     },
     parts: {
       far: far.map(({ part: name }) => name),
@@ -424,8 +449,10 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
       snapshot.lods[lod] += 1
       snapshot.maxSimultaneousLevels = Math.max(snapshot.maxSimultaneousLevels,
         Number(weights[index].far > 0) + Number(weights[index].medium > 0) + Number(weights[index].near > 0))
-      if (weights[index].far > 0.001) appendInstance(farState, index, weights[index].far)
-      if (weights[index].medium > 0.001) appendInstance(mediumState, index, weights[index].medium)
+      if (weights[index].far > 0.001) appendInstance(farState, index, weights[index].far, false)
+      if (weights[index].medium > 0.001) {
+        appendInstance(mediumState, index, weights[index].medium, weights[index].far > 0.001)
+      }
     }
     snapshot.frame.farInstances = farState.count
     snapshot.frame.mediumInstances = mediumState.count
@@ -467,7 +494,11 @@ function makeProbeScoped(index: UniverseIndex, stars: readonly StarDatum[], scop
 
 const UNIT_X = new THREE.Vector3(1, 0, 0)
 
-function buildOrbitRecords(index: UniverseIndex, stars: readonly StarDatum[]): OrbitRecord[] {
+function buildOrbitRecords(
+  index: UniverseIndex,
+  stars: readonly StarDatum[],
+  diagnostics?: ProbeOrbitAllocationDiagnostics,
+): OrbitRecord[] {
   const records: OrbitRecord[] = []
   for (const datum of stars) {
     if (!isCurrentStar(datum.s)) continue
@@ -479,8 +510,8 @@ function buildOrbitRecords(index: UniverseIndex, stars: readonly StarDatum[]): O
     for (const probe of probes) {
       const pairHash = hashText(`${datum.s.id}\u0000${probe.id}`)
       const preferredSlot = pairHash % INITIAL_SLOT_COUNT
-      const slot = nextAvailableSlot(nextOccupied, preferredSlot)
-      nextOccupied.set(slot, nextAvailableSlot(nextOccupied, slot + 1))
+      const slot = nextAvailableSlot(nextOccupied, preferredSlot, diagnostics)
+      nextOccupied.set(slot, nextAvailableSlot(nextOccupied, slot + 1, diagnostics))
       const phase = ((slot % SLOT_ANGLE_COUNT) / SLOT_ANGLE_COUNT) * Math.PI * 2
       const radius = 2.5 + Math.floor(slot / SLOT_ANGLE_COUNT) * 0.46
       const position = [
@@ -506,10 +537,16 @@ function buildOrbitRecords(index: UniverseIndex, stars: readonly StarDatum[]): O
   return records
 }
 
-function nextAvailableSlot(occupied: Map<number, number>, initial: number): number {
+function nextAvailableSlot(
+  occupied: Map<number, number>,
+  initial: number,
+  diagnostics?: ProbeOrbitAllocationDiagnostics,
+): number {
   let slot = initial
   const path: number[] = []
-  while (occupied.has(slot)) {
+  while (true) {
+    if (diagnostics) diagnostics.allocationWork += 1
+    if (!occupied.has(slot)) break
     path.push(slot)
     slot = occupied.get(slot) ?? slot + 1
   }
@@ -551,15 +588,23 @@ function instanceLevelState(capacity: number): InstanceLevelState {
     previousIndices,
     alphas: new Float32Array(capacity),
     previousAlphas,
+    upperIntervals: new Uint8Array(capacity),
+    previousUpperIntervals: new Uint8Array(capacity),
     matrixChanged: new Uint8Array(capacity),
     colorChanged: new Uint8Array(capacity),
     count: 0,
   }
 }
 
-function appendInstance(state: InstanceLevelState, recordIndex: number, alpha: number): void {
+function appendInstance(
+  state: InstanceLevelState,
+  recordIndex: number,
+  alpha: number,
+  upperInterval: boolean,
+): void {
   state.indices[state.count] = recordIndex
   state.alphas[state.count] = alpha
+  state.upperIntervals[state.count] = Number(upperInterval)
   state.count += 1
 }
 
@@ -569,7 +614,6 @@ function resetFrameMetrics(metrics: ProbeFrameMetrics): void {
   metrics.matrixWrites = 0
   metrics.colorWrites = 0
   metrics.dirtyBuffers = 0
-  metrics.transientAllocations = 0
 }
 
 function updateInstances(
@@ -583,7 +627,11 @@ function updateInstances(
   for (let slot = 0; slot < state.count; slot += 1) {
     const recordIndex = state.indices[slot]
     state.matrixChanged[slot] = Number(state.previousIndices[slot] !== recordIndex || baseChanged[recordIndex] === 1)
-    state.colorChanged[slot] = Number(state.previousIndices[slot] !== recordIndex || state.previousAlphas[slot] !== state.alphas[slot])
+    state.colorChanged[slot] = Number(
+      state.previousIndices[slot] !== recordIndex
+      || state.previousAlphas[slot] !== state.alphas[slot]
+      || state.previousUpperIntervals[slot] !== state.upperIntervals[slot],
+    )
   }
   for (const { mesh, local } of parts) {
     mesh.count = state.count
@@ -597,7 +645,7 @@ function updateInstances(
         matrixDirty = true
       }
       if (state.colorChanged[slot] === 1) {
-        WHITE.setScalar(state.alphas[slot])
+        WHITE.setRGB(state.alphas[slot], state.upperIntervals[slot], 1)
         mesh.setColorAt(slot, WHITE)
         metrics.colorWrites += 1
         colorDirty = true
@@ -615,6 +663,7 @@ function updateInstances(
   for (let slot = 0; slot < state.count; slot += 1) {
     state.previousIndices[slot] = state.indices[slot]
     state.previousAlphas[slot] = state.alphas[slot]
+    state.previousUpperIntervals[slot] = state.upperIntervals[slot]
   }
 }
 
@@ -673,24 +722,60 @@ function fadingStandard(parameters: THREE.MeshStandardMaterialParameters): THREE
   })
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
-      .replace('void main() {', 'varying float vProbeAlpha;\nvoid main() {')
-      .replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n  vProbeAlpha = instanceColor.r;\n  vColor.rgb = vec3(1.0);\n#else\n  vProbeAlpha = 1.0;\n#endif')
+      .replace('void main() {', 'varying float vProbeAlpha;\nvarying float vProbeUpper;\nvoid main() {')
+      .replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n  vProbeAlpha = instanceColor.r;\n  vProbeUpper = instanceColor.g;\n  vColor.rgb = vec3(1.0);\n#else\n  vProbeAlpha = 1.0;\n  vProbeUpper = 0.0;\n#endif')
     shader.fragmentShader = shader.fragmentShader
-      .replace('void main() {', 'varying float vProbeAlpha;\nvoid main() {')
-      .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.a *= vProbeAlpha;')
+      .replace('void main() {', 'varying float vProbeAlpha;\nvarying float vProbeUpper;\nvoid main() {')
+      .replace('#include <alphahash_fragment>', probeAlphaHashFragment('vProbeAlpha', 'vProbeUpper'))
   }
-  material.customProgramCacheKey = () => 'mindverse-probe-instance-fade-v2'
+  material.customProgramCacheKey = () => 'mindverse-probe-partition-fade-v3'
   return material
 }
 
 function nearStandard(parameters: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardMaterial({
     ...parameters,
     alphaHash: true,
     transparent: false,
     depthWrite: true,
     opacity: 0,
   })
+  applyUpperAlphaHashInterval(material)
+  return material
+}
+
+function applyUpperAlphaHashInterval(material: THREE.Material): void {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <alphahash_fragment>',
+      probeAlphaHashFragment('diffuseColor.a', '1.0'),
+    )
+  }
+  material.customProgramCacheKey = () => 'mindverse-probe-upper-alpha-hash-v1'
+}
+
+function probeAlphaHashFragment(alpha: string, upper: string): string {
+  return `
+#ifdef USE_ALPHAHASH
+  float probeAlpha = clamp(${alpha}, 0.0, 1.0);
+  if (probeAlpha <= 0.0) discard;
+  if (probeAlpha < 1.0) {
+    float probeThreshold = getAlphaHashThreshold( vPosition );
+    if (${upper} > 0.5) {
+      if (probeThreshold < 1.0 - probeAlpha) discard;
+    } else if (probeThreshold >= probeAlpha) discard;
+  }
+  diffuseColor.a = 1.0;
+#endif
+`
+}
+
+export function probeDitherVisible(alpha: number, upperInterval: boolean, threshold: number): boolean {
+  const weight = clamp01(alpha)
+  if (weight <= 0) return false
+  if (weight >= 1) return true
+  const sample = clamp01(threshold)
+  return upperInterval ? sample >= 1 - weight : sample < weight
 }
 
 function setLodWeights(

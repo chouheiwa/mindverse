@@ -18,7 +18,7 @@ import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
 import { LabelStrategyCache } from './labelVisibility'
-import { makeProbe, probeLayerSnapshot, type ProbeLayer } from './gl/probe'
+import { makeProbe, probeLayerSnapshot, writeProbeFrame, type ProbeFrame, type ProbeLayer } from './gl/probe'
 
 /**
  * 星图渲染器。
@@ -91,6 +91,7 @@ export class Renderer {
   private stars: StarLayer
   private bodies: BodyLayer
   private probes: ProbeLayer
+  private probeFrame: ProbeFrame
   private dust: DustLayer
   private rings: RingLayer | null
   private overlay: Overlay3D
@@ -222,6 +223,15 @@ export class Renderer {
       if (!('id' in s)) continue
       this.probeStarWorldPositions.set(s.id, new THREE.Vector3())
       this.probeStarOpacities.set(s.id, 1)
+    }
+    this.probeFrame = {
+      elapsedMs: 0,
+      camera: this.camera,
+      projectionScale: 0,
+      focusedStarId: null,
+      convergence: this.convergence,
+      starWorldPositions: this.probeStarWorldPositions,
+      starOpacities: this.probeStarOpacities,
     }
     this.labelStrategy = new LabelStrategyCache(u.clusters, data)
     this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u), environment)
@@ -491,15 +501,7 @@ export class Renderer {
       this.probeStarOpacities.set(datum.s.id,
         renderDim(datum.s, this.mode, this.u, this.wormIdx) * focusOpacity)
     }
-    this.probes.update({
-      elapsedMs: A,
-      camera: this.camera,
-      projectionScale: projScale / this.dpr,
-      focusedStarId,
-      convergence: conv,
-      starWorldPositions: this.probeStarWorldPositions,
-      starOpacities: this.probeStarOpacities,
-    })
+    this.probes.update(writeProbeFrame(this.probeFrame, A, projScale / this.dpr, focusedStarId, conv))
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)
     this.rings?.setUniform('uFar', far)

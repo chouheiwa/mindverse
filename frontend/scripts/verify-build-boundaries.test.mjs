@@ -67,6 +67,14 @@ describe('build boundary verifier', () => {
     expect(() => validateBuildBoundaries(fixture)).toThrow(/public share.*private module/)
   })
 
+  test('rejects a private module coalesced into a public-reachable chunk', () => {
+    const fixture = validFixture()
+    fixture.chunks.find((chunk) => chunk.file === 'assets/SharedView.js').moduleIds.push(
+      '/repo/frontend/src/starmap/private.ts',
+    )
+    expect(() => validateBuildBoundaries(fixture)).toThrow(/public share.*private module.*private\.ts/)
+  })
+
   test('requires Renderer to be a direct dynamic import of private Universe', () => {
     const fixture = validFixture()
     fixture.manifest['src/ui/Universe.tsx'].imports = ['src/starmap/Renderer.ts']

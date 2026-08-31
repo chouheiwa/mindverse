@@ -29,6 +29,7 @@ const walkImports = (byKey, key, reachable, includeDynamicImports) => {
 export function validateBuildBoundaries({ manifest, chunks, assetSizes }) {
   const records = Object.entries(manifest)
   const byKey = new Map(records)
+  const chunksByFile = new Map(chunks.map((chunk) => [chunk.file, chunk]))
 
   const universeEntry = findEntry(records, 'universe', (key, value) =>
     key.endsWith('src/ui/Universe.tsx') || value.src?.endsWith('src/ui/Universe.tsx'))
@@ -39,11 +40,21 @@ export function validateBuildBoundaries({ manifest, chunks, assetSizes }) {
 
   const publicReachable = new Set()
   walkImports(byKey, sharedEntry[0], publicReachable, true)
-  const forbiddenPublicSources = /(?:^|\/)src\/(?:starmap\/|ui\/(?:Universe|Panel|QuestionWorkspace))/
+  const forbiddenPublicSources = /(?:^|[\\/])src[\\/](?:starmap[\\/]|ui[\\/](?:Universe|Panel|QuestionWorkspace))/
   for (const key of publicReachable) {
     const record = byKey.get(key)
     if (forbiddenPublicSources.test(key) || forbiddenPublicSources.test(record.src ?? '')) {
       throw new Error(`build boundary: public share reaches private module ${key}`)
+    }
+    const chunk = chunksByFile.get(record.file)
+    if (!chunk) {
+      throw new Error(`build boundary: emitted chunk metadata is missing for public file ${record.file}`)
+    }
+    const forbiddenModuleId = chunk.moduleIds.find((moduleId) => forbiddenPublicSources.test(moduleId))
+    if (forbiddenModuleId) {
+      throw new Error(
+        `build boundary: public share reaches private module ${forbiddenModuleId} via ${record.file}`,
+      )
     }
   }
 

@@ -184,9 +184,11 @@ test('one-shot shader failure remounts on the same page and becomes ready', asyn
 
   await openProductionUniverse(page, '?e2eShaderFail=once')
   await expect(page.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
+  expect(await page.evaluate(() => sessionStorage.getItem('mindverse:e2e-shader-failed'))).toBe('1')
   await page.getByRole('button', { name: '重试 3D' }).click()
   await expectRendererReady(page)
   await afterTwoAnimationFrames(page)
+  expect(await page.evaluate(() => sessionStorage.getItem('mindverse:e2e-shader-failed'))).toBeNull()
 
   expect(responses.map((response) => response.status())).toEqual([200])
   await expectCanvasContract(page, fixture)

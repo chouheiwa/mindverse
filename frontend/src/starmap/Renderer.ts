@@ -14,7 +14,7 @@ import { Labels } from './gl/labels'
 import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
-import { resumeRenderClock } from './renderClock'
+import { measureFrameTiming, resumeRenderClock } from './renderClock'
 import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 
@@ -397,14 +397,16 @@ export class Renderer {
 
     try {
 
-    if (this.t0 === null) {
-      this.t0 = now
-      this.lastNow = now
-    }
-    const dt = Math.min((now - this.lastNow) / 1000, 0.05)
-    this.lastNow = now
+    const firstFrame = this.t0 === null
+    const animationOrigin = this.t0 ?? now
+    this.t0 = animationOrigin
+    const { rawFrameMs, animationDeltaSeconds: dt } = measureFrameTiming(
+      firstFrame ? null : this.lastNow,
+      now,
+    )
+    if (Number.isFinite(now)) this.lastNow = now
 
-    const A = this.reduceMotion ? 0 : now - this.t0
+    const A = this.reduceMotion ? 0 : now - animationOrigin
 
     // 跳过创世：收敛与点火各自补一段 500ms 的缓动，硬跳会很刺眼
     const skipK = this.skipAt === null ? 0 : clamp((now - this.skipAt) / SKIP_MS, 0, 1)
@@ -496,7 +498,7 @@ export class Renderer {
     }
 
     this.composer.render()
-    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, dt * 1000)
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, rawFrameMs)
     this.signals.frameSucceeded()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
       sessionStorage.removeItem(E2E_SHADER_FAILURE_MARK)

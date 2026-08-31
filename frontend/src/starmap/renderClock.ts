@@ -4,6 +4,17 @@ export interface PausedRenderClock {
   readonly lastTouch: number
 }
 
+export function measureFrameTiming(lastNow: number | null, now: number) {
+  const observed = lastNow === null || !Number.isFinite(lastNow) || !Number.isFinite(now)
+    ? 0
+    : now - lastNow
+  const rawFrameMs = observed > 0 ? observed : 0
+  return {
+    rawFrameMs,
+    animationDeltaSeconds: Math.min(rawFrameMs / 1000, 0.05),
+  }
+}
+
 export function resumeRenderClock(clock: PausedRenderClock, pausedAt: number, now: number) {
   const pausedFor = Math.max(0, now - pausedAt)
   return {

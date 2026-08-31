@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && node scripts/verify-build-boundaries.mjs",
-    "build:e2e": "tsc -b && tsc --noEmit -p tsconfig.e2e.json && VITE_E2E_DIAGNOSTICS=1 vite build && node scripts/verify-build-boundaries.mjs",
+    "build": "tsc -b && vite build && node scripts/verify-build-boundaries.mjs ../web",
+    "build:e2e": "tsc -b && tsc --noEmit -p tsconfig.e2e.json && MINDVERSE_BUILD_DIR=../.e2e-web VITE_E2E_DIAGNOSTICS=1 vite build && node scripts/verify-build-boundaries.mjs ../.e2e-web",
     "lint": "oxlint",
     "test": "vitest",
     "test:coverage": "vitest run --coverage",

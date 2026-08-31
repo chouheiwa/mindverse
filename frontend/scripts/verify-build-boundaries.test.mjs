@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, expect, test } from 'vitest'
-import { validateBuildBoundaries } from './verify-build-boundaries.mjs'
+import * as buildVerifier from './verify-build-boundaries.mjs'
+
+const { resolveBuildOutputDir, validateBuildBoundaries } = buildVerifier
 
 const validFixture = () => ({
   manifest: {
@@ -54,6 +56,11 @@ const validFixture = () => ({
 })
 
 describe('build boundary verifier', () => {
+  test('requires an explicit output directory instead of silently verifying deployable web', () => {
+    expect(() => resolveBuildOutputDir(undefined, '/repo/frontend')).toThrow(/output directory.*required/i)
+    expect(resolveBuildOutputDir('../.e2e-web', '/repo/frontend')).toBe('/repo/.e2e-web')
+  })
+
   test('accepts the intended public/private topology and one coherent Three chunk', () => {
     expect(validateBuildBoundaries(validFixture())).toMatchObject({
       publicChunkCount: 2,

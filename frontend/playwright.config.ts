@@ -29,7 +29,7 @@ export default defineConfig({
       ...process.env,
       PORT: e2ePort,
       MINDVERSE_SOURCE: 'mock',
-      MINDVERSE_WEB_DIR: resolve(repositoryRoot, 'web'),
+      MINDVERSE_WEB_DIR: resolve(repositoryRoot, '.e2e-web'),
       MINDVERSE_SNAPSHOT_DIR: resolve(tmpdir(), `mindverse-e2e-snapshots-${process.pid}`),
     },
     url: `${e2eBaseURL}/`,

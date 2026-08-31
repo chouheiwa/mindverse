@@ -12,6 +12,7 @@ interface RenderSnapshot {
 declare global {
   interface Window {
     __MINDVERSE_E2E__?: { snapshot(): RenderSnapshot }
+    __e2eShaderMarkerClearCount?: number
   }
 }
 
@@ -181,6 +182,14 @@ test('one-shot shader failure remounts on the same page and becomes ready', asyn
   const errors = collectRuntimeErrors(page)
   const fixture = await installUniverseFixture(page)
   const responses = collectRendererResponses(page)
+  await page.addInitScript(() => {
+    const original = Storage.prototype.removeItem
+    window.__e2eShaderMarkerClearCount = 0
+    Storage.prototype.removeItem = function (key: string) {
+      if (key === 'mindverse:e2e-shader-failed') window.__e2eShaderMarkerClearCount! += 1
+      return original.call(this, key)
+    }
+  })
 
   await openProductionUniverse(page, '?e2eShaderFail=once')
   await expect(page.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
@@ -189,6 +198,7 @@ test('one-shot shader failure remounts on the same page and becomes ready', asyn
   await expectRendererReady(page)
   await afterTwoAnimationFrames(page)
   expect(await page.evaluate(() => sessionStorage.getItem('mindverse:e2e-shader-failed'))).toBeNull()
+  expect(await page.evaluate(() => window.__e2eShaderMarkerClearCount)).toBe(1)
 
   expect(responses.map((response) => response.status())).toEqual([200])
   await expectCanvasContract(page, fixture)

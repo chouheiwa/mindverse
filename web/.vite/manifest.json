@@ -54,7 +54,7 @@
     ]
   },
   "src/starmap/Renderer.ts": {
-    "file": "assets/Renderer-CO8a4bvx.js",
+    "file": "assets/Renderer-B-5dxcoI.js",
     "name": "Renderer",
     "src": "src/starmap/Renderer.ts",
     "isDynamicEntry": true,
@@ -65,7 +65,7 @@
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-_wqzxtnJ.js",
+    "file": "assets/QuestionWorkspace-DG56ua9t.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -91,7 +91,7 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-UI10ElQG.js",
+    "file": "assets/Universe-BIKenOlE.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
@@ -111,7 +111,7 @@
     ]
   },
   "universe.html": {
-    "file": "assets/universe-y7LfXY_a.js",
+    "file": "assets/universe-PsK6Ir2V.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,

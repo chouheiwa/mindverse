@@ -5,11 +5,19 @@ import { fileURLToPath } from 'node:url'
 import { relative, resolve } from 'node:path'
 
 const configDir = fileURLToPath(new URL('.', import.meta.url))
+const deployOutputDir = resolve(configDir, '../web')
+const e2eOutputDir = resolve(configDir, '../.e2e-web')
+const requestedOutputDir = process.env.MINDVERSE_BUILD_DIR
+const isolatedBuild = requestedOutputDir !== undefined
+if (isolatedBuild && resolve(configDir, requestedOutputDir) !== e2eOutputDir) {
+  throw new Error('MINDVERSE_BUILD_DIR may only select the isolated ../.e2e-web directory')
+}
+const buildOutputDir = isolatedBuild ? e2eOutputDir : deployOutputDir
 
 // 多页构建：保持 Go 侧路由不变（/ 与 /universe.html，/s/{id} 复用后者）。
-// 产物直接落进 web/，Go 用 http.FileServer 提供。
+// 普通产物落进 web/，Go 用 http.FileServer 提供；E2E 产物隔离到 .e2e-web/。
 //
-// emptyOutDir 必须关掉 —— web/ 下还有手工维护的 static/。但只关掉它，
+// 普通构建的 emptyOutDir 必须关掉 —— web/ 下还有手工维护的 static/。但只关掉它，
 // 带哈希名的旧产物会一直堆积（构建十次就攒十份 universe-*.js）。
 // 所以单独清 assets/，两边都要。
 function cleanAssets(dir: string): Plugin {
@@ -54,11 +62,11 @@ function emitBuildMetadata(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), cleanAssets(resolve(configDir, '../web/assets')), emitBuildMetadata()],
+  plugins: [react(), cleanAssets(resolve(buildOutputDir, 'assets')), emitBuildMetadata()],
   base: '/',
   build: {
-    outDir: resolve(configDir, '../web'),
-    emptyOutDir: false,
+    outDir: buildOutputDir,
+    emptyOutDir: isolatedBuild,
     manifest: true,
     rolldownOptions: {
       input: {

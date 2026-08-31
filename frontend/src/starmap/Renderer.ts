@@ -499,8 +499,8 @@ export class Renderer {
 
     this.composer.render()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, rawFrameMs)
-    this.signals.frameSucceeded()
-    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+    const becameReady = this.signals.frameSucceeded()
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1' && becameReady) {
       sessionStorage.removeItem(E2E_SHADER_FAILURE_MARK)
     }
     this.labels.tooClose = this.R * 0.2

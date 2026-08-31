@@ -1,6 +1,6 @@
 import { readFile, stat, unlink } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
+import { parse, resolve, sep } from 'node:path'
 
 export const MAX_CHUNK_BYTES = 500_000
 export const THREE_CHUNK_BYTES = 850_000
@@ -109,8 +109,20 @@ export function validateBuildBoundaries({ manifest, chunks, assetSizes }) {
   }
 }
 
+export function resolveBuildOutputDir(argument, cwd = process.cwd()) {
+  if (typeof argument !== 'string' || argument.trim() === '') {
+    throw new Error('build boundary: explicit output directory is required')
+  }
+  const outputDir = resolve(cwd, argument)
+  if (outputDir === parse(outputDir).root) {
+    throw new Error('build boundary: filesystem root cannot be used as output directory')
+  }
+  return outputDir
+}
+
 async function main() {
-  const outputDir = new URL('../../web/', import.meta.url)
+  const outputPath = resolveBuildOutputDir(process.argv[2])
+  const outputDir = pathToFileURL(outputPath.endsWith(sep) ? outputPath : outputPath + sep)
   const manifest = JSON.parse(await readFile(new URL('.vite/manifest.json', outputDir), 'utf8'))
   const metadataPath = new URL('.vite/build-metadata.json', outputDir)
   const metadata = JSON.parse(await readFile(metadataPath, 'utf8'))

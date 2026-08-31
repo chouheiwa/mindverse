@@ -83,10 +83,11 @@ export class RendererSignals {
     this.onError = onError
   }
 
-  frameSucceeded(): void {
-    if (this.destroyed || this.ready || this.failed) return
+  frameSucceeded(): boolean {
+    if (this.destroyed || this.ready || this.failed) return false
     this.ready = true
     this.onReady?.()
+    return true
   }
 
   frameFailed(cause: unknown): void {

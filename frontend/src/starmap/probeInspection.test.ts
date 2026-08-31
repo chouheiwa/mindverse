@@ -429,6 +429,12 @@ describe('Renderer probe inspection commands', () => {
     expect(failed).toHaveBeenCalledOnce()
     expect(failed.mock.calls[0][0]).toMatchObject({ probeId: 'probe:1', token: 88 })
     expect(failed.mock.calls[0][0].cause).toBeInstanceOf(Error)
+    expect(renderer.inspectionProbeId).toBeNull()
+    expect(renderer.arrivedProbeId).toBeNull()
+    const probes = renderer.probes as Record<string, ReturnType<typeof vi.fn>>
+    expect(probes.inspect).toHaveBeenLastCalledWith(null)
+    expect(probes.setScanning).toHaveBeenLastCalledWith(false)
+    expect(probes.setPartHighlight).toHaveBeenLastCalledWith(null)
   })
 
   test('pose, part focus and near-only double-click stay in the probe layer', () => {
@@ -593,19 +599,38 @@ describe('Renderer probe inspection commands', () => {
     }
   })
 
-  test('a legal scan setup exception synchronizes renderer and real-layer cleanup', () => {
+  test.each(['inspect', 'setScanning'] as const)(
+    'a legal scan $s exception preserves the real inspection and permits a successful retry', (failurePoint) => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
     const failed = vi.fn()
-    const { renderer, layer, stars } = realProbeRenderer(true, { onProbeError: failed })
+    const { renderer, layer, stars } = realProbeRenderer(true, {
+      onProbeError: failed,
+      onProbeScanComplete: complete,
+    })
     try {
       renderer.approachProbe(sharedProbe.id, 43)
       const focusedId = currentDatumId(renderer.focusStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
+      const pose = new ProbeInspectionController().pan(24, -12)
+      renderer.setProbeInspectionPose(pose)
       renderer.focusProbePart('scanner-lens')
+      let shouldFail = true
       renderer.probes = {
         ...layer,
+        inspect: (probeId: string | null) => {
+          layer.inspect(probeId)
+          if (failurePoint === 'inspect' && probeId && shouldFail) {
+            shouldFail = false
+            throw new Error('scan inspect failed')
+          }
+        },
         setScanning: (scanning: boolean) => {
           layer.setScanning(scanning)
-          if (scanning) throw new Error('scan visual failed')
+          if (failurePoint === 'setScanning' && scanning && shouldFail) {
+            shouldFail = false
+            throw new Error('scan visual failed')
+          }
         },
       }
 
@@ -614,12 +639,61 @@ describe('Renderer probe inspection commands', () => {
       expect(failed).toHaveBeenCalledOnce()
       expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 44 })
       expect(renderer.probeTransition).toBeNull()
-      expect(renderer.inspectionProbeId).toBeNull()
-      expect(renderer.arrivedProbeId).toBeNull()
+      expect(renderer.inspectionProbeId).toBe(sharedProbe.id)
+      expect(renderer.arrivedProbeId).toBe(sharedProbe.id)
+      expect(renderer.inspectionPose).toEqual(pose)
       expect(probeLayerSnapshot(layer)).toMatchObject({
-        inspectedProbeId: null,
+        inspectedProbeId: sharedProbe.id,
+        nearCandidateId: sharedProbe.id,
         scanning: false,
-        highlightedPart: null,
+        highlightedPart: 'scanner-lens',
+      })
+
+      renderer.reduceMotion = false
+      renderer.startProbeScan(sharedProbe.id, 45)
+      expect(probeLayerSnapshot(layer).scanning).toBe(true)
+      vi.runAllTimers()
+      expect(complete).toHaveBeenCalledWith({ probeId: sharedProbe.id, token: 45 })
+      expect(probeLayerSnapshot(layer).scanning).toBe(false)
+    } finally {
+      layer.dispose()
+    }
+  })
+
+  test('a scan error callback can synchronously retry without the failed cleanup erasing it', () => {
+    const complete = vi.fn()
+    const { renderer, layer, stars } = realProbeRenderer(true)
+    try {
+      renderer.approachProbe(sharedProbe.id, 46)
+      updateProbeNear(layer, stars, currentDatumId(renderer.focusStar as StarDatum))
+      renderer.focusProbePart('antenna')
+      let shouldFail = true
+      renderer.probes = {
+        ...layer,
+        setScanning: (scanning: boolean) => {
+          layer.setScanning(scanning)
+          if (scanning && shouldFail) {
+            shouldFail = false
+            throw new Error('scan visual failed once')
+          }
+        },
+      }
+      renderer.cb = {
+        onProbeScanComplete: complete,
+        onProbeError: ({ probeId }: { probeId: string }) => renderer.startProbeScan(probeId, 47),
+      }
+
+      renderer.startProbeScan(sharedProbe.id, 46)
+
+      expect(complete).toHaveBeenCalledOnce()
+      expect(complete).toHaveBeenCalledWith({ probeId: sharedProbe.id, token: 47 })
+      expect(renderer.inspectionProbeId).toBe(sharedProbe.id)
+      expect(renderer.arrivedProbeId).toBe(sharedProbe.id)
+      expect(probeLayerSnapshot(layer)).toMatchObject({
+        inspectedProbeId: sharedProbe.id,
+        nearCandidateId: sharedProbe.id,
+        scanning: false,
+        highlightedPart: 'antenna',
       })
     } finally {
       layer.dispose()

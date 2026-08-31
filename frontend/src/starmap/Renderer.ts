@@ -937,7 +937,16 @@ export class Renderer {
     cause: unknown,
   ): void {
     if (this.probeTransition !== transition) return
-    this.exitProbeInspection()
+    if (transition.kind === 'scan') {
+      this.cancelProbeTransition()
+      try {
+        this.probes.setScanning(false)
+      } catch {
+        // Preserve the arrived inspection even if the failed scan visual cannot reset itself.
+      }
+    } else {
+      this.exitProbeInspection()
+    }
     this.reportProbeError(transition.probeId, transition.token, cause)
   }
 

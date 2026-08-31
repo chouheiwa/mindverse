@@ -156,9 +156,14 @@ describe('Universe question keyboard integration', () => {
 
     await user.click(screen.getByRole('button', { name: '开始扫描' }))
     expect(testState.scanCalls).toEqual([['article:21', 2]])
-    act(() => testState.callbacks?.onProbeScanComplete?.({ probeId: 'article:21', token: 1 }))
+    act(() => testState.callbacks?.onProbeError?.({ probeId: 'article:21', token: 2, cause: new Error('scan failed') }))
+    expect(screen.getByRole('heading', { name: '检查探测器：真实文章标题' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: '查看原文章' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '开始扫描' }))
+    expect(testState.scanCalls).toEqual([['article:21', 2], ['article:21', 3]])
     act(() => testState.callbacks?.onProbeScanComplete?.({ probeId: 'article:21', token: 2 }))
+    expect(screen.queryByRole('link', { name: '查看原文章' })).not.toBeInTheDocument()
+    act(() => testState.callbacks?.onProbeScanComplete?.({ probeId: 'article:21', token: 3 }))
     expect(screen.getByRole('link', { name: '查看原文章' })).toHaveAttribute('href', 'https://zhuanlan.zhihu.com/p/21')
 
     await user.keyboard('{Escape}')

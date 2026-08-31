@@ -18,6 +18,7 @@ import { RendererSignals, ResourceScope } from './resourceScope'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
 import { LabelStrategyCache } from './labelVisibility'
+import { makeProbe, type ProbeLayer } from './gl/probe'
 
 /**
  * 星图渲染器。
@@ -89,6 +90,7 @@ export class Renderer {
   private nebula: NebulaLayer
   private stars: StarLayer
   private bodies: BodyLayer
+  private probes: ProbeLayer
   private dust: DustLayer
   private rings: RingLayer | null
   private overlay: Overlay3D
@@ -150,6 +152,9 @@ export class Renderer {
 
   private tmp = new THREE.Vector3()
   private tmp2 = new THREE.Vector3()
+  private probeStarWorldPositions = new Map<string, THREE.Vector3>()
+  private probeStarOpacities = new Map<string, number>()
+  private probeStarData: StarDatum[] = []
   private lost = false
   private destroyed = false
   private suspendedAt: number | null = null
@@ -212,6 +217,12 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, this.R * 90)
 
     const data = starData(u)
+    this.probeStarData = data.filter(({ s }) => 'id' in s && s.probeIds.length > 0)
+    for (const { s } of this.probeStarData) {
+      if (!('id' in s)) continue
+      this.probeStarWorldPositions.set(s.id, new THREE.Vector3())
+      this.probeStarOpacities.set(s.id, 1)
+    }
     this.labelStrategy = new LabelStrategyCache(u.clusters, data)
     this.nebula = makeNebula(this.renderer, this.R, nebulaPalette(u), environment)
     this.resources.defer(() => this.nebula.dispose())
@@ -219,6 +230,8 @@ export class Renderer {
     this.resources.defer(() => this.stars.dispose())
     this.bodies = makeBodies(index, reduceMotion)
     this.resources.defer(() => this.bodies.dispose())
+    this.probes = makeProbe(index, data)
+    this.resources.defer(() => this.probes.dispose())
     this.dust = makeDust(u, reduceMotion)
     this.resources.defer(() => this.dust.dispose())
     this.rings = makeRings(u)
@@ -228,7 +241,7 @@ export class Renderer {
     this.labels = new Labels(labelCanvas)
     this.resources.defer(() => this.labels.dispose())
 
-    this.scene.add(this.nebula.group, this.dust.group, this.bodies.group, this.stars.group, this.overlay.group)
+    this.scene.add(this.nebula.group, this.dust.group, this.bodies.group, this.probes.group, this.stars.group, this.overlay.group)
     if (this.rings) this.scene.add(this.rings.object)
 
     // MSAA 只有 WebGL2 有；WebGL1 上退化成无抗锯齿，轨道环会毛一点，不致命
@@ -468,6 +481,25 @@ export class Renderer {
     this.stars.setUniform('uLitFloor', litFloor)
     this.bodies.setUniform('uLitFloor', litFloor)
     this.bodies.updatePlanetLods(this.camera, A, projScale)
+    const focusedStarId = this.focusStar && 'id' in this.focusStar.s ? this.focusStar.s.id : null
+    for (const datum of this.probeStarData) {
+      if (!('id' in datum.s)) continue
+      const world = this.probeStarWorldPositions.get(datum.s.id)
+      if (!world) continue
+      this.starWorld(datum, A, world)
+      const focusOpacity = focusedStarId === null || focusedStarId === datum.s.id ? 1 : 0.12
+      this.probeStarOpacities.set(datum.s.id,
+        renderDim(datum.s, this.mode, this.u, this.wormIdx) * focusOpacity)
+    }
+    this.probes.update({
+      elapsedMs: A,
+      camera: this.camera,
+      projectionScale: projScale / this.dpr,
+      focusedStarId,
+      convergence: conv,
+      starWorldPositions: this.probeStarWorldPositions,
+      starOpacities: this.probeStarOpacities,
+    })
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)
     this.rings?.setUniform('uFar', far)

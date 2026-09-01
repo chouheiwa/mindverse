@@ -47,7 +47,7 @@ let active: ActiveDiagnostics | null = null
 
 // Covers the required 30-second measurement with five seconds of headroom,
 // including high-refresh-rate (240Hz) displays.
-export const E2E_FRAME_CAPACITY = 35 * 240
+export const E2E_FRAME_CAPACITY = 35 * 240 + 1
 
 export function forcedE2EQuality(search: string): Quality | null {
   const quality = new URLSearchParams(search).get('e2eQuality')

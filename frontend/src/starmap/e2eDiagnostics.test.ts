@@ -55,21 +55,24 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
   expect(window.__MINDVERSE_E2E__).toBeUndefined()
 })
 
-test('retains 35 seconds at 240Hz and reports the first overflow', () => {
-  expect(E2E_FRAME_CAPACITY).toBe(35 * 240)
+test('retains the closed 35-second interval at 240Hz and reports the first overflow', () => {
+  const closedIntervalSamples = 35 * 240 + 1
+  expect(E2E_FRAME_CAPACITY).toBe(closedIntervalSamples)
   const owner = installDiagnostics()
-  for (let index = 0; index < E2E_FRAME_CAPACITY; index += 1) {
-    recordE2EFrame(owner, 1, 0, index)
+  for (let index = 0; index < closedIntervalSamples; index += 1) {
+    recordE2EFrame(owner, 1_000 / 240, 0, index * 1_000 / 240)
   }
-  expect(window.__MINDVERSE_E2E__!.snapshot().frames).toMatchObject({
+  expect(window.__MINDVERSE_E2E__!.snapshot().frames).toEqual({
     firstSequence: 0,
-    nextSequence: E2E_FRAME_CAPACITY,
+    nextSequence: closedIntervalSamples,
     dropped: 0,
+    firstTimestampMs: 0,
+    lastTimestampMs: 35_000,
   })
-  recordE2EFrame(owner, 1, 0, E2E_FRAME_CAPACITY)
+  recordE2EFrame(owner, 1_000 / 240, 0, closedIntervalSamples * 1_000 / 240)
   expect(window.__MINDVERSE_E2E__!.snapshot().frames).toMatchObject({
     firstSequence: 1,
-    nextSequence: E2E_FRAME_CAPACITY + 1,
+    nextSequence: closedIntervalSamples + 1,
     dropped: 1,
   })
 })

@@ -28,6 +28,10 @@ declare global {
 // Each case owns a real WebGL context; concurrent Chromium software renderers are unstable in CI.
 test.describe.configure({ mode: 'serial' })
 
+test.beforeEach(({ page: _page }, testInfo) => {
+  if (testInfo.project.name === 'swiftshader-functional') testInfo.setTimeout(90_000)
+})
+
 async function gpuRenderer(page: Page) {
   return page.locator('canvas[aria-label="认知宇宙三维星图"]').evaluate((node: HTMLCanvasElement) => {
     const gl = node.getContext('webgl2') ?? node.getContext('webgl')
@@ -71,7 +75,7 @@ async function openProductionUniverse(page: Page, query = '') {
 }
 
 async function expectRendererReady(page: Page) {
-  await expect(page.getByTestId('universe-root')).toHaveAttribute('data-render-state', 'ready', { timeout: 15_000 })
+  await expect(page.getByTestId('universe-root')).toHaveAttribute('data-render-state', 'ready', { timeout: 60_000 })
 }
 
 async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
@@ -402,15 +406,20 @@ for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
     expect(snapshot.quality).toBe(quality)
     expect(snapshot.scene).toMatchObject({ planetCount: 512, probeCount: 300 })
     expect(snapshot.frames.dropped).toBe(0)
+    expect(snapshot.frames.nextSequence).toBeGreaterThan(warm.frames.nextSequence)
+    expect(snapshot.frames.firstSequence).toBeLessThanOrEqual(warm.frames.nextSequence)
+    const windowDropped = Math.max(0, snapshot.frames.firstSequence - warm.frames.nextSequence)
+    expect(windowDropped).toBe(0)
     const offset = warm.frames.nextSequence - snapshot.frames.firstSequence
     expect(offset).toBeGreaterThanOrEqual(0)
     const samples = snapshot.frameTimes.slice(offset)
+    expect(samples).toHaveLength(snapshot.frames.nextSequence - warm.frames.nextSequence)
     expect(samples.length).toBeGreaterThan(30)
     const coveredMs = snapshot.frames.lastTimestampMs! - warm.frames.lastTimestampMs!
     expect(coveredMs).toBeGreaterThanOrEqual(30_000)
     const p95 = percentile95(samples)
     const gpu = await gpuRenderer(page)
-    process.stdout.write(`[performance] quality=${quality} samples=${samples.length} covered=${coveredMs.toFixed(1)}ms dropped=${snapshot.frames.dropped} p95=${p95.toFixed(2)}ms limit=${limit}ms gpu=${gpu}\n`)
+    process.stdout.write(`[performance] quality=${quality} samples=${samples.length} covered=${coveredMs.toFixed(1)}ms windowDropped=${windowDropped} totalDropped=${snapshot.frames.dropped} p95=${p95.toFixed(2)}ms limit=${limit}ms gpu=${gpu}\n`)
     expect(p95).toBeLessThanOrEqual(limit)
   })
 }

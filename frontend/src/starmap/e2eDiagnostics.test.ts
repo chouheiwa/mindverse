@@ -79,6 +79,27 @@ test('retains the closed 35-second interval at 240Hz and reports the first overf
   })
 })
 
+test('linearizes duration, timestamp and sequence in logical order after ring wrap-around', () => {
+  const owner = installDiagnostics()
+  for (let index = 0; index < E2E_FRAME_CAPACITY + 3; index += 1) {
+    recordE2EFrame(owner, index + 0.5, 0, index * 10)
+  }
+  const snapshot = window.__MINDVERSE_E2E__!.snapshot()
+  expect(snapshot.frames).toEqual({
+    firstSequence: 3,
+    nextSequence: E2E_FRAME_CAPACITY + 3,
+    dropped: 3,
+    firstTimestampMs: 30,
+    lastTimestampMs: (E2E_FRAME_CAPACITY + 2) * 10,
+  })
+  expect(snapshot.frameTimes).toHaveLength(E2E_FRAME_CAPACITY)
+  expect(snapshot.frameTimes.slice(0, 3)).toEqual([3.5, 4.5, 5.5])
+  expect(snapshot.frameTimes.at(-1)).toBe(E2E_FRAME_CAPACITY + 2.5)
+  expect(snapshot.frameTimestampsMs.slice(0, 3)).toEqual([30, 40, 50])
+  expect(snapshot.frameTimestampsMs.at(-1)).toBe((E2E_FRAME_CAPACITY + 2) * 10)
+  expect(snapshot.frameSequences.every((sequence, index) => sequence === index + 3)).toBe(true)
+})
+
 test('retains a complete post-warm 30-second window after startup samples already overflowed', () => {
   const owner = installDiagnostics()
   const startupSamples = E2E_FRAME_CAPACITY + 100

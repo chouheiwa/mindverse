@@ -1,27 +1,11 @@
 import { expect, test, type Page, type Response } from '@playwright/test'
+import type { RenderSnapshot } from '../src/starmap/e2eDiagnostics'
 import { installUniverseFixture, type E2EUniverseFixture } from './helpers/fixtureRoute'
 
 type E2EQuality = 'high' | 'medium' | 'low'
-interface RenderSnapshot {
-  renderReady: boolean
-  frameTimes: number[]
-  frames: {
-    firstSequence: number, nextSequence: number, dropped: number,
-    firstTimestampMs: number | null, lastTimestampMs: number | null,
-  }
-  memory: { geometries: number, textures: number }
-  quality: E2EQuality
-  probeTransitionFrames: number
-  scene: {
-    planetCount: number, probeCount: number, probeNearVisible: boolean,
-    firstStarX: number | null, firstStarY: number | null,
-    cameraDistance: number, targetDistance: number,
-  }
-}
 
 declare global {
   interface Window {
-    __MINDVERSE_E2E__?: { snapshot(): RenderSnapshot }
     __e2eShaderMarkerClearCount?: number
   }
 }

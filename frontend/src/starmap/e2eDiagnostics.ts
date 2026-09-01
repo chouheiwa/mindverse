@@ -1,8 +1,10 @@
 import type { Quality } from './quality'
 
-interface E2ERenderSnapshot {
+export interface RenderSnapshot {
   renderReady: boolean
   frameTimes: number[]
+  frameTimestampsMs: number[]
+  frameSequences: number[]
   frames: {
     firstSequence: number
     nextSequence: number
@@ -21,19 +23,27 @@ interface E2ERenderSnapshot {
 }
 
 interface E2EDiagnosticsApi {
-  snapshot(): E2ERenderSnapshot
+  snapshot(): RenderSnapshot
+}
+
+interface FrameSample {
+  duration: number
+  timestampMs: number
+  sequence: number
 }
 
 interface ActiveDiagnostics {
   owner: object
   api: E2EDiagnosticsApi
-  frameTimes: number[]
-  frameTimestamps: number[]
+  samples: Array<FrameSample | null>
+  head: number
+  length: number
+  lastTimestampMs: number | null
   nextSequence: number
   dropped: number
   renderReady: boolean
-  memory(): E2ERenderSnapshot['memory']
-  scene(): E2ERenderSnapshot['scene']
+  memory(): RenderSnapshot['memory']
+  scene(): RenderSnapshot['scene']
   quality: Quality
   probeTransitionFrames: number
 }
@@ -58,31 +68,47 @@ export function forcedE2EQuality(search: string): Quality | null {
 export function installE2EDiagnostics(
   owner: object,
   quality: Quality,
-  memory: () => E2ERenderSnapshot['memory'],
-  scene: () => E2ERenderSnapshot['scene'],
+  memory: () => RenderSnapshot['memory'],
+  scene: () => RenderSnapshot['scene'],
 ): void {
   let state: ActiveDiagnostics
   const api: E2EDiagnosticsApi = Object.freeze({
-    snapshot: (): E2ERenderSnapshot => ({
-      renderReady: state.renderReady,
-      frameTimes: [...state.frameTimes],
-      frames: {
-        firstSequence: state.nextSequence - state.frameTimes.length,
-        nextSequence: state.nextSequence,
-        dropped: state.dropped,
-        firstTimestampMs: state.frameTimestamps[0] ?? null,
-        lastTimestampMs: state.frameTimestamps.at(-1) ?? null,
-      },
-      memory: { ...state.memory() },
-      quality: state.quality,
-      probeTransitionFrames: state.probeTransitionFrames,
-      scene: { ...state.scene() },
-    }),
+    snapshot: (): RenderSnapshot => {
+      const frameTimes = new Array<number>(state.length)
+      const frameTimestampsMs = new Array<number>(state.length)
+      const frameSequences = new Array<number>(state.length)
+      for (let logicalIndex = 0; logicalIndex < state.length; logicalIndex += 1) {
+        const sample = state.samples[(state.head + logicalIndex) % E2E_FRAME_CAPACITY]
+        if (sample === null) throw new Error('E2E frame ring invariant violated')
+        frameTimes[logicalIndex] = sample.duration
+        frameTimestampsMs[logicalIndex] = sample.timestampMs
+        frameSequences[logicalIndex] = sample.sequence
+      }
+      return {
+        renderReady: state.renderReady,
+        frameTimes,
+        frameTimestampsMs,
+        frameSequences,
+        frames: {
+          firstSequence: frameSequences[0] ?? state.nextSequence,
+          nextSequence: state.nextSequence,
+          dropped: state.dropped,
+          firstTimestampMs: frameTimestampsMs[0] ?? null,
+          lastTimestampMs: frameTimestampsMs.at(-1) ?? null,
+        },
+        memory: { ...state.memory() },
+        quality: state.quality,
+        probeTransitionFrames: state.probeTransitionFrames,
+        scene: { ...state.scene() },
+      }
+    },
   })
   state = {
     owner,
-    frameTimes: [],
-    frameTimestamps: [],
+    samples: Array.from({ length: E2E_FRAME_CAPACITY }, () => null),
+    head: 0,
+    length: 0,
+    lastTimestampMs: null,
     nextSequence: 0,
     dropped: 0,
     renderReady: false,
@@ -104,16 +130,21 @@ export function recordE2EFrame(
 ): void {
   if (active?.owner !== owner) return
   active.renderReady = true
-  active.frameTimes.push(duration)
-  const previousTimestamp = active.frameTimestamps.at(-1)
-  active.frameTimestamps.push(previousTimestamp === undefined ? timestampMs : Math.max(previousTimestamp, timestampMs))
-  active.nextSequence += 1
-  if (probeNearOpacity > 0.001 && probeNearOpacity < 0.999) active.probeTransitionFrames += 1
-  if (active.frameTimes.length > E2E_FRAME_CAPACITY) {
-    active.frameTimes.shift()
-    active.frameTimestamps.shift()
+  const monotonicTimestamp = active.lastTimestampMs === null
+    ? timestampMs
+    : Math.max(active.lastTimestampMs, timestampMs)
+  const sample: FrameSample = { duration, timestampMs: monotonicTimestamp, sequence: active.nextSequence }
+  if (active.length < E2E_FRAME_CAPACITY) {
+    active.samples[(active.head + active.length) % E2E_FRAME_CAPACITY] = sample
+    active.length += 1
+  } else {
+    active.samples[active.head] = sample
+    active.head = (active.head + 1) % E2E_FRAME_CAPACITY
     active.dropped += 1
   }
+  active.lastTimestampMs = monotonicTimestamp
+  active.nextSequence += 1
+  if (probeNearOpacity > 0.001 && probeNearOpacity < 0.999) active.probeTransitionFrames += 1
 }
 
 export function removeE2EDiagnostics(owner: object): void {

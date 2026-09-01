@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import type { Cluster } from '../types'
 import { LabelStrategyCache, starLabelOpacity, visibleClusterLabels, visibleStarLabels } from './labelVisibility'
 import type { StarDatum } from './gl/starData'
+import { starIdentity } from './starIdentity'
 
 const cluster = (g: number, n: number): Cluster => ({
   g, n, name: `c${g}`, lead: '', c: [0, 0, 0], o: 0, f: 0, hue: 0, sat: 0, mem: [],
@@ -76,4 +77,21 @@ test('label strategy caches frame reads and invalidates only on focus changes', 
   expect(cache.revision).toBe(3)
   expect(cache.clusterLabels).toEqual(panorama)
   expect(cache.starLabels).toEqual([])
+})
+
+test('modern stars with the same concept keep independent owner opacity and cache identity', () => {
+  const stars = [
+    { s: { id: 'star:v1:private:same', scope: 'private', c: 'same', g: 3 } },
+    { s: { id: 'star:v1:public:same', scope: 'public', c: 'same', g: 3 } },
+  ] as StarDatum[]
+  expect(visibleStarLabels(stars, stars[0]).map(({ star, opacity }) => [starIdentity(star.s), opacity]))
+    .toEqual([['star:v1:private:same', 1], ['star:v1:public:same', 0.12]])
+
+  const cache = new LabelStrategyCache([cluster(3, 2)], stars)
+  cache.setFocus(stars[0])
+  expect(cache.revision).toBe(1)
+  cache.setFocus(stars[1])
+  expect(cache.revision).toBe(2)
+  expect(cache.starLabels.map(({ star, opacity }) => [starIdentity(star.s), opacity]))
+    .toEqual([['star:v1:private:same', 0.12], ['star:v1:public:same', 1]])
 })

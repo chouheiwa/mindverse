@@ -1,5 +1,6 @@
 import type { Star, Universe } from '../../types'
 import { clusterAxis, orbitPeriod } from '../projection'
+import { starIdentity } from '../starIdentity'
 import { starColor, temperature } from './blackbody'
 
 // 每颗恒星的派生量，全项目唯一的真相源。
@@ -94,7 +95,7 @@ export function starData(u: Universe): StarDatum[] {
   const ignite = new Map<string, number>()
   ;[...stars]
     .sort((a, b) => b.pe * Math.log(1 + b.n) - a.pe * Math.log(1 + a.n))
-    .forEach((s, i) => ignite.set(s.c, IGNITE_START + i * IGNITE_STEP))
+    .forEach((s, i) => ignite.set(starIdentity(s), IGNITE_START + i * IGNITE_STEP))
 
   const rnd = mulberry(97)
   return stars.map((s) => {
@@ -111,7 +112,7 @@ export function starData(u: Universe): StarDatum[] {
       axis,
       period: orbitPeriod(s.p, center),
       start: jet(rnd),
-      ignite: ignite.get(s.c) ?? 0,
+      ignite: ignite.get(starIdentity(s)) ?? 0,
       pointSize: 3.4 + 11 * Math.pow(k, 0.55),
       bodyR: 0.30 + 0.95 * Math.pow(k, 0.55),
       bright: 0.3 + 0.7 * s.pe,

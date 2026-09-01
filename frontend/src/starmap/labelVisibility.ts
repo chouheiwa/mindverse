@@ -1,6 +1,7 @@
 import type { Cluster } from '../types'
 import type { StarDatum } from './gl/starData'
 import { ownerOpacity } from './focusEmphasis'
+import { starIdentity } from './starIdentity'
 
 export interface StarLabelVisibility {
   star: StarDatum
@@ -26,9 +27,10 @@ export function visibleStarLabels(
   focusStar: StarDatum | null,
 ): StarLabelVisibility[] {
   if (!focusStar) return []
+  const focusIdentity = starIdentity(focusStar.s)
   return stars
     .filter((star) => star.s.g === focusStar.s.g)
-    .map((star) => ({ star, opacity: ownerOpacity(star.s.c, focusStar.s.c) }))
+    .map((star) => ({ star, opacity: ownerOpacity(starIdentity(star.s), focusIdentity) }))
 }
 
 /** 只在 focus 变化时重算标签策略；帧循环只读稳定数组。 */
@@ -38,7 +40,7 @@ export class LabelStrategyCache {
   clusterLabels: Cluster[]
   starLabels: StarLabelVisibility[] = []
   revision = 0
-  private focusStarId: string | null = null
+  private focusStarIdentity: string | null = null
 
   constructor(clusters: readonly Cluster[], stars: readonly StarDatum[]) {
     this.sourceClusters = clusters
@@ -47,9 +49,9 @@ export class LabelStrategyCache {
   }
 
   setFocus(focusStar: StarDatum | null): void {
-    const nextId = focusStar?.s.c ?? null
-    if (nextId === this.focusStarId) return
-    this.focusStarId = nextId
+    const nextIdentity = focusStar ? starIdentity(focusStar.s) : null
+    if (nextIdentity === this.focusStarIdentity) return
+    this.focusStarIdentity = nextIdentity
     this.clusterLabels = visibleClusterLabels(this.sourceClusters, focusStar?.s.g ?? null)
     this.starLabels = visibleStarLabels(this.sourceStars, focusStar)
     this.revision += 1

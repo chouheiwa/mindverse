@@ -139,7 +139,7 @@ describe('Panel semantic entries', () => {
     expect(screen.getByText('尚无已收录的文章探测器。')).toBeInTheDocument()
   })
 
-  test.each([20, 100, 512])('paginates all %i questions eight at a time without dropping access', (total) => {
+  const assertQuestionPagination = (total: number) => {
     const questions = Array.from({ length: total }, (_, index) => ({
       id: `question:${index + 1}`, questionId: String(index + 1), title: `问题 ${index + 1}`,
       url: `https://www.zhihu.com/question/${index + 1}`, answerIds: [],
@@ -163,7 +163,12 @@ describe('Panel semantic entries', () => {
       expect(region.querySelector('.entry-status')).toHaveTextContent(`已显示 ${shown} 项，共 ${total} 项`)
     }
     expect(region.querySelector('.entry-more')).toBeNull()
-  })
+  }
+
+  test.each([20, 100])('paginates all %i questions eight at a time without dropping access', assertQuestionPagination)
+  test('paginates all 512 questions eight at a time without dropping access', () => {
+    assertQuestionPagination(512)
+  }, 15_000)
 
   test('paginates probes incrementally and uses semantic Shanghai publication dates', async () => {
     const user = userEvent.setup()

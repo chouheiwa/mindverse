@@ -15,6 +15,7 @@ export default defineConfig({
         'src/starmap/probeInspection.ts',
         'src/starmap/resourceScope.ts',
         'src/starmap/e2eDiagnostics.ts',
+        'src/starmap/starIdentity.ts',
         'src/ui/explorationState.ts',
         'src/ui/ProbeInspectionPanel.tsx',
         'src/ui/RenderFallback.tsx',

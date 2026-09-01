@@ -194,11 +194,16 @@ func BenchmarkRun(b *testing.B) {
 // 对他们则是 83/83 全中，配套文案「你想成为、还没开始的那个人」
 // 变成对其全部兴趣的指控。
 //
-// 这个测试把样本语料的 Own 全部抹掉，断言星图仍然是一张星图。
+// 这个测试把样本语料的创作关系全部改成收藏关系，断言星图仍然是一张星图。
 func TestConsumerProfileKeepsVariety(t *testing.T) {
 	in := loadSample(t)
 	for i := range in.Items {
-		in.Items[i].Own = false
+		item := &in.Items[i]
+		at := item.EffectiveTime()
+		folders := item.EffectiveFolders()
+		item.Own = false
+		item.Bindings = []zhihu.UserContentBinding{{Relation: zhihu.RelationCollected, At: at, Folders: folders}}
+		item.DiscoverySources = []zhihu.DiscoverySource{zhihu.DiscoveryFavoriteList}
 	}
 	u, err := Run(in, Options{}, nil)
 	if err != nil {

@@ -626,8 +626,34 @@ func (p *MockProvider) Fetch(ctx context.Context) (*Corpus, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("解析样本语料失败: %w", err)
 	}
+	for i := range c.Items {
+		upgradeLegacyMockItem(&c.Items[i])
+	}
 	c.Source = "mock"
 	return &c, nil
+}
+
+// upgradeLegacyMockItem brings repository samples written before the domain
+// truth split up to the current ingestion contract. Identity still goes
+// through ResolveIdentity, so an old /answer/{id} URL remains unadmitted: mock
+// compatibility must not invent a question relation that the evidence lacks.
+func upgradeLegacyMockItem(item *Item) {
+	if item.hasDomainTruth() {
+		return
+	}
+
+	item.Identity = ResolveIdentity(item.Type, "", item.URL, item.Title)
+	item.PublishedAt = item.CreatedAt
+	if item.Own {
+		item.Bindings = []UserContentBinding{{Relation: RelationCreated, At: item.CreatedAt}}
+		item.DiscoverySources = []DiscoverySource{DiscoveryOwnContent}
+		return
+	}
+
+	folders := append([]string(nil), item.Folders...)
+	sort.Strings(folders)
+	item.Bindings = []UserContentBinding{{Relation: RelationCollected, At: item.FavTime, Folders: folders}}
+	item.DiscoverySources = []DiscoverySource{DiscoveryFavoriteList}
 }
 
 // SeedProvider 游客模式：以用户现场挑选的问题作为语料。

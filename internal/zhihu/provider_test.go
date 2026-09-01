@@ -194,13 +194,27 @@ func TestMockProviderLoadsRealSample(t *testing.T) {
 	}
 	// 收藏夹名是概念抽取的先验，必须能落到条目上。
 	withFolder := 0
+	resolvedArticles := 0
+	admittedQuestions := 0
 	for _, it := range c.Items {
-		if len(it.Folders) > 0 {
+		if len(it.EffectiveFolders()) > 0 {
 			withFolder++
+		}
+		if it.Identity.Type == TypeArticle && it.Identity.Resolved {
+			resolvedArticles++
+		}
+		if it.Identity.Type == TypeQuestion && it.Identity.Admitted {
+			admittedQuestions++
 		}
 	}
 	if withFolder == 0 {
 		t.Fatal("没有任何条目带收藏夹归属")
+	}
+	if resolvedArticles == 0 {
+		t.Fatal("真实样本中的规范文章 URL 没有恢复成可投影的文章身份")
+	}
+	if admittedQuestions == 0 {
+		t.Fatal("真实样本中的规范问题 URL 没有恢复成可投影的问题身份")
 	}
 	t.Logf("样本 %d 条（创作 %d / 收藏 %d），带收藏夹归属 %d 条", total, own, fav, withFolder)
 }

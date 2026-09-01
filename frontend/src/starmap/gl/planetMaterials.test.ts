@@ -365,6 +365,7 @@ describe('planet surface batching and LOD', () => {
       expect(shader.fragmentShader).toContain('smoothstep(72.0, 84.0, vPlanetPx)')
       expect(shader.fragmentShader).toContain('if (vLod >= 1.5)')
       expect(shader.fragmentShader).toContain('if (vCreated > 0.5)')
+      expect(shader.fragmentShader).toContain('float observationFill')
       expect(shader.fragmentShader).toContain('mix(0.82, fract(uT * 0.00012), uMotion)')
       expect(shader.fragmentShader).not.toContain('divergence')
       expect(shader.fragmentShader).not.toContain('iChronicle')

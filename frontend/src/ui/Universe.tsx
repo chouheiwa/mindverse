@@ -280,10 +280,8 @@ export function PrivateUniverseView() {
     const renderer = rendererRef.current
     renderer?.setWorkspaceOpen(questionEntry !== null)
     if (!questionEntry) return
-    renderer?.suspend()
     return () => {
       renderer?.setWorkspaceOpen(false)
-      renderer?.resume()
     }
   }, [questionEntry])
 
@@ -334,8 +332,7 @@ export function PrivateUniverseView() {
   const onEnterQuestion = useCallback((selected: PlanetDatum) => {
     focusCardFromLaneRef.current = false
     setPlanet(null)
-    rendererRef.current?.clearPlanet()
-    // clearPlanet synchronously emits onPickPlanet(null); write entry last.
+    // The workspace observes this same selected body; it is not a text-only route.
     setQuestionEntry(selected)
   }, [setPlanet, setQuestionEntry])
 
@@ -372,7 +369,6 @@ export function PrivateUniverseView() {
     focusReturnRef.current = trigger
     focusCardFromLaneRef.current = false
     setPlanet(null)
-    rendererRef.current?.clearPlanet()
     setQuestionEntry(selected)
   }, [setPlanet, setQuestionEntry, star])
 
@@ -468,7 +464,8 @@ export function PrivateUniverseView() {
   const y1 = hasSpan ? new Date(m.span[1] * 1000).getFullYear() : null
 
   return (
-    <div data-testid="universe-root" data-render-state={uiState.renderPhase}>
+    <div className={questionEntry ? 'uv-workspace-open' : undefined}
+      data-testid="universe-root" data-render-state={uiState.renderPhase}>
       <canvas ref={canvasRef} className="uv-canvas" tabIndex={0} aria-label="认知宇宙三维星图" />
       <canvas ref={labelRef} className="uv-canvas uv-labels" />
       <div className="vignette" />
@@ -551,6 +548,7 @@ export function PrivateUniverseView() {
         <QuestionWorkspaceGate index={universeIndex} questionId={questionEntry.question.id}
           orbitIndex={questionEntry.orbitIndex} shared={false} readOnly={false}
           onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
+          onOrbit={(deltaX, deltaY) => rendererRef.current?.orbitWorkspace(deltaX, deltaY)}
           getReturnFocus={getQuestionReturnFocus} />
       )}
       <Panel universe={universe} index={universeIndex} star={star} shared={false}

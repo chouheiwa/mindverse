@@ -326,6 +326,10 @@ void main() {
   // 选中：加一道冷色轮缘。不整颗提亮 —— 那会把「自己发光 / 只反射」这条
   // 语义抹平，选中态不该篡改数据本身在说的事
   if (vSel > 0.5) {
+    // 观测仪器的低强度补光只保证夜面仍读得出球体和表面组织；它不改变
+    // created 自发光、freshness 反照率等数据语义。
+    float observationFill = 0.20 + 0.10 * max(0.0, dot(shapedN, V));
+    col += rock * observationFill;
     float rim = pow(1.0 - max(0.0, dot(N, V)), 1.8);
     float scanPhase = mix(0.82, fract(uT * 0.00012), uMotion);
     float longitude = atan(vLocal.z, vLocal.x) / 6.28318530718 + 0.5;

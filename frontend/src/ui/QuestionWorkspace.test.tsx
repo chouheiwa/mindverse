@@ -25,6 +25,20 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('QuestionWorkspace', () => {
+  test('keeps a real planet observation stage and forwards deliberate drag rotation', () => {
+    const onOrbit = vi.fn()
+    render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id}
+      onBack={() => {}} onRestoreCamera={() => {}} onOrbit={onOrbit} />)
+
+    const stage = screen.getByRole('region', { name: '问题行星近景' })
+    expect(stage).toBeVisible()
+    expect(within(stage).getByText(/拖动旋转/)).toBeVisible()
+    fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 80 }))
+    fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 154, clientY: 63 }))
+    fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 154, clientY: 63 }))
+    expect(onOrbit).toHaveBeenCalledWith(34, -17)
+  })
+
   test('shows exact question, canonical links, sample provenance, and distinguishes personal relations', () => {
     const answers = [
       answer('answer:1', { authorName: 'Alice', bindings: [{ relation: 'created', folders: [] }] }),

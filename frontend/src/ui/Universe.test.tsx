@@ -21,6 +21,7 @@ const testState = vi.hoisted(() => ({
   poseCalls: [] as unknown[],
   partCalls: [] as unknown[],
   reducedCalls: [] as boolean[],
+  orbitCalls: [] as Array<[number, number]>,
 }))
 
 const apiState = vi.hoisted(() => ({
@@ -64,6 +65,7 @@ vi.mock('../starmap/Renderer', () => ({
     setProbeInspectionPose(pose: unknown) { testState.poseCalls.push(pose) }
     focusProbePart(part: unknown) { testState.partCalls.push(part) }
     setReducedMotion(reduced: boolean) { testState.reducedCalls.push(reduced) }
+    orbitWorkspace(dx: number, dy: number) { testState.orbitCalls.push([dx, dy]) }
   },
 }))
 
@@ -115,6 +117,7 @@ beforeEach(() => {
   testState.poseCalls = []
   testState.partCalls = []
   testState.reducedCalls = []
+  testState.orbitCalls = []
   apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
     matches: true,
@@ -312,7 +315,7 @@ describe('Universe question keyboard integration', () => {
     expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(screen.queryByRole('button', { name: '关闭问题行星入口' })).not.toBeInTheDocument()
     expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
-    expect(testState.suspendCalls).toBeGreaterThan(0)
+    expect(testState.suspendCalls).toBe(0)
     await user.click(screen.getByRole('button', { name: '返回问题航道' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
@@ -350,15 +353,20 @@ describe('Universe question keyboard integration', () => {
       .getByRole('button', { name: '进入问题行星' })).toHaveFocus())
 
     await user.keyboard('{Enter}')
-    expect(testState.suspendCalls).toBeGreaterThan(0)
+    expect(testState.suspendCalls).toBe(0)
     expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
+    const stage = screen.getByRole('region', { name: '问题行星近景' })
+    fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 30 }))
+    fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 19 }))
+    fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 42, clientY: 19 }))
+    expect(testState.orbitCalls).toEqual([[22, -11]])
     const dialog = screen.getByRole('dialog')
     expect(testState.workspaceCalls).toContain(true)
     fireEvent(dialog, new Event('cancel', { cancelable: true }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(testState.workspaceCalls.at(-1)).toBe(false)
-    expect(testState.resumeCalls).toBeGreaterThan(0)
+    expect(testState.resumeCalls).toBe(0)
     expect(laneButton).toHaveFocus()
 
     await user.click(laneButton)

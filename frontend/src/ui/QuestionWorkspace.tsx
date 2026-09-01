@@ -159,11 +159,13 @@ export interface QuestionWorkspaceProps {
   orbitIndex?: number
   onBack: () => void
   onRestoreCamera: () => void
+  /** Orbit the live, already-selected 3D planet behind this observatory. */
+  onOrbit?: (deltaX: number, deltaY: number) => void
   getReturnFocus?: () => HTMLElement | null
 }
 
 export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
-  onBack, onRestoreCamera, getReturnFocus }: QuestionWorkspaceProps) {
+  onBack, onRestoreCamera, onOrbit, getReturnFocus }: QuestionWorkspaceProps) {
   const isPublic = shared || readOnly
   const mobileTabs = useMobileTabs()
   const tabs: readonly Mode[] = isPublic ? ['retrospective', 'prism'] : ['personal', 'retrospective', 'prism']
@@ -175,6 +177,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   const tabRefs = useRef(new Map<Mode, HTMLButtonElement>())
   const previousPublicRef = useRef(isPublic)
   const closedRef = useRef(false)
+  const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null)
   const modal = useModalDialogLifecycle(dialogRef, { getReturnFocus, initialFocusRef: headingRef })
 
   useLayoutEffect(() => {
@@ -228,6 +231,34 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
         <main className="qw-error"><h1 id="qw-title" ref={headingRef} tabIndex={-1}>无法建立问题工作台</h1><p>{model.message}</p></main>
       ) : (
         <main className="qw-main">
+          <section className="qw-planet-stage" aria-label="问题行星近景"
+            onPointerDown={(event) => {
+              dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+              event.currentTarget.setPointerCapture?.(event.pointerId)
+            }}
+            onPointerMove={(event) => {
+              const previous = dragRef.current
+              if (!previous || previous.pointerId !== event.pointerId) return
+              const deltaX = event.clientX - previous.x
+              const deltaY = event.clientY - previous.y
+              if (deltaX !== 0 || deltaY !== 0) onOrbit?.(deltaX, deltaY)
+              dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+            }}
+            onPointerUp={(event) => {
+              if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null
+              event.currentTarget.releasePointerCapture?.(event.pointerId)
+            }}
+            onPointerCancel={() => { dragRef.current = null }}>
+            <div className="qw-reticle" aria-hidden="true"><i /><i /><i /></div>
+            <div className="qw-planet-readout">
+              <span>LIVE OBJECT · QUESTION</span>
+              <b>{model.answerCount} 条可核验回答</b>
+            </div>
+            <div className="qw-planet-controls">
+              <span>拖动旋转 · 观察表面</span>
+              <button type="button" onClick={() => selectTab('retrospective', true)}>打开答案地层</button>
+            </div>
+          </section>
           <div className="qw-titleblock">
             <p>当前样本 · <span>{model.answerCount} 个当前可访问回答</span></p>
             <h1 id="qw-title" ref={headingRef} tabIndex={-1}>{model.question.title}</h1>

@@ -462,10 +462,23 @@ export class Renderer {
     return this.selectQuestionPlanet(starId, questionId)
   }
 
-  /** Keep the live scene visible but quiet and non-interactive behind the reading workspace. */
+  /** Keep the selected live scene visible behind the observatory controls. */
   setWorkspaceOpen(open: boolean) {
     this.canvas.style.pointerEvents = open ? 'none' : ''
-    this.canvas.style.filter = open ? 'brightness(.55) saturate(.72)' : ''
+    this.canvas.style.filter = ''
+    if (open && this.selected) this.targetDist = PLANET_NEAR
+    if (open && this.w > 760) this.camera.setViewOffset(this.w, this.h, this.w * 0.24, 0, this.w, this.h)
+    else if (open) this.camera.setViewOffset(this.w, this.h, 0, this.h * 0.21, this.w, this.h)
+    else this.camera.clearViewOffset()
+    this.camera.updateProjectionMatrix()
+  }
+
+  /** Dragging the observatory window orbits around the selected question planet. */
+  orbitWorkspace(deltaX: number, deltaY: number) {
+    if (this.destroyed || !this.selected) return
+    this.lastTouch = performance.now()
+    this.yaw += deltaX * 0.0055
+    this.pitch = clamp(this.pitch + deltaY * 0.0045, -1.2, 1.2)
   }
 
   approachProbe(probeId: string, token: number): void {
@@ -607,6 +620,11 @@ export class Renderer {
     this.renderer.setSize(this.w, this.h, false)
     this.composer.setSize(this.w, this.h)
     this.camera.aspect = this.w / this.h
+    if (this.canvas.style.pointerEvents === 'none' && this.w > 760) {
+      this.camera.setViewOffset(this.w, this.h, this.w * 0.24, 0, this.w, this.h)
+    } else if (this.canvas.style.pointerEvents === 'none') {
+      this.camera.setViewOffset(this.w, this.h, 0, this.h * 0.21, this.w, this.h)
+    } else this.camera.clearViewOffset()
     this.camera.updateProjectionMatrix()
     this.labels.resize(this.w, this.h, this.dpr)
   }

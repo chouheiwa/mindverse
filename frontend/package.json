@@ -11,6 +11,8 @@
     "test": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npm run build:e2e && playwright test",
+    "test:e2e:functional": "npm run build:e2e && playwright test --project=swiftshader-functional",
+    "test:e2e:performance": "npm run build:e2e && playwright test --project=metal-performance",
     "test:e2e:install": "playwright install chromium",
     "preview": "vite preview"
   },

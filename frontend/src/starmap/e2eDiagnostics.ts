@@ -3,6 +3,13 @@ import type { Quality } from './quality'
 interface E2ERenderSnapshot {
   renderReady: boolean
   frameTimes: number[]
+  frames: {
+    firstSequence: number
+    nextSequence: number
+    dropped: number
+    firstTimestampMs: number | null
+    lastTimestampMs: number | null
+  }
   memory: { geometries: number, textures: number }
   quality: Quality
   probeTransitionFrames: number
@@ -20,6 +27,9 @@ interface ActiveDiagnostics {
   owner: object
   api: E2EDiagnosticsApi
   frameTimes: number[]
+  frameTimestamps: number[]
+  nextSequence: number
+  dropped: number
   renderReady: boolean
   memory(): E2ERenderSnapshot['memory']
   scene(): E2ERenderSnapshot['scene']
@@ -34,6 +44,10 @@ declare global {
 }
 
 let active: ActiveDiagnostics | null = null
+
+// Covers the required 30-second measurement with five seconds of headroom,
+// including high-refresh-rate (240Hz) displays.
+export const E2E_FRAME_CAPACITY = 35 * 240
 
 export function forcedE2EQuality(search: string): Quality | null {
   const quality = new URLSearchParams(search).get('e2eQuality')
@@ -51,6 +65,13 @@ export function installE2EDiagnostics(
     snapshot: (): E2ERenderSnapshot => ({
       renderReady: state.renderReady,
       frameTimes: [...state.frameTimes],
+      frames: {
+        firstSequence: state.nextSequence - state.frameTimes.length,
+        nextSequence: state.nextSequence,
+        dropped: state.dropped,
+        firstTimestampMs: state.frameTimestamps[0] ?? null,
+        lastTimestampMs: state.frameTimestamps.at(-1) ?? null,
+      },
       memory: { ...state.memory() },
       quality: state.quality,
       probeTransitionFrames: state.probeTransitionFrames,
@@ -60,6 +81,9 @@ export function installE2EDiagnostics(
   state = {
     owner,
     frameTimes: [],
+    frameTimestamps: [],
+    nextSequence: 0,
+    dropped: 0,
     renderReady: false,
     memory,
     scene,
@@ -71,14 +95,24 @@ export function installE2EDiagnostics(
   window.__MINDVERSE_E2E__ = state.api
 }
 
-export function recordE2EFrame(owner: object, duration: number, probeNearOpacity = 0): void {
+export function recordE2EFrame(
+  owner: object,
+  duration: number,
+  probeNearOpacity = 0,
+  timestampMs = performance.now(),
+): void {
   if (active?.owner !== owner) return
   active.renderReady = true
   active.frameTimes.push(duration)
+  const previousTimestamp = active.frameTimestamps.at(-1)
+  active.frameTimestamps.push(previousTimestamp === undefined ? timestampMs : Math.max(previousTimestamp, timestampMs))
+  active.nextSequence += 1
   if (probeNearOpacity > 0.001 && probeNearOpacity < 0.999) active.probeTransitionFrames += 1
-  // 4,096 frames cover more than the required 30-second sample at 120Hz while
-  // keeping this E2E-only, read-only buffer bounded.
-  if (active.frameTimes.length > 4_096) active.frameTimes.shift()
+  if (active.frameTimes.length > E2E_FRAME_CAPACITY) {
+    active.frameTimes.shift()
+    active.frameTimestamps.shift()
+    active.dropped += 1
+  }
 }
 
 export function removeE2EDiagnostics(owner: object): void {

@@ -5,6 +5,10 @@ type E2EQuality = 'high' | 'medium' | 'low'
 interface RenderSnapshot {
   renderReady: boolean
   frameTimes: number[]
+  frames: {
+    firstSequence: number, nextSequence: number, dropped: number,
+    firstTimestampMs: number | null, lastTimestampMs: number | null,
+  }
   memory: { geometries: number, textures: number }
   quality: E2EQuality
   probeTransitionFrames: number
@@ -23,6 +27,27 @@ declare global {
 
 // Each case owns a real WebGL context; concurrent Chromium software renderers are unstable in CI.
 test.describe.configure({ mode: 'serial' })
+
+async function gpuRenderer(page: Page) {
+  return page.locator('canvas[aria-label="认知宇宙三维星图"]').evaluate((node: HTMLCanvasElement) => {
+    const gl = node.getContext('webgl2') ?? node.getContext('webgl')
+    if (!gl) return 'unavailable'
+    const extension = gl.getExtension('WEBGL_debug_renderer_info')
+    return extension ? String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER))
+  })
+}
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (await page.locator('[data-testid="universe-root"][data-render-state="ready"]').count() === 0) return
+  const renderer = await gpuRenderer(page)
+  if (testInfo.project.name === 'swiftshader-functional') {
+    expect(renderer, 'functional WebGL tests must use deterministic SwiftShader').toMatch(/SwiftShader/i)
+  } else if (testInfo.project.name === 'metal-performance') {
+    expect(renderer, 'performance tests require the Darwin Metal backend').toMatch(/Metal/i)
+    expect(renderer).not.toMatch(/SwiftShader/i)
+  }
+  process.stdout.write(`[renderer] project=${testInfo.project.name} gpu=${renderer}\n`)
+})
 
 function collectRuntimeErrors(page: Page) {
   const errors: string[] = []
@@ -124,10 +149,12 @@ async function expectSnapshot(page: Page, quality?: E2EQuality) {
   const mutated = await page.evaluate(() => {
     const first = window.__MINDVERSE_E2E__!.snapshot()
     first.frameTimes.push(-1)
+    first.frames.dropped = -1
     first.memory.geometries = -1
     return window.__MINDVERSE_E2E__!.snapshot()
   })
   expect(mutated.frameTimes).not.toContain(-1)
+  expect(mutated.frames.dropped).toBeGreaterThanOrEqual(0)
   expect(mutated.memory.geometries).toBeGreaterThan(0)
 }
 
@@ -355,7 +382,8 @@ function percentile95(samples: readonly number[]): number {
 }
 
 for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
-  test(`${quality} renders the fixed 512-planet/300-probe fixture within its 30-second p95 budget`, async ({ page }) => {
+  test(`${quality} renders the fixed 512-planet/300-probe fixture within its 30-second p95 budget @metal-performance`, async ({ page }) => {
+    test.skip(process.platform !== 'darwin', 'production performance budgets require Chromium ANGLE Metal on Darwin hardware')
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 1920, height: 1080 })
     const fixture = await installUniverseFixture(page)
@@ -364,21 +392,25 @@ for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
     await expectRendererReady(page)
     expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1)
     await page.waitForTimeout(5_000)
-    const offset = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot().frameTimes.length)
-    await page.waitForTimeout(30_000)
+    const warm = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot())
+    expect(warm.frames.lastTimestampMs).not.toBeNull()
+    await expect.poll(async () => {
+      const current = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot().frames.lastTimestampMs)
+      return current === null || warm.frames.lastTimestampMs === null ? 0 : current - warm.frames.lastTimestampMs
+    }, { timeout: 35_000, intervals: [1_000] }).toBeGreaterThanOrEqual(30_000)
     const snapshot = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot())
     expect(snapshot.quality).toBe(quality)
     expect(snapshot.scene).toMatchObject({ planetCount: 512, probeCount: 300 })
+    expect(snapshot.frames.dropped).toBe(0)
+    const offset = warm.frames.nextSequence - snapshot.frames.firstSequence
+    expect(offset).toBeGreaterThanOrEqual(0)
     const samples = snapshot.frameTimes.slice(offset)
     expect(samples.length).toBeGreaterThan(30)
+    const coveredMs = snapshot.frames.lastTimestampMs! - warm.frames.lastTimestampMs!
+    expect(coveredMs).toBeGreaterThanOrEqual(30_000)
     const p95 = percentile95(samples)
-    const gpu = await page.locator('canvas[aria-label="认知宇宙三维星图"]').evaluate((node: HTMLCanvasElement) => {
-      const gl = node.getContext('webgl2') ?? node.getContext('webgl')
-      if (!gl) return 'unavailable'
-      const extension = gl.getExtension('WEBGL_debug_renderer_info')
-      return extension ? String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER))
-    })
-    process.stdout.write(`[performance] quality=${quality} samples=${samples.length} p95=${p95.toFixed(2)}ms limit=${limit}ms gpu=${gpu}\n`)
+    const gpu = await gpuRenderer(page)
+    process.stdout.write(`[performance] quality=${quality} samples=${samples.length} covered=${coveredMs.toFixed(1)}ms dropped=${snapshot.frames.dropped} p95=${p95.toFixed(2)}ms limit=${limit}ms gpu=${gpu}\n`)
     expect(p95).toBeLessThanOrEqual(limit)
   })
 }

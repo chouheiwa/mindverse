@@ -43,7 +43,7 @@ npm --prefix frontend audit --registry=https://registry.npmjs.org --audit-level=
 
 `frontend` 构建会同时验证产物分包：公开分享路径不得静态加载 Three.js、私人宇宙或个人工作台，且单个 JavaScript 块不得超过 500,000 字节。
 
-`test:e2e` 先生成隔离的生产构建，再由 Go 静态路由启动 Chromium；它覆盖真实 WebGL 首帧、高/中/低画质、512 颗问题行星与 300 个文章探测器的压力预算，以及 Renderer chunk、WebGL 和 Shader 初始化失败时的降级页。降级页的「重试 3D」会在当前页重建渲染器；「返回首页」是无 WebGL 时的永久 fallback 入口。
+`test:e2e` 先生成隔离的生产构建，再由 Go 静态路由启动 Chromium；功能、首帧、降级恢复与检查旅程固定使用 SwiftShader，中/低画质性能预算则仅在 Darwin Metal 硬件上运行（非 Darwin 明确跳过）。两类项目互斥，不会重复执行 30 秒性能用例。它覆盖真实 WebGL 首帧、高/中/低画质、512 颗问题行星与 300 个文章探测器的压力预算，以及 Renderer chunk、WebGL 和 Shader 初始化失败时的降级页。降级页的「重试 3D」会在当前页重建渲染器；「返回首页」是无 WebGL 时的永久 fallback 入口。
 
 ## 探测器操作
 

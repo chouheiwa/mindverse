@@ -41,7 +41,7 @@
           "scope": "private",
           "externalQueryAllowed": false,
           "questionIds": ["question:7"],
-          "probeIds": ["article:112", "article:21"],
+          "probeIds": ["article:112"],
           "c": "Alpha",
           "g": 0,
           "p": [0, 0, 0],
@@ -97,21 +97,17 @@
           "url": "https://zhuanlan.zhihu.com/p/112",
           "bindings": [{ "relation": "created", "at": 2, "folders": [] }],
           "discoverySources": ["own_content"]
-        },
-        {
-          "id": "article:21",
-          "title": "生产构建文章",
-          "summary": "固定测试探测器",
-          "url": "https://zhuanlan.zhihu.com/p/21",
-          "bindings": [{ "relation": "created", "at": 2, "folders": [] }],
-          "discoverySources": ["own_content"]
         }
       ]
     }
   },
+  "stress": {
+    "questionCount": 512,
+    "probeCount": 300
+  },
   "assertions": {
     "minNonBackgroundPixels": 100,
-    "questionCount": 1,
-    "probeCount": 2
+    "questionCount": 512,
+    "probeCount": 300
   }
 }

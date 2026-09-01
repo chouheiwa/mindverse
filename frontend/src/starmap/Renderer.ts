@@ -88,6 +88,7 @@ const SYSTEM_NEAR = 4.5
  */
 const PLANET_NEAR = 1.2
 const E2E_SHADER_FAILURE_MARK = 'mindverse:e2e-shader-failed'
+const FAR_PROBE_MOTION_SAMPLE_MS = 1_000
 function planetDist(orbitR: number) {
   return clamp(orbitR * 0.8, 2.8, 6.0)
 }
@@ -157,6 +158,10 @@ export class Renderer {
   private mode: Mode = 'all'
   private wormIdx = 0
   private quality: Quality
+  private probeMotionSampleMs = 0
+  private lastProbeElapsed = -1
+  private lastProbeFocus: string | null | undefined
+  private lastProbeConvergence = -1
 
   /**
    * 注视点。
@@ -240,6 +245,7 @@ export class Renderer {
       : null
     this.quality = forcedQuality ?? quality
     const environment = cinematicEnvironment(this.quality)
+    this.probeMotionSampleMs = environment.probeMotionSampleMs
 
     this.R = sceneRadius(u)
     this.dist = this.R * 4.6
@@ -316,7 +322,7 @@ export class Renderer {
       : 0
     this.composer = new EffectComposer(this.renderer, {
       frameBufferType: THREE.HalfFloatType,   // 保住 >1.0 的值，热星才会真的 bloom
-      multisampling: Math.min(4, Number.isFinite(maxSamples) ? maxSamples : 0),
+      multisampling: Math.min(environment.multisampling, Number.isFinite(maxSamples) ? maxSamples : 0),
       // 行星必须被恒星正确遮挡，所以这条管线要深度缓冲。
       // 其余图层（星云、尘埃、辉光、星芒）依旧 depthTest:false 叠在上面。
       depthBuffer: true,
@@ -332,7 +338,7 @@ export class Renderer {
       luminanceSmoothing: 0.30,
       intensity: environment.bloom,
       radius: 0.74,
-      levels: 8,
+      levels: environment.bloomLevels,
     })
 
     // 常态深空不创建或显示色差。
@@ -345,7 +351,29 @@ export class Renderer {
     this.resources.defer(() => this.stop())
     this.resize()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
-      installE2EDiagnostics(this, this.quality, () => ({ ...this.renderer.info.memory }))
+      installE2EDiagnostics(
+        this,
+        this.quality,
+        () => ({ ...this.renderer.info.memory }),
+        () => {
+          const probe = probeLayerSnapshot(this.probes)
+          const firstStar = this.bodies.data[0]
+          const firstStarScreen = firstStar
+            ? this.starWorld(
+              firstStar,
+              this.reduceMotion ? 0 : this.lastNow - (this.t0 ?? this.lastNow),
+              new THREE.Vector3(),
+            ).project(this.camera)
+            : null
+          return {
+            planetCount: this.bodies.planets.length,
+            probeCount: probe.probeCount,
+            probeNearVisible: probe.nearCandidateId !== null && probe.nearOpacity > 0.001,
+            firstStarX: firstStarScreen ? (firstStarScreen.x * 0.5 + 0.5) * this.w : null,
+            firstStarY: firstStarScreen ? (-firstStarScreen.y * 0.5 + 0.5) * this.h : null,
+          }
+        },
+      )
     }
     } catch (cause) {
       this.signals.destroy()
@@ -459,6 +487,7 @@ export class Renderer {
       this.inspectionProbeId = probeId
       this.probes.inspect(probeId)
       this.probes.setScanning(false)
+      this.lastProbeElapsed = -1
       if (this.reduceMotion) {
         this.inspectionCameraMix = 1
         this.finishProbeTransition(transition, this.cb.onProbeArrived)
@@ -499,6 +528,7 @@ export class Renderer {
       this.inspectionProbeId = probeId
       this.probes.inspect(probeId)
       this.probes.setScanning(true)
+      this.lastProbeElapsed = -1
       this.inspectionCameraMix = 1
       if (this.reduceMotion) {
         this.probes.setScanning(false)
@@ -544,6 +574,7 @@ export class Renderer {
   focusProbePart(part: ProbePart | null): void {
     if (this.destroyed) return
     this.probes.setPartHighlight(part)
+    this.lastProbeElapsed = -1
   }
 
   exitProbeInspection(): void {
@@ -557,6 +588,7 @@ export class Renderer {
     this.inspectionCameraMix = 0
     if (!hadProbeState) return
     this.resetProbeVisuals()
+    this.lastProbeElapsed = -1
   }
 
   skipGenesis() {
@@ -677,7 +709,20 @@ export class Renderer {
       this.probeStarOpacities.set(datum.s.id,
         renderDim(datum.s, this.mode, this.u, this.wormIdx) * focusOpacity)
     }
-    this.probes.update(writeProbeFrame(this.probeFrame, A, projScale / this.dpr, focusedStarId, conv))
+    const probeSampleMs = focusedStarId === null && this.probeMotionSampleMs > 0
+      ? FAR_PROBE_MOTION_SAMPLE_MS
+      : this.probeMotionSampleMs
+    const probeElapsed = probeSampleMs > 0
+      ? Math.floor(A / probeSampleMs) * probeSampleMs
+      : A
+    if (probeElapsed !== this.lastProbeElapsed
+      || focusedStarId !== this.lastProbeFocus
+      || conv !== this.lastProbeConvergence) {
+      this.probes.update(writeProbeFrame(this.probeFrame, probeElapsed, projScale / this.dpr, focusedStarId, conv))
+      this.lastProbeElapsed = probeElapsed
+      this.lastProbeFocus = focusedStarId
+      this.lastProbeConvergence = conv
+    }
     this.applyProbeInspectionCamera()
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)

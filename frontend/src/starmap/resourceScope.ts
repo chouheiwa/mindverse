@@ -13,6 +13,11 @@ export class ResourceScope {
   private cleanups: ResourceCleanup[] = []
   private closed = false
 
+  /** Read-only lifecycle diagnostic used by rollback tests. */
+  get size(): number {
+    return this.cleanups.length
+  }
+
   defer(cleanup: ResourceCleanup): ResourceCleanup {
     let active = true
     const once = () => {

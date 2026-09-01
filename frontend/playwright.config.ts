@@ -18,6 +18,11 @@ export default defineConfig({
     baseURL: e2eBaseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    launchOptions: {
+      args: process.platform === 'darwin'
+        ? ['--enable-gpu', '--ignore-gpu-blocklist', '--use-angle=metal']
+        : ['--enable-gpu', '--ignore-gpu-blocklist'],
+    },
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },

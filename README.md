@@ -34,12 +34,22 @@ go test ./...
 go test -race ./...
 go vet ./...
 npm --prefix frontend test -- --run
+npm --prefix frontend run test:coverage
 npm --prefix frontend run lint
 npm --prefix frontend run build
+npm --prefix frontend run test:e2e
 npm --prefix frontend audit --registry=https://registry.npmjs.org --audit-level=high
 ```
 
 `frontend` 构建会同时验证产物分包：公开分享路径不得静态加载 Three.js、私人宇宙或个人工作台，且单个 JavaScript 块不得超过 500,000 字节。
+
+`test:e2e` 先生成隔离的生产构建，再由 Go 静态路由启动 Chromium；它覆盖真实 WebGL 首帧、高/中/低画质、512 颗问题行星与 300 个文章探测器的压力预算，以及 Renderer chunk、WebGL 和 Shader 初始化失败时的降级页。降级页的「重试 3D」会在当前页重建渲染器；「返回首页」是无 WebGL 时的永久 fallback 入口。
+
+## 探测器操作
+
+在恒星面板的「文章探测器 · 旁轨材料」中选择「检查探测器」。近景中可用左键拖动旋转、右键拖动平移、滚轮缩放；触屏支持单指旋转和双指缩放/平移。所有操作都有 DOM 按钮等价入口，键盘可用方向键、`+`/`-` 与 `Esc`；部件按钮可直接聚焦主舱、天线等组件。主动扫描完成后只开放当前文章的原文链接。
+
+文章探测器是恒星概念旁的独立材料，产品不会由共现位置生成或暗示任何「文章—问题」关联。
 
 ## 分享与隐私
 

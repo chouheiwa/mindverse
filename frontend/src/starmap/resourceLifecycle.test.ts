@@ -7,6 +7,12 @@ import { makeNebula } from './gl/nebula'
 import { cinematicEnvironment } from './gl/cinematic'
 import { makeBodies } from './gl/bodies'
 import type { UniverseIndex } from '../domain/universe'
+import { makeDust } from './gl/dust'
+import { makeRings } from './gl/rings'
+import { makeOverlay3D } from './gl/overlay3d'
+import { makeProbe } from './gl/probe'
+import { starData } from './gl/starData'
+import { Labels } from './gl/labels'
 
 const emptyUniverse = {
   schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
@@ -39,6 +45,73 @@ const familyIndex: UniverseIndex = {
   questionsById: new Map(familyQuestions.map((question) => [question.id, question])),
   answersById: new Map(), probesById: new Map(),
 }
+
+const lifecycleStar = {
+  ...familyStar,
+  p: [10, 0, 0] as [number, number, number],
+  questionIds: [],
+  probeIds: ['article:lifecycle'],
+}
+const lifecycleProbe = {
+  id: 'article:lifecycle', title: 'lifecycle', url: 'https://zhuanlan.zhihu.com/p/1',
+  bindings: [], discoverySources: ['own_content' as const],
+}
+const lifecycleUniverse = {
+  ...familyUniverse,
+  stars: [lifecycleStar],
+  clusters: [{ ...familyUniverse.clusters[0], mem: [lifecycleStar.c] }],
+  questions: [],
+  probes: [lifecycleProbe],
+  dark: [{ c: lifecycleStar.c, n: 1, f: 1, o: 0, gap: 1, first: '2026.01', last: '2026.01', ev: [] }],
+} satisfies Universe
+const lifecycleIndex: UniverseIndex = {
+  universe: lifecycleUniverse,
+  starsById: new Map([[lifecycleStar.id, lifecycleStar]]),
+  questionsById: new Map(), answersById: new Map(),
+  probesById: new Map([[lifecycleProbe.id, lifecycleProbe]]),
+}
+
+function expectEveryFailedScopeEmpty(action: () => unknown, failAt = 1): void {
+  const sizes: number[] = []
+  const originalDispose = ResourceScope.prototype.dispose
+  const dispose = vi.spyOn(ResourceScope.prototype, 'dispose').mockImplementation(function (this: ResourceScope) {
+    originalDispose.call(this)
+    sizes.push(this.size)
+  })
+  try {
+    __failResourceAfterForTests(failAt)
+    expect(action).toThrow('injected resource failure')
+    expect(sizes.length).toBeGreaterThan(0)
+    expect(sizes).toEqual(sizes.map(() => 0))
+  } finally {
+    __failResourceAfterForTests(null)
+    dispose.mockRestore()
+  }
+}
+
+test('every rendering layer empties its ResourceScope after partial construction failure', () => {
+  const update = vi.spyOn(THREE.CubeCamera.prototype, 'update').mockImplementation(() => undefined)
+  const labelCanvas = document.createElement('canvas')
+  vi.spyOn(labelCanvas, 'getContext').mockReturnValue({ clearRect: vi.fn() } as unknown as CanvasRenderingContext2D)
+  try {
+    const cases: Array<[string, () => unknown]> = [
+      ['stars', () => makeStars(lifecycleUniverse, true, starData(lifecycleUniverse))],
+      ['bodies', () => makeBodies(lifecycleIndex, true)],
+      ['probe', () => makeProbe(lifecycleIndex, starData(lifecycleUniverse))],
+      ['dust', () => makeDust(lifecycleUniverse, true)],
+      ['rings', () => makeRings(lifecycleUniverse)],
+      ['overlay', () => makeOverlay3D(lifecycleUniverse)],
+      ['labels', () => new Labels(labelCanvas)],
+      ['nebula', () => makeNebula(rendererStub, 60, palette, cinematicEnvironment('low'))],
+    ]
+    for (const [name, construct] of cases) {
+      expectEveryFailedScopeEmpty(construct)
+      expect(name).toBeTruthy()
+    }
+  } finally {
+    update.mockRestore()
+  }
+})
 
 test('renderer-style partial construction unwinds returned layers and renderer in reverse order', () => {
   const calls: string[] = []

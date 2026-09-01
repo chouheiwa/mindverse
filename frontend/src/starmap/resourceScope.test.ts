@@ -2,6 +2,23 @@ import { describe, expect, test, vi } from 'vitest'
 import { __failResourceAfterForTests, ResourceScope } from './resourceScope'
 
 describe('ResourceScope', () => {
+  test('reports zero owned resources after a failed construction rollback', () => {
+    const failedSizes: number[] = []
+    const originalDispose = ResourceScope.prototype.dispose
+    const dispose = vi.spyOn(ResourceScope.prototype, 'dispose').mockImplementation(function (this: ResourceScope) {
+      originalDispose.call(this)
+      failedSizes.push(this.size)
+    })
+    try {
+      expect(() => ResourceScope.construct((scope) => {
+        scope.defer(() => undefined)
+        throw new Error('partial construction')
+      })).toThrow('partial construction')
+      expect(failedSizes).toEqual([0])
+    } finally {
+      dispose.mockRestore()
+    }
+  })
   test('disposes in reverse order exactly once', () => {
     const calls: string[] = []
     const scope = new ResourceScope()

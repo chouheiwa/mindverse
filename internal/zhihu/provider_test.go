@@ -196,6 +196,7 @@ func TestMockProviderLoadsRealSample(t *testing.T) {
 	withFolder := 0
 	resolvedArticles := 0
 	admittedQuestions := 0
+	admittedAnswers := 0
 	for _, it := range c.Items {
 		if len(it.EffectiveFolders()) > 0 {
 			withFolder++
@@ -206,6 +207,9 @@ func TestMockProviderLoadsRealSample(t *testing.T) {
 		if it.Identity.Type == TypeQuestion && it.Identity.Admitted {
 			admittedQuestions++
 		}
+		if it.Identity.Type == TypeAnswer && it.Identity.Admitted {
+			admittedAnswers++
+		}
 	}
 	if withFolder == 0 {
 		t.Fatal("没有任何条目带收藏夹归属")
@@ -215,6 +219,9 @@ func TestMockProviderLoadsRealSample(t *testing.T) {
 	}
 	if admittedQuestions == 0 {
 		t.Fatal("真实样本中的规范问题 URL 没有恢复成可投影的问题身份")
+	}
+	if admittedAnswers < 300 {
+		t.Fatalf("真实样本中可投影的回答过少: %d", admittedAnswers)
 	}
 	t.Logf("样本 %d 条（创作 %d / 收藏 %d），带收藏夹归属 %d 条", total, own, fav, withFolder)
 }

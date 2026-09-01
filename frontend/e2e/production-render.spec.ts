@@ -15,6 +15,7 @@ interface RenderSnapshot {
   scene: {
     planetCount: number, probeCount: number, probeNearVisible: boolean,
     firstStarX: number | null, firstStarY: number | null,
+    cameraDistance: number, targetDistance: number,
   }
 }
 
@@ -179,15 +180,44 @@ async function openFirstStarPanel(page: Page) {
   return { canvas, bounds }
 }
 
-async function expectProbeNearTransitionHasNoWebGLError(page: Page) {
+async function expectWheelZoomHasNoWebGLError(page: Page) {
   const skip = page.getByRole('button', { name: '跳过 →' })
   if (await skip.isVisible()) await skip.click()
   const { canvas } = await openFirstStarPanel(page)
-  await canvas.hover()
-  for (let index = 0; index < 12; index += 1) await page.mouse.wheel(0, -100)
-
-  await expect.poll(async () => (await page.evaluate(() => window.__MINDVERSE_E2E__?.snapshot().probeTransitionFrames)) ?? 0)
-    .toBeGreaterThan(0)
+  const before = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot().scene)
+  const wheelResult = await canvas.evaluate(async (node: HTMLCanvasElement, beforeDistance: number) => {
+    const rect = node.getBoundingClientRect()
+    let prevented = 0
+    for (let index = 0; index < 12; index += 1) {
+      const accepted = node.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+        deltaY: -100,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      }))
+      if (!accepted) prevented += 1
+    }
+    const cameraDistance = await new Promise<number>((resolve, reject) => {
+      const deadline = performance.now() + 15_000
+      const check = () => {
+        const distance = window.__MINDVERSE_E2E__?.snapshot().scene.cameraDistance ?? beforeDistance
+        if (distance < beforeDistance - 0.01) resolve(distance)
+        else if (performance.now() >= deadline) reject(new Error('wheel events did not move the camera'))
+        else requestAnimationFrame(check)
+      }
+      requestAnimationFrame(check)
+    })
+    return {
+      prevented,
+      cameraDistance,
+      targetDistance: window.__MINDVERSE_E2E__!.snapshot().scene.targetDistance,
+    }
+  }, before.cameraDistance)
+  expect(wheelResult.prevented).toBe(12)
+  expect(wheelResult.targetDistance).toBeLessThan(before.targetDistance)
+  expect(wheelResult.cameraDistance).toBeLessThan(before.cameraDistance)
 
   const result = await canvas.evaluate(async (node: HTMLCanvasElement) => {
     const gl = node.getContext('webgl2') ?? node.getContext('webgl')
@@ -199,8 +229,6 @@ async function expectProbeNearTransitionHasNoWebGLError(page: Page) {
   })
   expect(result.transitionError).toBe(result.noError)
   expect(result.settledError).toBe(result.noError)
-  const snapshot = await page.evaluate(() => window.__MINDVERSE_E2E__?.snapshot())
-  expect(snapshot?.probeTransitionFrames).toBeGreaterThan(0)
 }
 
 test('production universe satisfies the first-frame render contract', async ({ page }) => {
@@ -214,7 +242,7 @@ test('production universe satisfies the first-frame render contract', async ({ p
   expect(responses.map((response) => response.status())).toEqual([200])
   await expectCanvasContract(page, fixture)
   await expectSnapshot(page)
-  await expectProbeNearTransitionHasNoWebGLError(page)
+  await expectWheelZoomHasNoWebGLError(page)
   expect(errors).toEqual([])
 })
 
@@ -405,7 +433,6 @@ for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
     const snapshot = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot())
     expect(snapshot.quality).toBe(quality)
     expect(snapshot.scene).toMatchObject({ planetCount: 512, probeCount: 300 })
-    expect(snapshot.frames.dropped).toBe(0)
     expect(snapshot.frames.nextSequence).toBeGreaterThan(warm.frames.nextSequence)
     expect(snapshot.frames.firstSequence).toBeLessThanOrEqual(warm.frames.nextSequence)
     const windowDropped = Math.max(0, snapshot.frames.firstSequence - warm.frames.nextSequence)

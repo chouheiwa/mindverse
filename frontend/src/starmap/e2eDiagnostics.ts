@@ -16,6 +16,7 @@ interface E2ERenderSnapshot {
   scene: {
     planetCount: number, probeCount: number, probeNearVisible: boolean,
     firstStarX: number | null, firstStarY: number | null,
+    cameraDistance: number, targetDistance: number,
   }
 }
 

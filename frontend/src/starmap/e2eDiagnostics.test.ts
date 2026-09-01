@@ -22,6 +22,7 @@ function installDiagnostics() {
   const owner = {}
   installE2EDiagnostics(owner, 'medium', () => ({ geometries: 9, textures: 3 }), () => ({
     planetCount: 512, probeCount: 300, probeNearVisible: true, firstStarX: 320, firstStarY: 180,
+    cameraDistance: 16, targetDistance: 4.5,
   }))
   return owner
 }
@@ -43,6 +44,7 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
   })
   expect(first.scene).toEqual({
     planetCount: 512, probeCount: 300, probeNearVisible: true, firstStarX: 320, firstStarY: 180,
+    cameraDistance: 16, targetDistance: 4.5,
   })
   first.frameTimes.length = 0
   first.scene.planetCount = 0
@@ -75,4 +77,29 @@ test('retains the closed 35-second interval at 240Hz and reports the first overf
     nextSequence: closedIntervalSamples + 1,
     dropped: 1,
   })
+})
+
+test('retains a complete post-warm 30-second window after startup samples already overflowed', () => {
+  const owner = installDiagnostics()
+  const startupSamples = E2E_FRAME_CAPACITY + 100
+  for (let index = 0; index < startupSamples; index += 1) {
+    recordE2EFrame(owner, 1_000 / 240, 0, index * 1_000 / 240)
+  }
+  const warm = window.__MINDVERSE_E2E__!.snapshot()
+  expect(warm.frames.dropped).toBe(100)
+
+  const windowSamples = 30 * 240
+  for (let index = 1; index <= windowSamples; index += 1) {
+    recordE2EFrame(owner, 1_000 / 240, 0, warm.frames.lastTimestampMs! + index * 1_000 / 240)
+  }
+  const final = window.__MINDVERSE_E2E__!.snapshot()
+  expect(final.frames.dropped).toBeGreaterThan(warm.frames.dropped)
+  expect(final.frames.firstSequence).toBeLessThanOrEqual(warm.frames.nextSequence)
+  const windowDropped = Math.max(0, final.frames.firstSequence - warm.frames.nextSequence)
+  const offset = warm.frames.nextSequence - final.frames.firstSequence
+  const samples = final.frameTimes.slice(offset)
+  expect(windowDropped).toBe(0)
+  expect(samples).toHaveLength(final.frames.nextSequence - warm.frames.nextSequence)
+  expect(samples).toHaveLength(windowSamples)
+  expect(final.frames.lastTimestampMs! - warm.frames.lastTimestampMs!).toBe(30_000)
 })

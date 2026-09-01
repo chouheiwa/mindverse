@@ -371,6 +371,8 @@ export class Renderer {
             probeNearVisible: probe.nearCandidateId !== null && probe.nearOpacity > 0.001,
             firstStarX: firstStarScreen ? (firstStarScreen.x * 0.5 + 0.5) * this.w : null,
             firstStarY: firstStarScreen ? (-firstStarScreen.y * 0.5 + 0.5) * this.h : null,
+            cameraDistance: this.dist,
+            targetDistance: this.targetDist,
           }
         },
       )

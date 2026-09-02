@@ -7,6 +7,14 @@ export interface RenderSnapshot {
   projectedBounds: {
     selectedPlanet: { x: number, y: number, width: number, height: number } | null
     firstAnswerSpecimen?: { x: number, y: number, width: number, height: number } | null
+    answerSpecimens?: readonly {
+      answerId: string
+      room: 'main' | 'undated' | 'surface'
+      depth: number
+      x: number
+      z: number
+      bounds: { x: number, y: number, width: number, height: number } | null
+    }[]
   }
   lifecycle: {
     rafLoops: number
@@ -35,6 +43,8 @@ export interface RenderSnapshot {
     cameraDistance: number, targetDistance: number,
     cameraAlpha?: number, cameraBeta?: number,
     cameraTargetX?: number, cameraTargetY?: number, cameraTargetZ?: number,
+    strataPose?: { depth: number, yaw: number, pitch: number, snapId: string | null } | null,
+    undatedRoom?: { centerDepth: number, angle: number } | null,
   }
 }
 

@@ -3,10 +3,79 @@ import { installStrataFixture } from './helpers/strataFixtureRoute'
 
 test.describe.configure({ mode: 'serial' })
 
-test.beforeEach((_fixtures, testInfo) => testInfo.setTimeout(90_000))
+test.beforeEach(({ browserName: _browserName }, testInfo) => testInfo.setTimeout(90_000))
 
 const canvas = (page: Page) => page.locator('canvas[aria-label="认知宇宙三维星图"]')
 const snapshot = (page: Page) => page.evaluate(() => window.__MINDVERSE_E2E__?.snapshot())
+
+interface BrowserLifecycleAudit {
+  readonly canvases: number
+  readonly connectedWebglContexts: number
+  readonly pendingAnimationFrames: number
+  readonly listeners: number
+}
+
+async function installLifecycleAudit(page: Page) {
+  await page.addInitScript(() => {
+    const webglCanvases = new Set<HTMLCanvasElement>()
+    const listeners: Array<{ target: EventTarget, type: string, listener: EventListenerOrEventListenerObject, capture: boolean }> = []
+    const pendingFrames = new Set<number>()
+    const nativeGetContext = HTMLCanvasElement.prototype.getContext
+    const nativeAdd = EventTarget.prototype.addEventListener
+    const nativeRemove = EventTarget.prototype.removeEventListener
+    const nativeRequest = window.requestAnimationFrame.bind(window)
+    const nativeCancel = window.cancelAnimationFrame.bind(window)
+
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, ...args: Parameters<HTMLCanvasElement['getContext']>) {
+      const context = nativeGetContext.apply(this, args)
+      if ((args[0] === 'webgl' || args[0] === 'webgl2') && context) webglCanvases.add(this)
+      return context
+    } as HTMLCanvasElement['getContext']
+    EventTarget.prototype.addEventListener = function (this: EventTarget, type, listener, options) {
+      const capture = typeof options === 'boolean' ? options : Boolean(options?.capture)
+      if (listener && !listeners.some((entry) => entry.target === this && entry.type === type
+        && entry.listener === listener && entry.capture === capture)) {
+        listeners.push({ target: this, type, listener, capture })
+      }
+      nativeAdd.call(this, type, listener, options)
+    }
+    EventTarget.prototype.removeEventListener = function (this: EventTarget, type, listener, options) {
+      const capture = typeof options === 'boolean' ? options : Boolean(options?.capture)
+      const index = listeners.findIndex((entry) => entry.target === this && entry.type === type
+        && entry.listener === listener && entry.capture === capture)
+      if (index >= 0) listeners.splice(index, 1)
+      nativeRemove.call(this, type, listener, options)
+    }
+    window.requestAnimationFrame = (callback) => {
+      let id = 0
+      id = nativeRequest((time) => {
+        pendingFrames.delete(id)
+        callback(time)
+      })
+      pendingFrames.add(id)
+      return id
+    }
+    window.cancelAnimationFrame = (id) => {
+      pendingFrames.delete(id)
+      nativeCancel(id)
+    }
+    Object.defineProperty(window, '__MINDVERSE_LIFECYCLE_AUDIT__', {
+      configurable: false,
+      value: {
+        snapshot: (): BrowserLifecycleAudit => ({
+          canvases: document.querySelectorAll('canvas[aria-label="认知宇宙三维星图"]').length,
+          connectedWebglContexts: [...webglCanvases].filter((item) => item.isConnected).length,
+          pendingAnimationFrames: pendingFrames.size,
+          listeners: listeners.filter(({ target }) => !(target instanceof Node) || target.isConnected).length,
+        }),
+      },
+    })
+  })
+}
+
+const lifecycleAudit = (page: Page) => page.evaluate(() => (
+  window as typeof window & { __MINDVERSE_LIFECYCLE_AUDIT__: { snapshot(): BrowserLifecycleAudit } }
+).__MINDVERSE_LIFECYCLE_AUDIT__.snapshot())
 
 async function nonBackgroundRatio(page: Page): Promise<number> {
   return canvas(page).evaluate(async (node: HTMLCanvasElement) => await new Promise<number>((complete, reject) => {
@@ -26,6 +95,7 @@ async function nonBackgroundRatio(page: Page): Promise<number> {
 }
 
 async function openBabylonUniverse(page: Page, query = '') {
+  await installLifecycleAudit(page)
   await installStrataFixture(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto(`/universe.html${query}`)
@@ -69,7 +139,21 @@ async function exitStrata(page: Page) {
   await expect(page.getByRole('button', { name: '打开答案地层' })).toBeVisible()
 }
 
-test('Babylon vertical slice renders, orbits, crosses the surface and preserves lifecycle', async ({ page }) => {
+async function holdKeyUntil(page: Page, key: string, predicate: () => Promise<boolean>) {
+  await page.keyboard.down(key)
+  try {
+    await expect.poll(predicate, { timeout: 5_000 }).toBe(true)
+  } finally {
+    await page.keyboard.up(key)
+    const focused = await page.locator(':focus').elementHandle()
+    await focused?.evaluate((element: HTMLElement) => {
+      element.blur()
+      element.focus()
+    })
+  }
+}
+
+test('Babylon vertical slice renders, orbits, crosses the surface and preserves cave camera pose', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   page.on('console', (message) => {
@@ -80,6 +164,11 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
 
   const initial = (await snapshot(page))!
   await expect(canvas(page)).toHaveCount(1)
+  await expect.poll(async () => await lifecycleAudit(page)).toMatchObject({
+    canvases: 1,
+    connectedWebglContexts: 1,
+    pendingAnimationFrames: 1,
+  })
   expect(initial).toMatchObject({
     rendererKind: 'babylon', activeContextCount: 1, scenePhase: 'universe',
     lifecycle: { rafLoops: 1, listeners: 3 }, scene: { planetCount: 2, probeCount: 0 },
@@ -99,31 +188,26 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   await page.mouse.up()
   await expect.poll(async () => (await snapshot(page))!.scene.cameraAlpha).not.toBe(orbitBefore)
   const entryCamera = (await snapshot(page))!.scene
-  for (let cycle = 0; cycle < 5; cycle += 1) {
-    await enterStrata(page, '回溯地层')
-    const active = (await snapshot(page))!
-    expect(active.activeContextCount).toBe(1)
-    expect(active.lifecycle).toMatchObject({ rafLoops: 1, listeners: 3 })
-    if (cycle === 0) {
-      expect(await nonBackgroundRatio(page)).toBeGreaterThanOrEqual(0.35)
-      const hud = page.getByRole('region', { name: '答案地层导航' })
-      await hud.focus()
-      await page.keyboard.down('s')
-      await page.waitForTimeout(900)
-      await page.keyboard.up('s')
-      await expect.poll(async () => (await snapshot(page))?.scenePhase)
-        .toMatch(/strata-(free|snapped)/)
-      const specimen = await expect.poll(async () => (await snapshot(page))?.projectedBounds.firstAnswerSpecimen)
-        .not.toBeNull()
-      void specimen
-      const target = (await snapshot(page))!.projectedBounds.firstAnswerSpecimen!
-      await canvas(page).click({ position: { x: target.x + target.width / 2, y: target.y + target.height / 2 }, force: true })
-      expect((await snapshot(page))!.lifecycle.lastPick).toBe('specimen')
-      await expect(page.getByRole('dialog', { name: /ANSWER SPECIMEN|固定答案/ })).toBeVisible()
-      await page.getByRole('button', { name: '关闭答案证据板' }).click()
-    }
-    await exitStrata(page)
-  }
+  await enterStrata(page, '回溯地层')
+  expect(await nonBackgroundRatio(page)).toBeGreaterThanOrEqual(0.35)
+  const hud = page.getByRole('region', { name: '答案地层导航' })
+  await hud.focus()
+  await page.keyboard.down('s')
+  await page.waitForTimeout(400)
+  await page.keyboard.up('s')
+  await expect.poll(async () => (await snapshot(page))?.scenePhase).toMatch(/strata-(free|snapped)/)
+  const cave = (await snapshot(page))!
+  const pose = cave.scene.strataPose!
+  expect(cave.scene.cameraTargetY).toBeCloseTo(-pose.depth + Math.sin(pose.pitch), 2)
+  await holdKeyUntil(page, 'd', async () => Boolean((await snapshot(page))?.projectedBounds.answerSpecimens
+    ?.some(({ room, bounds }) => room === 'main' && bounds)))
+  const target = (await snapshot(page))!.projectedBounds.answerSpecimens!
+    .find(({ room, bounds }) => room === 'main' && bounds)!.bounds!
+  await canvas(page).click({ position: { x: target.x + target.width / 2, y: target.y + target.height / 2 }, force: true })
+  expect((await snapshot(page))!.lifecycle.lastPick).toBe('specimen')
+  await expect(page.getByRole('dialog', { name: /ANSWER SPECIMEN|固定答案/ })).toBeVisible()
+  await page.getByRole('button', { name: '关闭答案证据板' }).click()
+  await exitStrata(page)
 
   const after = (await snapshot(page))!
   expect(after.scene.cameraAlpha).toBeCloseTo(entryCamera.cameraAlpha!, 6)
@@ -131,6 +215,63 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   expect(after.scene.cameraDistance).toBeCloseTo(entryCamera.cameraDistance, 6)
   expect(after.activeContextCount).toBe(1)
   expect(errors).toEqual([])
+})
+
+test('five complete mounts release real canvas, context, listeners and RAF resources', async ({ page }) => {
+  await openBabylonUniverse(page)
+  let destroyedBaseline: BrowserLifecycleAudit | null = null
+  for (let cycle = 0; cycle < 5; cycle += 1) {
+    await expectReady(page)
+    await openStar(page)
+    await openQuestionWorkspace(page, '固定地层问题')
+    await enterStrata(page, '回溯地层')
+    await exitStrata(page)
+    await canvas(page).dispatchEvent('webglcontextlost')
+    await expect(page.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
+    await expect.poll(async () => await lifecycleAudit(page)).toMatchObject({
+      canvases: 0,
+      connectedWebglContexts: 0,
+      pendingAnimationFrames: 0,
+    })
+    const released = await lifecycleAudit(page)
+    if (destroyedBaseline === null) destroyedBaseline = released
+    else expect(released.listeners).toBe(destroyedBaseline.listeners)
+    expect(await snapshot(page)).toBeUndefined()
+    if (cycle < 4) await page.getByRole('button', { name: '重试 3D' }).click()
+  }
+})
+
+test('navigates through the side passage and opens the identified undated specimen', async ({ page }) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  await openStar(page)
+  await openQuestionWorkspace(page, '固定地层问题')
+  await enterStrata(page, '回溯地层')
+  const hud = page.getByRole('region', { name: '答案地层导航' })
+  await hud.focus()
+  const undated = (await snapshot(page))!.projectedBounds.answerSpecimens!
+    .find(({ answerId, room }) => answerId === 'answer:999' && room === 'undated')!
+  const targetYaw = Math.atan2(undated.x, undated.z)
+  await holdKeyUntil(page, 's', async () => (await snapshot(page))!.scene.strataPose!.depth >= undated.depth - 0.2)
+  await holdKeyUntil(page, 'd', async () => (await snapshot(page))!.scene.strataPose!.yaw >= targetYaw - 0.05)
+  await holdKeyUntil(page, 'e', async () => (await snapshot(page))!.scene.strataPose!.pitch >= -0.03)
+  try {
+    await holdKeyUntil(page, 'd', async () => Boolean((await snapshot(page))!.projectedBounds.answerSpecimens
+      ?.find(({ answerId, room: specimenRoom }) => answerId === 'answer:999' && specimenRoom === 'undated')?.bounds))
+  } catch (cause) {
+    const state = (await snapshot(page))!
+    const target = state.projectedBounds.answerSpecimens?.find(({ answerId }) => answerId === 'answer:999')
+    throw new Error(`Undated specimen never became pickable: ${JSON.stringify({
+      cause: cause instanceof Error ? cause.message : String(cause),
+      pose: state.scene.strataPose,
+      target,
+      cameraTarget: [state.scene.cameraTargetX, state.scene.cameraTargetY, state.scene.cameraTargetZ],
+    })}`)
+  }
+  const target = (await snapshot(page))!.projectedBounds.answerSpecimens!
+    .find(({ answerId }) => answerId === 'answer:999')!.bounds!
+  await canvas(page).click({ position: { x: target.x + target.width / 2, y: target.y + target.height / 2 }, force: true })
+  await expect(page.getByRole('dialog', { name: /未定年答案/ })).toBeVisible()
 })
 
 test('below-gate question opens a blocked surface-only room', async ({ page }) => {

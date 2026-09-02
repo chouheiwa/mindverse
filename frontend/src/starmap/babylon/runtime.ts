@@ -46,6 +46,7 @@ export class BabylonRuntime {
   private destroyed = false
   private readyReported = false
   private fatalReported = false
+  private listenerCount = 0
 
   constructor(ports: BabylonRuntimePorts, callbacks: BabylonRuntimeCallbacks = {}) {
     this.ports = ports
@@ -98,6 +99,13 @@ export class BabylonRuntime {
     this.disposeAll()
   }
 
+  diagnostics(): Readonly<{ renderLoops: number; listeners: number }> {
+    return Object.freeze({
+      renderLoops: this.running ? 1 : 0,
+      listeners: this.listenerCount,
+    })
+  }
+
   private readonly frame = (): void => {
     if (this.destroyed || this.fatalReported) return
     try {
@@ -124,7 +132,11 @@ export class BabylonRuntime {
 
   private listen(type: string, listener: EventListener): void {
     this.ports.canvas.addEventListener(type, listener)
-    this.cleanups.push(() => this.ports.canvas.removeEventListener(type, listener))
+    this.listenerCount += 1
+    this.cleanups.push(() => {
+      this.ports.canvas.removeEventListener(type, listener)
+      this.listenerCount -= 1
+    })
   }
 
   private startRequestedLoop(): void {

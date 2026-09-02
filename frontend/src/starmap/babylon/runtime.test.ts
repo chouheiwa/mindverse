@@ -61,6 +61,7 @@ describe('BabylonRuntime lifecycle shell', () => {
 
     runtime.start()
     runtime.start()
+    expect(runtime.diagnostics()).toEqual({ renderLoops: 1, listeners: 2 })
     fake.frame()
     fake.frame()
 
@@ -121,10 +122,12 @@ describe('BabylonRuntime lifecycle shell', () => {
     const onReady = vi.fn()
     const onError = vi.fn()
     const runtime = new BabylonRuntime(fake.ports, { onReady, onError })
+    expect(runtime.diagnostics()).toEqual({ renderLoops: 0, listeners: 2 })
     runtime.start()
 
     runtime.destroy()
     runtime.destroy()
+    expect(runtime.diagnostics()).toEqual({ renderLoops: 0, listeners: 0 })
     fake.frame()
     fake.dispatch('webglcontextlost', new Event('webglcontextlost', { cancelable: true }))
     fake.dispatch('webglcontextrestored', new Event('webglcontextrestored'))

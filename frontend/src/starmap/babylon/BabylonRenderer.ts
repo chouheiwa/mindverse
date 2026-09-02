@@ -2,7 +2,7 @@ import { Engine } from '@babylonjs/core/Engines/engine.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js'
-import { Matrix, Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector.js'
+import { Matrix, Quaternion, Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector.js'
 import { Viewport } from '@babylonjs/core/Maths/math.viewport.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
@@ -33,7 +33,13 @@ import { BabylonRuntime, BabylonWebGL2RequiredError } from './runtime'
 import { buildPlanetSurfaceDescriptor, type PlanetSurfaceDescriptor } from './planetSurface'
 import { planetFragmentShader } from './shaders/planet.fragment.fx'
 import { planetVertexShader } from './shaders/planet.vertex.fx'
-import { CAVE_CYLINDER_CAP, movementDeltaSeconds, type CaveLayout, type CaveSpecimenPlacement } from './strataScene'
+import {
+  CAVE_CYLINDER_CAP,
+  movementDeltaSeconds,
+  undatedPassageGeometry,
+  type CaveLayout,
+  type CaveSpecimenPlacement,
+} from './strataScene'
 import { StrataTransitionController, type StrataAnimationPhase } from './strataTransition'
 
 const ORBIT_BASE = 2.1
@@ -536,13 +542,16 @@ export class BabylonRenderer implements MindverseRenderer {
         tessellation: 18,
         subdivisions: 3,
         cap: CAVE_CYLINDER_CAP === 'none' ? Mesh.NO_CAP : Mesh.CAP_ALL,
-        arc: layer.openingAngle === null ? 1 : 0.82,
+        arc: layer.openingAngle === null || !layout.undatedRoom
+          ? 1
+          : undatedPassageGeometry(layout.undatedRoom).wallArc,
         enclose: false,
       }, this.scene)
       wall.parent = root
       wall.position.y = -layer.centerDepth
-      wall.rotation.y = layer.colorIndex * 0.21
-        + (layer.openingAngle === null ? 0 : layer.openingAngle - Math.PI * 0.91)
+      wall.rotation.y = layer.openingAngle === null || !layout.undatedRoom
+        ? layer.colorIndex * 0.21
+        : undatedPassageGeometry(layout.undatedRoom).wallRotationY
       wall.scaling.x = 1 + Math.sin(layer.centerDepth * 1.7) * 0.055
       wall.scaling.z = 1 + Math.cos(layer.centerDepth * 1.3) * 0.07
       wall.isPickable = false
@@ -657,8 +666,10 @@ export class BabylonRenderer implements MindverseRenderer {
     }, this.scene)
     tunnel.parent = root
     tunnel.position.set(room.x * 0.63, -room.centerDepth, room.z * 0.63)
-    tunnel.rotation.z = Math.PI / 2
-    tunnel.rotation.y = -room.angle
+    const passage = undatedPassageGeometry(room)
+    const tunnelDirection = new Vector3(passage.tunnelDirection.x, 0, passage.tunnelDirection.z)
+    tunnel.rotationQuaternion = Quaternion.Identity()
+    Quaternion.FromUnitVectorsToRef(Vector3.Up(), tunnelDirection, tunnel.rotationQuaternion)
     tunnel.isPickable = false
     tunnel.material = chamberMaterial
   }

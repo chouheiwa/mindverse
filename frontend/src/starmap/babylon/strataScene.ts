@@ -47,6 +47,28 @@ const SNAP_ENTER_RADIUS = 0.9
 const SNAP_EXIT_RADIUS = 1.8
 const PITCH_LIMIT = 1.15
 export const CAVE_CYLINDER_CAP = 'none' as const
+export const CAVE_WALL_ARC = 0.82
+const CAVE_OPENING_LOCAL_XZ_ANGLE = Math.PI * (1 - CAVE_WALL_ARC)
+
+export interface UndatedPassageGeometry {
+  readonly wallArc: number
+  readonly wallRotationY: number
+  readonly openingDirection: Readonly<{ x: number; z: number }>
+  readonly tunnelDirection: Readonly<{ x: number; z: number }>
+}
+
+export function undatedPassageGeometry(room: NonNullable<CaveLayout['undatedRoom']>): UndatedPassageGeometry {
+  const length = Math.hypot(room.x, room.z) || 1
+  return Object.freeze({
+    wallArc: CAVE_WALL_ARC,
+    wallRotationY: 0,
+    openingDirection: Object.freeze({
+      x: round(Math.cos(CAVE_OPENING_LOCAL_XZ_ANGLE)),
+      z: round(Math.sin(CAVE_OPENING_LOCAL_XZ_ANGLE)),
+    }),
+    tunnelDirection: Object.freeze({ x: round(room.x / length), z: round(room.z / length) }),
+  })
+}
 
 export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose): CaveLayout {
   const entry = copyPose(entryPose)
@@ -64,7 +86,10 @@ export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose):
   }
 
   const sideRoomDepth = Math.max(2.4, Math.min(scene.bounds.bottom - 1, scene.bounds.bottom * 0.58))
-  const sideRoomAngle = Math.PI * 0.38
+  // Babylon's partial cylinder starts on +X and leaves its missing wedge centered
+  // at PI * (1 - arc). Convert that XZ direction to our sin(angle), cos(angle)
+  // room coordinates so the room, opening and tunnel share one radial axis.
+  const sideRoomAngle = Math.PI / 2 - CAVE_OPENING_LOCAL_XZ_ANGLE
   const sideRoomDistance = CAVE_RADIUS + 2.15
   const undatedRoom = scene.undated.length > 0 ? Object.freeze({
     centerDepth: sideRoomDepth,

@@ -10,6 +10,7 @@ import {
   movementDeltaSeconds,
   snapStrataPose,
   CAVE_CYLINDER_CAP,
+  undatedPassageGeometry,
 } from './strataScene'
 
 const entryPose: StrataPose = Object.freeze({ depth: 3.25, yaw: 0.42, pitch: -0.18, snapId: null })
@@ -41,6 +42,20 @@ describe('Babylon strata cave layout', () => {
     expect(undated.every(({ x, z }) => Math.hypot(x, z) > layout.bounds.radius)).toBe(true)
     expect(layout.undatedRoom).toMatchObject({ radius: 2.2 })
     expect(layout.layers.some(({ openingAngle }) => openingAngle === layout.undatedRoom?.angle)).toBe(true)
+  })
+
+  test('aligns the Babylon wall opening and tunnel with the undated chamber', () => {
+    const layout = buildCaveLayout(buildStrataSceneModel(strataFixture.index, 'question:7'), entryPose)
+    const room = layout.undatedRoom!
+    const passage = undatedPassageGeometry(room)
+    const roomDirection = { x: room.x / Math.hypot(room.x, room.z), z: room.z / Math.hypot(room.x, room.z) }
+    const openingDot = roomDirection.x * passage.openingDirection.x
+      + roomDirection.z * passage.openingDirection.z
+    const tunnelDot = roomDirection.x * passage.tunnelDirection.x
+      + roomDirection.z * passage.tunnelDirection.z
+
+    expect(openingDot).toBeGreaterThan(0.999)
+    expect(tunnelDot).toBeGreaterThan(0.999)
   })
 
   test('orders specimens inside each layer by their real publication time', () => {

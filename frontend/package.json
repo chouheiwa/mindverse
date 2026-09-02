@@ -19,6 +19,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@babylonjs/core": "9.23.0",
     "@noble/hashes": "^2.4.0",
     "postprocessing": "^6.39.4",
     "react": "^19.2.8",

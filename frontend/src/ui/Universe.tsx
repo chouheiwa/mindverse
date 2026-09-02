@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { ArticleProbe, Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone } from '../api'
-import type { Renderer } from '../starmap/Renderer'
+import type { MindverseRenderer } from '../starmap/rendererContract'
 import { Loading } from './Loading'
 import { Panel } from './Panel'
 import { InfoPanel } from './InfoPanel'
@@ -32,7 +32,7 @@ export function PrivateUniverseView() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // 标签单独一层 2D 画布：文字该用文字渲染器画，也不该被 bloom 糊掉
   const labelRef = useRef<HTMLCanvasElement>(null)
-  const rendererRef = useRef<Renderer | null>(null)
+  const rendererRef = useRef<MindverseRenderer | null>(null)
 
   const [gen, setGen] = useState<Pick<Generation, 'stage' | 'progress'>>({
     stage: '正在读取你的知乎足迹', progress: 6,
@@ -115,7 +115,7 @@ export function PrivateUniverseView() {
     let teardownDone = false
     let resizeBound = false
     let rendererModuleLoaded = false
-    let instance: Renderer | null = null
+    let instance: MindverseRenderer | null = null
     let hintTimer: ReturnType<typeof setTimeout> | null = null
     const onResize = () => instance?.resize()
     const teardown = () => {
@@ -134,10 +134,10 @@ export function PrivateUniverseView() {
       if (rendererRef.current === instance) rendererRef.current = null
     }
     const mountRenderer = async () => {
-      const { Renderer: WebGLRenderer } = await import('../starmap/Renderer')
+      const { createRenderer } = await import('virtual:mindverse-renderer')
       rendererModuleLoaded = true
       if (disposed) return
-      const r = new WebGLRenderer(canvas, labels, universeIndex, reduceMotion(), {
+      const r = createRenderer(canvas, labels, universeIndex, reduceMotion(), {
       onPick: (s) => {
         cancelActiveProbe()
         if (s) {

@@ -5,6 +5,7 @@ import * as buildVerifier from './verify-build-boundaries.mjs'
 const { resolveBuildOutputDir, validateBuildBoundaries } = buildVerifier
 
 const validFixture = () => ({
+  renderer: 'three',
   manifest: {
     '_theme.js': { file: 'assets/theme.js', name: 'theme' },
     '_three.js': { file: 'assets/three.js', name: 'three' },
@@ -21,11 +22,11 @@ const validFixture = () => ({
     'src/ui/Universe.tsx': {
       file: 'assets/Universe.js',
       src: 'src/ui/Universe.tsx',
-      dynamicImports: ['src/starmap/Renderer.ts'],
+      dynamicImports: ['virtual:mindverse-renderer'],
     },
-    'src/starmap/Renderer.ts': {
+    'virtual:mindverse-renderer': {
       file: 'assets/Renderer.js',
-      src: 'src/starmap/Renderer.ts',
+      src: 'virtual:mindverse-renderer',
       imports: ['_three.js', '_postprocessing.js'],
     },
     'universe.html': {
@@ -55,6 +56,32 @@ const validFixture = () => ({
   },
 })
 
+const validBabylonFixture = () => {
+  const fixture = validFixture()
+  fixture.renderer = 'babylon'
+  delete fixture.manifest['_three.js']
+  delete fixture.manifest['_postprocessing.js']
+  fixture.manifest['_babylon.js'] = { file: 'assets/babylon.js', name: 'babylon' }
+  fixture.manifest['virtual:mindverse-renderer'] = {
+    file: 'assets/BabylonRenderer.js',
+    src: 'virtual:mindverse-renderer',
+    imports: ['_babylon.js'],
+  }
+  fixture.manifest['src/ui/Universe.tsx'].dynamicImports = ['virtual:mindverse-renderer']
+  fixture.chunks = fixture.chunks.filter(({ file }) =>
+    file !== 'assets/three.js' && file !== 'assets/postprocessing.js' && file !== 'assets/Renderer.js')
+  fixture.chunks.push(
+    { file: 'assets/babylon.js', moduleIds: ['/repo/frontend/node_modules/@babylonjs/core/scene.js'] },
+    { file: 'assets/BabylonRenderer.js', moduleIds: ['/repo/frontend/src/starmap/babylon/BabylonRenderer.ts'] },
+  )
+  delete fixture.assetSizes['assets/three.js']
+  delete fixture.assetSizes['assets/postprocessing.js']
+  delete fixture.assetSizes['assets/Renderer.js']
+  fixture.assetSizes['assets/babylon.js'] = 700_000
+  fixture.assetSizes['assets/BabylonRenderer.js'] = 100
+  return fixture
+}
+
 describe('build boundary verifier', () => {
   test('requires an explicit output directory instead of silently verifying deployable web', () => {
     expect(() => resolveBuildOutputDir(undefined, '/repo/frontend')).toThrow(/output directory.*required/i)
@@ -63,14 +90,50 @@ describe('build boundary verifier', () => {
 
   test('accepts the intended public/private topology and one coherent Three chunk', () => {
     expect(validateBuildBoundaries(validFixture())).toMatchObject({
+      renderer: 'three',
       publicChunkCount: 2,
       threeChunkFile: 'assets/three.js',
     })
   })
 
+  test('requires an explicit renderer kind', () => {
+    const fixture = validFixture()
+    delete fixture.renderer
+    expect(() => validateBuildBoundaries(fixture)).toThrow(/renderer.*three.*babylon/i)
+  })
+
+  test('accepts a Babylon artifact with no Three or postprocessing modules', () => {
+    expect(validateBuildBoundaries(validBabylonFixture())).toMatchObject({
+      renderer: 'babylon',
+      babylonChunkFile: 'assets/babylon.js',
+    })
+  })
+
+  test('rejects Babylon code or import metadata in a Three artifact', () => {
+    const fixture = validFixture()
+    fixture.chunks.push({
+      file: 'assets/accidental-babylon.js',
+      imports: ['@babylonjs/core'],
+      moduleIds: ['/repo/frontend/node_modules/@babylonjs/core/scene.js'],
+    })
+    fixture.assetSizes['assets/accidental-babylon.js'] = 100
+    expect(() => validateBuildBoundaries(fixture)).toThrow(/Three artifact.*Babylon/i)
+  })
+
+  test('rejects Three and postprocessing code in a Babylon artifact', () => {
+    const fixture = validBabylonFixture()
+    fixture.chunks.push({
+      file: 'assets/three-leak.js',
+      imports: ['postprocessing'],
+      moduleIds: ['/repo/frontend/node_modules/three/build/three.module.js'],
+    })
+    fixture.assetSizes['assets/three-leak.js'] = 100
+    expect(() => validateBuildBoundaries(fixture)).toThrow(/Babylon artifact.*Three|postprocessing/i)
+  })
+
   test('rejects a public SharedView dynamic import of private renderer code', () => {
     const fixture = validFixture()
-    fixture.manifest['src/ui/SharedView.tsx'].dynamicImports = ['src/starmap/Renderer.ts']
+    fixture.manifest['src/ui/SharedView.tsx'].dynamicImports = ['virtual:mindverse-renderer']
     expect(() => validateBuildBoundaries(fixture)).toThrow(/public share.*private module/)
   })
 
@@ -84,7 +147,7 @@ describe('build boundary verifier', () => {
 
   test('requires Renderer to be a direct dynamic import of private Universe', () => {
     const fixture = validFixture()
-    fixture.manifest['src/ui/Universe.tsx'].imports = ['src/starmap/Renderer.ts']
+    fixture.manifest['src/ui/Universe.tsx'].imports = ['virtual:mindverse-renderer']
     fixture.manifest['src/ui/Universe.tsx'].dynamicImports = []
     expect(() => validateBuildBoundaries(fixture)).toThrow(/Universe.*dynamic import.*Renderer/)
   })
@@ -92,7 +155,7 @@ describe('build boundary verifier', () => {
   test('rejects Three modules split across named and renamed chunks', () => {
     const fixture = validFixture()
     fixture.manifest['_geometry.js'] = { file: 'assets/geometry.js', name: 'geometry-vendor' }
-    fixture.manifest['src/starmap/Renderer.ts'].imports.push('_geometry.js')
+    fixture.manifest['virtual:mindverse-renderer'].imports.push('_geometry.js')
     fixture.chunks.push({
       file: 'assets/geometry.js',
       moduleIds: ['/repo/frontend/node_modules/three/src/geometries/BoxGeometry.js'],
@@ -113,7 +176,7 @@ describe('build boundary verifier', () => {
 
   test('rejects an unrelated Three chunk outside Renderer static imports', () => {
     const fixture = validFixture()
-    fixture.manifest['src/starmap/Renderer.ts'].imports = ['_postprocessing.js']
+    fixture.manifest['virtual:mindverse-renderer'].imports = ['_postprocessing.js']
     fixture.manifest['_postprocessing.js'].imports = []
     expect(() => validateBuildBoundaries(fixture)).toThrow(/Renderer.*static closure/)
   })

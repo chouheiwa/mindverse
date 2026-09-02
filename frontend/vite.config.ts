@@ -4,6 +4,7 @@ import { rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { relative, resolve } from 'node:path'
 import { assertSafeBuildOutput } from './buildOutputSafety.js'
+import { rendererVirtualModule, type RendererKind } from './vite/rendererModule.js'
 
 const configDir = fileURLToPath(new URL('.', import.meta.url))
 const projectRoot = resolve(configDir, '..')
@@ -17,6 +18,7 @@ if (isolatedBuild && resolve(configDir, requestedOutputDir) !== e2eOutputDir) {
 const buildOutputDir = isolatedBuild ? e2eOutputDir : deployOutputDir
 const allowedOutputName = isolatedBuild ? '.e2e-web' : 'web'
 const assertOutputSafety = () => assertSafeBuildOutput(projectRoot, buildOutputDir, allowedOutputName)
+const rendererKind = (process.env.VITE_RENDERER ?? 'three') as RendererKind
 
 // Config-load gate: no Vite plugin (and therefore no buildStart cleanup) can run first.
 assertOutputSafety()
@@ -63,7 +65,7 @@ function emitBuildMetadata(): Plugin {
       this.emitFile({
         type: 'asset',
         fileName: '.vite/build-metadata.json',
-        source: JSON.stringify({ chunks }, null, 2),
+        source: JSON.stringify({ renderer: rendererKind, chunks }, null, 2),
       })
     },
   }
@@ -72,6 +74,7 @@ function emitBuildMetadata(): Plugin {
 export default defineConfig({
   plugins: [
     react(),
+    rendererVirtualModule(rendererKind),
     // E2E output is ignored and may retain old hashed files; never delete through that path.
     ...(isolatedBuild ? [{
       name: 'assert-safe-isolated-output',
@@ -93,7 +96,7 @@ export default defineConfig({
       output: {
         codeSplitting: {
           groups: [
-            {
+            ...(rendererKind === 'three' ? [{
               name: 'three',
               test: /node_modules[\\/]three[\\/]/,
               priority: 2,
@@ -104,7 +107,12 @@ export default defineConfig({
               test: /node_modules[\\/]postprocessing[\\/]/,
               priority: 1,
               includeDependenciesRecursively: false,
-            },
+            }] : [{
+              name: 'babylon',
+              test: /node_modules[\\/]@babylonjs[\\/]core[\\/]/,
+              priority: 2,
+              includeDependenciesRecursively: false,
+            }]),
           ],
         },
       },

@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config'
+import { rendererVirtualModule } from './vite/rendererModule.js'
 
 export default defineConfig({
+  plugins: [rendererVirtualModule('three')],
   test: {
     exclude: ['e2e/**', '**/node_modules/**', '**/.git/**'],
     environment: 'jsdom',

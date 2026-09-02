@@ -2,11 +2,16 @@ import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import type { RendererCallbacks } from '../starmap/Renderer'
+import type { RendererCallbacks } from '../starmap/rendererContract'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import type { CurrentUniverse } from '../types'
 
 const testState = vi.hoisted(() => ({
+  moduleGate: (() => {
+    let resolve: () => void = () => {}
+    const promise = new Promise<void>((done) => { resolve = done })
+    return { promise, resolve, requested: false }
+  })(),
   callbacks: null as RendererCallbacks | null,
   planet: null as PlanetDatum | null,
   selectCalls: [] as Array<[string, string]>,
@@ -22,6 +27,7 @@ const testState = vi.hoisted(() => ({
   partCalls: [] as unknown[],
   reducedCalls: [] as boolean[],
   orbitCalls: [] as Array<[number, number]>,
+  createCalls: 0,
 }))
 
 const apiState = vi.hoisted(() => ({
@@ -30,10 +36,13 @@ const apiState = vi.hoisted(() => ({
 
 vi.mock('../api', () => apiState)
 
-vi.mock('../starmap/Renderer', () => ({
-  Renderer: class MockRenderer {
-    constructor(_canvas: HTMLCanvasElement, _labels: HTMLCanvasElement, _index: unknown,
-      _reduceMotion: boolean, callbacks: RendererCallbacks) {
+vi.mock('virtual:mindverse-renderer', async () => {
+  testState.moduleGate.requested = true
+  await testState.moduleGate.promise
+  return { createRenderer: (_canvas: HTMLCanvasElement, _labels: HTMLCanvasElement, _index: unknown,
+    _reduceMotion: boolean, callbacks: RendererCallbacks) => new class MockRenderer {
+    constructor() {
+      testState.createCalls += 1
       testState.callbacks = callbacks
     }
     start() {}
@@ -66,8 +75,8 @@ vi.mock('../starmap/Renderer', () => ({
     focusProbePart(part: unknown) { testState.partCalls.push(part) }
     setReducedMotion(reduced: boolean) { testState.reducedCalls.push(reduced) }
     orbitWorkspace(dx: number, dy: number) { testState.orbitCalls.push([dx, dy]) }
-  },
-}))
+  }() }
+})
 
 import { UniverseView } from './Universe'
 
@@ -118,6 +127,7 @@ beforeEach(() => {
   testState.partCalls = []
   testState.reducedCalls = []
   testState.orbitCalls = []
+  testState.createCalls = 0
   apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
     matches: true,
@@ -138,6 +148,28 @@ afterEach(() => {
 })
 
 describe('Universe question keyboard integration', () => {
+
+  test('does not create a renderer when its module resolves after unmount', async () => {
+    const view = render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.moduleGate.requested).toBe(true))
+
+    view.unmount()
+    testState.moduleGate.resolve()
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(testState.createCalls).toBe(0)
+  })
+
+  test('destroys one mounted renderer exactly once on unmount', async () => {
+    const view = render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.createCalls).toBe(1))
+
+    view.unmount()
+
+    expect(testState.destroyCalls).toBe(1)
+  })
 
   test('inspects and scans an article probe with token guards and restores its trigger on Escape', async () => {
     const user = userEvent.setup()

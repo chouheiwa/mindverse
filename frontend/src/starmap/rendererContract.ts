@@ -18,6 +18,18 @@ export type StrataPhase =
   | 'strata-free'
   | 'strata-snapped'
 
+type StrataEventBase = {
+  readonly token: StrataToken
+  readonly questionId: string
+}
+
+export type StrataPhaseEvent = StrataEventBase & (
+  | { readonly phase: Exclude<StrataPhase, 'strata-snapped'> }
+  | { readonly phase: 'strata-snapped'; readonly snapId: string }
+)
+
+export type StrataErrorScope = 'transition' | 'operation'
+
 export interface StrataRequest {
   readonly token: StrataToken
   readonly questionId: string
@@ -64,14 +76,11 @@ export interface RendererCallbacks {
   readonly onProbePartChange?: (part: ProbePart | null) => void
   readonly onProbeError?: (event: { probeId: string; token: number; cause: Error }) => void
   readonly onStrataEntered?: (event: { token: StrataToken; questionId: string }) => void
-  readonly onStrataPhase?: (event: {
-    token: StrataToken
-    questionId: string
-    phase: StrataPhase
-  }) => void
+  readonly onStrataPhase?: (event: StrataPhaseEvent) => void
   readonly onStrataExited?: (event: { token: StrataToken; questionId: string }) => void
   readonly onStrataPose?: (event: { questionId: string; pose: StrataPose }) => void
   readonly onAnswerSpecimenFocus?: (event: {
+    token: StrataToken
     questionId: string
     answerId: string
     pose: StrataPose
@@ -79,6 +88,7 @@ export interface RendererCallbacks {
   readonly onStrataError?: (event: {
     token: StrataToken
     questionId: string
+    scope: StrataErrorScope
     cause: Error
   }) => void
 }

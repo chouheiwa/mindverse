@@ -1,6 +1,6 @@
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import type { ArticleProbe, Mode, Star } from '../types'
-import type { StrataPhase, StrataPose } from '../starmap/rendererContract'
+import type { StrataErrorScope, StrataPhase, StrataPose } from '../starmap/rendererContract'
 
 export type RenderFallback = { kind: 'render-fallback'; message: string; recovery: 'reload' | 'remount' }
 export type ReturnState =
@@ -51,11 +51,11 @@ export type UniverseUiAction =
   | { type: 'exit-probe' }
   | { type: 'enter-strata'; questionId: string; token: number }
   | { type: 'strata-phase'; questionId: string; token: number; phase: StrataPhase; snapId?: string }
-  | { type: 'focus-answer-specimen'; answerId: string; pose: StrataPose }
+  | { type: 'focus-answer-specimen'; questionId: string; token: number; answerId: string; pose: StrataPose }
   | { type: 'close-answer-specimen' }
   | { type: 'exit-strata' }
   | { type: 'strata-exited'; questionId: string; token: number }
-  | { type: 'strata-error'; questionId: string; token: number }
+  | { type: 'strata-error'; questionId: string; token: number; scope: StrataErrorScope }
   | { type: 'set-question-entry'; questionEntry: PlanetDatum | null }
   | { type: 'set-mode'; mode: Mode } | { type: 'toggle-mode'; mode: Mode }
   | { type: 'set-worm'; wormIdx: number }
@@ -119,7 +119,8 @@ export function universeUiReducer(state: UniverseUiState, action: UniverseUiActi
     case 'strata-phase': return applyStrataPhase(state, action)
     case 'focus-answer-specimen': {
       const current = state.exploration
-      if (current.kind !== 'strata-free' && current.kind !== 'strata-snapped') return state
+      if ((current.kind !== 'strata-free' && current.kind !== 'strata-snapped')
+        || current.questionId !== action.questionId || current.token !== action.token) return state
       return { ...state, exploration: {
         kind: 'answer-specimen-focus', star: current.star, questionId: current.questionId,
         token: current.token, returnTo: current.returnTo, answerId: action.answerId,
@@ -146,10 +147,17 @@ export function universeUiReducer(state: UniverseUiState, action: UniverseUiActi
         token: current.token, returnTo: current.returnTo,
       } }
     }
-    case 'strata-exited':
+    case 'strata-exited': {
+      const current = state.exploration
+      if (current.kind !== 'strata-exiting' || current.token !== action.token || current.questionId !== action.questionId) return state
+      return { ...state, exploration: current.returnTo }
+    }
     case 'strata-error': {
       const current = state.exploration
       if (!isStrataState(current) || current.token !== action.token || current.questionId !== action.questionId) return state
+      if (action.scope === 'operation') return state
+      if (current.kind !== 'surface-approach' && current.kind !== 'surface-crossing'
+        && current.kind !== 'strata-exiting') return state
       return { ...state, exploration: current.returnTo }
     }
     case 'set-question-entry': {

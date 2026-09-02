@@ -601,7 +601,9 @@ export class Renderer implements MindverseRenderer {
     this.unsupportedStrataRequest = { token: request.token, questionId: request.questionId }
     const cause = new Error('当前 Three 渲染器不支持答案地层；请切换到 Babylon 构建。')
     cause.name = 'UnsupportedRendererFeatureError'
-    this.cb.onStrataError?.({ token: request.token, questionId: request.questionId, cause })
+    this.cb.onStrataError?.({
+      token: request.token, questionId: request.questionId, scope: 'transition', cause,
+    })
   }
 
   moveStrata(_input: StrataMoveIntent): void {

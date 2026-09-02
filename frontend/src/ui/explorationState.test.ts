@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, test } from 'vitest'
 import type { ArticleProbe, CurrentStar } from '../types'
 import type { Renderer } from '../starmap/Renderer'
-import type { MindverseRenderer, StrataPose } from '../starmap/rendererContract'
+import type { MindverseRenderer, StrataPhaseEvent, StrataPose } from '../starmap/rendererContract'
 import type { PlanetDatum } from '../starmap/gl/bodies'
 import { initialUniverseUiState, universeUiReducer } from './explorationState'
 
@@ -11,6 +11,9 @@ const probe = { id: 'article:1', url: 'https://zhuanlan.zhihu.com/p/1' } as Arti
 const otherProbe = { id: 'article:2', url: 'https://zhuanlan.zhihu.com/p/2' } as ArticleProbe
 const planet = { star: { s: star }, question: { id: 'question:7' } } as PlanetDatum
 const pose: StrataPose = { depth: 12, yaw: 0.5, pitch: -0.2, snapId: null }
+const snappedEvent: StrataPhaseEvent = {
+  phase: 'strata-snapped', questionId: 'question:7', token: 11, snapId: 'stratum:1',
+}
 
 expectTypeOf<Renderer>().toMatchTypeOf<MindverseRenderer>()
 
@@ -108,7 +111,7 @@ describe('strata exploration state', () => {
       type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'strata-free',
     })
     const snapped = universeUiReducer(free, {
-      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'strata-snapped', snapId: 'stratum:1',
+      type: 'strata-phase', ...snappedEvent,
     })
     expect(snapped.exploration).toMatchObject({ kind: 'strata-snapped', snapId: 'stratum:1' })
     expect(universeUiReducer(snapped, {
@@ -130,7 +133,7 @@ describe('strata exploration state', () => {
       type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'strata-free',
     })
     const specimen = universeUiReducer(free, {
-      type: 'focus-answer-specimen', answerId: 'answer:1', pose,
+      type: 'focus-answer-specimen', questionId: 'question:7', token: 11, answerId: 'answer:1', pose,
     })
     expect(specimen.exploration).toMatchObject({
       kind: 'answer-specimen-focus', answerId: 'answer:1', savedPose: pose,
@@ -185,5 +188,59 @@ describe('strata exploration state', () => {
     expect(universeUiReducer(strataApproach, {
       type: 'approach-probe', star, probe, token: 12,
     })).toBe(strataApproach)
+  })
+
+  test('ignores stale specimen focus callbacks from another question or token', () => {
+    const approach = universeUiReducer(focusedPlanet(), {
+      type: 'enter-strata', questionId: 'question:7', token: 11,
+    })
+    const crossing = universeUiReducer(approach, {
+      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'surface-crossing',
+    })
+    const free = universeUiReducer(crossing, {
+      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'strata-free',
+    })
+
+    expect(universeUiReducer(free, {
+      type: 'focus-answer-specimen', questionId: 'question:8', token: 11, answerId: 'answer:1', pose,
+    })).toBe(free)
+    expect(universeUiReducer(free, {
+      type: 'focus-answer-specimen', questionId: 'question:7', token: 12, answerId: 'answer:1', pose,
+    })).toBe(free)
+  })
+
+  test('keeps the cave open for recoverable operation errors', () => {
+    const approach = universeUiReducer(focusedPlanet(), {
+      type: 'enter-strata', questionId: 'question:7', token: 11,
+    })
+    const crossing = universeUiReducer(approach, {
+      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'surface-crossing',
+    })
+    const free = universeUiReducer(crossing, {
+      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'strata-free',
+    })
+
+    expect(universeUiReducer(free, {
+      type: 'strata-error', questionId: 'question:7', token: 11, scope: 'operation',
+    })).toBe(free)
+    expect(universeUiReducer(approach, {
+      type: 'strata-error', questionId: 'question:7', token: 11, scope: 'transition',
+    }).exploration).toEqual({ kind: 'planet-focus', star, planet })
+  })
+
+  test('accepts strata-exited only after React entered the exiting state', () => {
+    const approach = universeUiReducer(focusedPlanet(), {
+      type: 'enter-strata', questionId: 'question:7', token: 11,
+    })
+    const crossing = universeUiReducer(approach, {
+      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'surface-crossing',
+    })
+    const free = universeUiReducer(crossing, {
+      type: 'strata-phase', questionId: 'question:7', token: 11, phase: 'strata-free',
+    })
+
+    expect(universeUiReducer(free, {
+      type: 'strata-exited', questionId: 'question:7', token: 11,
+    })).toBe(free)
   })
 })

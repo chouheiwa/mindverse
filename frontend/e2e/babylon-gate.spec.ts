@@ -144,14 +144,15 @@ async function exitStrata(page: Page) {
 async function holdKeyUntil(page: Page, key: string, predicate: () => Promise<boolean>) {
   await page.keyboard.down(key)
   try {
-    await expect.poll(predicate, { timeout: 5_000 }).toBe(true)
+    await expect.poll(predicate, { timeout: 5_000, intervals: [20] }).toBe(true)
   } finally {
     await page.keyboard.up(key)
-    const focused = await page.locator(':focus').elementHandle()
-    await focused?.evaluate((element: HTMLElement) => {
-      element.blur()
-      element.focus()
-    })
+    const strataHud = page.getByRole('region', { name: '答案地层导航' })
+    const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
+    await strataHud.dispatchEvent('keyup', { code, key })
+    await strataHud.blur()
+    await page.waitForTimeout(60)
+    await strataHud.focus()
   }
 }
 
@@ -256,10 +257,23 @@ test('navigates through the side passage and opens the identified undated specim
   const targetYaw = Math.atan2(undated.x, undated.z)
   await holdKeyUntil(page, 's', async () => (await snapshot(page))!.scene.strataPose!.depth >= undated.depth - 0.2)
   await holdKeyUntil(page, 'd', async () => (await snapshot(page))!.scene.strataPose!.yaw >= targetYaw - 0.05)
-  await holdKeyUntil(page, 'e', async () => (await snapshot(page))!.scene.strataPose!.pitch >= -0.03)
+  const depth = (await snapshot(page))!.scene.strataPose!.depth
+  const targetPitch = Math.atan2(depth - undated.depth, Math.hypot(undated.x, undated.z))
+  await holdKeyUntil(page, 'e', async () => (await snapshot(page))!.scene.strataPose!.pitch >= targetPitch - 0.03)
   try {
-    await holdKeyUntil(page, 'd', async () => Boolean((await snapshot(page))!.projectedBounds.answerSpecimens
-      ?.find(({ answerId, room: specimenRoom }) => answerId === 'answer:999' && specimenRoom === 'undated')?.bounds))
+    await page.keyboard.down('d')
+    await expect.poll(async () => {
+      const bounds = (await snapshot(page))!.projectedBounds.answerSpecimens
+        ?.find(({ answerId, room: specimenRoom }) => answerId === 'answer:999' && specimenRoom === 'undated')?.bounds
+      if (!bounds) return false
+      const canvasBounds = await canvas(page).boundingBox()
+      if (!canvasBounds) return false
+      await page.mouse.click(
+        canvasBounds.x + bounds.x + bounds.width / 2,
+        canvasBounds.y + bounds.y + bounds.height / 2,
+      )
+      return page.getByRole('dialog', { name: /未定年答案/ }).isVisible()
+    }, { timeout: 8_000, intervals: [20] }).toBe(true)
   } catch (cause) {
     const state = (await snapshot(page))!
     const target = state.projectedBounds.answerSpecimens?.find(({ answerId }) => answerId === 'answer:999')
@@ -269,10 +283,9 @@ test('navigates through the side passage and opens the identified undated specim
       target,
       cameraTarget: [state.scene.cameraTargetX, state.scene.cameraTargetY, state.scene.cameraTargetZ],
     })}`)
+  } finally {
+    await page.keyboard.up('d')
   }
-  const target = (await snapshot(page))!.projectedBounds.answerSpecimens!
-    .find(({ answerId }) => answerId === 'answer:999')!.bounds!
-  await canvas(page).click({ position: { x: target.x + target.width / 2, y: target.y + target.height / 2 }, force: true })
   await expect(page.getByRole('dialog', { name: /未定年答案/ })).toBeVisible()
 })
 
@@ -294,6 +307,7 @@ for (const [label, query, message] of [
     await expect(page.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
     await expect(page.getByRole('alert')).toContainText(message)
     await expect(page.getByRole('navigation', { name: '宇宙文本导航' })).toContainText('固定地层问题')
+    await expect.poll(async () => await lifecycleAudit(page)).toMatchObject({ canvases: 0, liveWebglContexts: 0 })
     expect(await snapshot(page)).toBeUndefined()
   })
 }

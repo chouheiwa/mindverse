@@ -116,6 +116,7 @@ export class BabylonRenderer implements MindverseRenderer {
       && new URLSearchParams(location.search).get('e2eWebGL2Unavailable') === '1'
     if (engine.webGLVersion < 2 || forceWebGL2Unavailable) {
       engine.dispose()
+      releaseCanvasWebGLContext(canvas)
       throw new BabylonWebGL2RequiredError()
     }
     this.engine = engine
@@ -148,7 +149,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.runtime = new BabylonRuntime({
         engine,
         scene,
-        releaseContext: () => canvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext(),
+        releaseContext: () => releaseCanvasWebGLContext(canvas),
         canvas: {
           addEventListener: (type, listener) => canvas.addEventListener(type, listener),
           removeEventListener: (type, listener) => canvas.removeEventListener(type, listener),
@@ -194,6 +195,7 @@ export class BabylonRenderer implements MindverseRenderer {
       if (!runtimeConstructionStarted) {
         if (scene) scene.dispose()
         engine.dispose()
+        releaseCanvasWebGLContext(canvas)
       }
       throw cause
     }
@@ -917,6 +919,11 @@ function unsupported(message: string): Error {
   const cause = new Error(message)
   cause.name = 'UnsupportedRendererFeatureError'
   return cause
+}
+
+function releaseCanvasWebGLContext(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
+  context?.getExtension('WEBGL_lose_context')?.loseContext()
 }
 
 function buildPlanetBookkeeping(index: UniverseIndex): readonly PlanetDatum[] {

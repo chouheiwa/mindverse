@@ -109,6 +109,13 @@ describe('build boundary verifier', () => {
     })
   })
 
+  test('allows the measured procedural-planet pipeline within the explicit Babylon cap', () => {
+    const fixture = validBabylonFixture()
+    fixture.assetSizes['assets/babylon.js'] = 1_690_853
+
+    expect(validateBuildBoundaries(fixture)).toMatchObject({ renderer: 'babylon' })
+  })
+
   test('rejects Babylon code or import metadata in a Three artifact', () => {
     const fixture = validFixture()
     fixture.chunks.push({

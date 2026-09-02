@@ -4,7 +4,7 @@ import { parse, resolve, sep } from 'node:path'
 
 export const MAX_CHUNK_BYTES = 500_000
 export const THREE_CHUNK_BYTES = 850_000
-export const BABYLON_CHUNK_BYTES = 1_500_000
+export const BABYLON_CHUNK_BYTES = 1_800_000
 
 const findEntry = (records, label, predicate) => {
   const entry = records.find(([key, value]) => predicate(key, value))

@@ -134,7 +134,6 @@ function RetrospectivePanel({ chronicle }: {
       <section aria-labelledby="qw-chronicle-title">
         <p className="qw-kicker">RETROSPECTIVE · CURRENT SAMPLE</p>
         <h2 id="qw-chronicle-title">答案纪年 · 当前样本回溯</h2>
-        <p className="qw-disclaimer">{chronicle.disclaimer}</p>
         <PaginatedOriginals answers={chronicle.flatItems} className="qw-timeline" />
       </section>
     </div>
@@ -161,11 +160,13 @@ export interface QuestionWorkspaceProps {
   onRestoreCamera: () => void
   /** Orbit the live, already-selected 3D planet behind this observatory. */
   onOrbit?: (deltaX: number, deltaY: number) => void
+  onEnterStrata?: (questionId: string) => void
+  strataActive?: boolean
   getReturnFocus?: () => HTMLElement | null
 }
 
 export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
-  onBack, onRestoreCamera, onOrbit, getReturnFocus }: QuestionWorkspaceProps) {
+  onBack, onRestoreCamera, onOrbit, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
   const isPublic = shared || readOnly
   const mobileTabs = useMobileTabs()
   const tabs: readonly Mode[] = isPublic ? ['retrospective', 'prism'] : ['personal', 'retrospective', 'prism']
@@ -256,8 +257,14 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
             </div>
             <div className="qw-planet-controls">
               <span>拖动旋转 · 观察表面</span>
-              <button type="button" onClick={() => selectTab('retrospective', true)}>打开答案地层</button>
+              <button type="button" disabled={strataActive || !onEnterStrata}
+                onClick={() => onEnterStrata?.(questionId)}>
+                {strataActive ? '正在进入答案地层' : '打开答案地层'}
+              </button>
             </div>
+            <p className="qw-strata-disclaimer">
+              当前仍可访问的答案按首发时间排列，不代表当年观点或社区份额；列表存在幸存者偏差与版本偏差。
+            </p>
           </section>
           <div className="qw-titleblock">
             <p>当前样本 · <span>{model.answerCount} 个当前可访问回答</span></p>

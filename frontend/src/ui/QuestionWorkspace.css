@@ -40,6 +40,7 @@
 .qw-planet-readout b { color: var(--ink); font-size: 11px; font-weight: 400 }
 .qw-planet-controls { right: clamp(22px, 3vw, 52px); bottom: clamp(26px, 5vh, 58px); display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--readout, #aeb8d2); font-size: 9px }
 .qw-planet-controls button { min-height: 44px; padding: 0 14px; border: 1px solid rgb(222 183 103 / 42%); background: rgb(5 7 17 / 72%); color: var(--ink); font: inherit; letter-spacing: .08em }
+.qw-strata-disclaimer { position: absolute; z-index: 2; left: clamp(22px, 3vw, 52px); right: clamp(22px, 3vw, 52px); bottom: 12px; margin: 0; color: rgb(205 222 226 / 58%); font-size: 10px; line-height: 1.45 }
 .qw-titleblock { grid-column: 2 / 4; max-width: 760px; padding: clamp(28px, 4.5vh, 54px) clamp(24px, 4vw, 58px) clamp(22px, 3.5vh, 42px) 0 }
 .qw-titleblock > p:first-child, .qw-kicker { margin: 0 0 12px; color: var(--readout, #aeb8d2); font-family: var(--f-m); font-size: 10px; letter-spacing: .16em }
 .qw h1 { margin: 0; font-family: var(--f-d); font-size: clamp(27px, 4.1vw, 52px); font-weight: 500; line-height: 1.35 }

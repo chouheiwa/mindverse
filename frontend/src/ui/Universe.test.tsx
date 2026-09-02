@@ -27,6 +27,10 @@ const testState = vi.hoisted(() => ({
   partCalls: [] as unknown[],
   reducedCalls: [] as boolean[],
   orbitCalls: [] as Array<[number, number]>,
+  strataEnterCalls: [] as unknown[],
+  strataMoveCalls: [] as unknown[],
+  strataExitCalls: [] as number[],
+  closeSpecimenCalls: 0,
   createCalls: 0,
 }))
 
@@ -75,6 +79,10 @@ vi.mock('virtual:mindverse-renderer', async () => {
     focusProbePart(part: unknown) { testState.partCalls.push(part) }
     setReducedMotion(reduced: boolean) { testState.reducedCalls.push(reduced) }
     orbitWorkspace(dx: number, dy: number) { testState.orbitCalls.push([dx, dy]) }
+    enterStrata(request: unknown) { testState.strataEnterCalls.push(request) }
+    moveStrata(intent: unknown) { testState.strataMoveCalls.push(intent) }
+    exitStrata(token: number) { testState.strataExitCalls.push(token) }
+    closeAnswerSpecimen() { testState.closeSpecimenCalls += 1 }
   }() }
 })
 
@@ -127,6 +135,10 @@ beforeEach(() => {
   testState.partCalls = []
   testState.reducedCalls = []
   testState.orbitCalls = []
+  testState.strataEnterCalls = []
+  testState.strataMoveCalls = []
+  testState.strataExitCalls = []
+  testState.closeSpecimenCalls = 0
   testState.createCalls = 0
   apiState.pollUntilDone.mockResolvedValue({ universe: fixture, filtered: 0 })
   vi.stubGlobal('matchMedia', vi.fn(() => ({
@@ -353,6 +365,37 @@ describe('Universe question keyboard integration', () => {
     expect(testState.restoreCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(testState.suspendCalls).toBe(testState.resumeCalls)
     expect(trigger).toHaveFocus()
+  })
+
+  test('crosses from the observatory into strata, opens evidence, and exits with one token', async () => {
+    const user = userEvent.setup()
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    act(() => testState.callbacks?.onPick?.(star))
+    await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+    await user.click(await screen.findByRole('button', { name: '打开答案地层' }))
+    expect(testState.strataEnterCalls).toHaveLength(1)
+    expect(testState.strataEnterCalls[0]).toMatchObject({ token: 1, questionId: 'question:7' })
+    expect(screen.getByRole('button', { name: '正在进入答案地层' })).toBeDisabled()
+
+    act(() => testState.callbacks?.onStrataPhase?.({ token: 1, questionId: 'question:7', phase: 'surface-crossing' }))
+    act(() => testState.callbacks?.onStrataPhase?.({ token: 1, questionId: 'question:7', phase: 'strata-free' }))
+    expect(await screen.findByRole('region', { name: '答案地层导航' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: '真实问题标题' })).not.toBeInTheDocument()
+
+    act(() => testState.callbacks?.onAnswerSpecimenFocus?.({
+      token: 1, questionId: 'question:7', answerId: 'answer:8',
+      pose: { depth: 1.2, yaw: 0, pitch: 0, snapId: null },
+    }))
+    expect(await screen.findByRole('dialog', { name: '真实问题标题' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '关闭答案证据板' }))
+    expect(testState.closeSpecimenCalls).toBe(1)
+
+    await user.click(screen.getByRole('button', { name: '返回行星表面' }))
+    expect(testState.strataExitCalls).toEqual([1])
+    act(() => testState.callbacks?.onStrataExited?.({ token: 1, questionId: 'question:7' }))
+    expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
   })
 
   test('hands lane focus to the card, enters and leaves the workspace, and clears stale entry state', async () => {

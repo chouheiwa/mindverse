@@ -1,0 +1,19 @@
+.aep { position: fixed; inset: 0 0 0 auto; width: min(460px, 100vw); height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; border-left: 1px solid rgb(122 205 238 / 24%); color: #e7f2f5; background: linear-gradient(155deg, rgb(10 19 25 / 98%), rgb(4 8 12 / 99%)); box-shadow: -30px 0 90px rgb(0 0 0 / 62%); z-index: 48 }
+.aep::backdrop { background: rgb(0 4 8 / 54%); backdrop-filter: blur(4px) }
+.aep-head { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px; border-bottom: 1px solid rgb(122 205 238 / 16%) }
+.aep-head div { display: grid; gap: 3px }
+.aep-head span, .aep-kicker { color: #6fa9b9; font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .16em }
+.aep-head b { font-size: 14px; letter-spacing: .12em }
+.aep-head button { width: 38px; height: 38px; border: 1px solid rgb(122 205 238 / 22%); border-radius: 50%; color: inherit; background: transparent; font-size: 21px }
+.aep main { padding: 34px 30px 48px; overflow: auto }
+.aep h1 { margin: 10px 0 4px; font-size: clamp(22px, 3vw, 32px); line-height: 1.2 }
+.aep-author { margin: 0 0 28px; color: #91a7ae }
+.aep-summary { padding: 18px 0; border-block: 1px solid rgb(255 255 255 / 8%); color: #c5d3d7; line-height: 1.75 }
+.aep-times { display: grid; gap: 0; margin: 26px 0 }
+.aep-times div { display: grid; grid-template-columns: 92px 1fr; padding: 11px 0; border-bottom: 1px solid rgb(255 255 255 / 7%) }
+.aep-times dt { color: #75909a }
+.aep-times dd { margin: 0; font-family: ui-monospace, monospace }
+.aep-relations { display: flex; flex-wrap: wrap; gap: 8px }
+.aep-relations span { padding: 7px 10px; border: 1px solid rgb(236 161 67 / 30%); color: #e1aa64; font-size: 12px }
+.aep-caution, .aep-bias { color: #81949b; font-size: 13px; line-height: 1.65 }
+.aep-source { display: inline-flex; margin-top: 20px; padding: 12px 16px; border: 1px solid rgb(122 205 238 / 42%); color: #a8e5f5; text-decoration: none }

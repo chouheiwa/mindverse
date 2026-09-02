@@ -1,0 +1,22 @@
+.strata-hud { position: fixed; inset: 18px 18px auto; z-index: 32; pointer-events: none; color: #dcebed; font-family: ui-monospace, monospace; outline: none }
+.strata-hud > * { pointer-events: auto }
+.strata-touch-pad { position: fixed; left: 25vw; top: 24vh; width: 50vw; height: 48vh; touch-action: none; background: transparent }
+.strata-hud header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px }
+.strata-hud header div { display: grid; gap: 4px; padding: 12px 14px; border-left: 2px solid #62c3de; background: linear-gradient(90deg, rgb(4 12 17 / 88%), transparent) }
+.strata-hud header span { color: #6fa9b9; font-size: 9px; letter-spacing: .2em }
+.strata-hud header b { font-size: 14px; letter-spacing: .08em }
+.strata-hud header button { min-height: 42px; padding: 0 14px; border: 1px solid rgb(116 201 228 / 34%); color: #dcebed; background: rgb(4 10 15 / 76%) }
+.strata-depth { position: fixed; left: 22px; top: 42%; display: grid; gap: 5px; width: 84px }
+.strata-depth span { color: #668793; font-size: 9px; letter-spacing: .18em }
+.strata-depth strong { font-size: 24px; font-weight: 400 }
+.strata-depth small { color: #7294a0; font-size: 10px }
+.strata-depth i { width: 2px; height: 150px; background: linear-gradient(to bottom, #6ccde8 var(--strata-progress), rgb(105 180 202 / 13%) var(--strata-progress)); box-shadow: 0 0 12px rgb(74 185 219 / 32%) }
+.strata-status { position: fixed; right: 22px; top: 42%; display: grid; width: min(280px, 35vw); gap: 7px; padding: 15px; border: 1px solid rgb(105 180 202 / 18%); background: rgb(3 9 13 / 70%) }
+.strata-status b { color: #bfe6ee; font-size: 12px }
+.strata-status span { color: #78949c; font-size: 10px; line-height: 1.5 }
+.strata-instructions, .strata-disclaimer { position: fixed; left: 50%; transform: translateX(-50%); margin: 0; text-align: center; background: rgb(3 8 12 / 68%) }
+.strata-instructions { bottom: 46px; padding: 8px 12px; color: #86a5ad; font-size: 10px }
+.strata-disclaimer { bottom: 14px; width: min(760px, calc(100vw - 40px)); color: #61777e; font-size: 9px; line-height: 1.45 }
+.strata-focus-proxy { position: fixed; left: 18px; bottom: 18px; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); border: 0 }
+.strata-focus-proxy:focus { width: auto; height: auto; padding: 8px 10px; clip-path: none; border: 1px solid #62c3de; color: #dcebed; background: #071117 }
+@media (max-width: 760px) { .strata-status { top: auto; right: 14px; bottom: 90px; width: min(250px, 68vw) } .strata-depth { left: 14px } }

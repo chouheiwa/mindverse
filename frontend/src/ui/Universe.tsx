@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { ArticleProbe, Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone } from '../api'
 import type { MindverseRenderer } from '../starmap/rendererContract'
+import type { StrataPose } from '../starmap/rendererContract'
 import { Loading } from './Loading'
 import { Panel } from './Panel'
 import { InfoPanel } from './InfoPanel'
@@ -17,6 +18,9 @@ import { RenderFallback } from './RenderFallback'
 import { ProbeInspectionPanel } from './ProbeInspectionPanel'
 import type { ProbePart } from '../starmap/gl/probe'
 import { initialUniverseUiState, universeUiReducer } from './explorationState'
+import { buildStrataSceneModel, type StrataSceneModel } from '../domain/strata'
+import { StrataHud } from './StrataHud'
+import { AnswerEvidencePanel } from './AnswerEvidencePanel'
 import './Universe.css'
 
 const reduceMotion = () =>
@@ -62,6 +66,12 @@ export function PrivateUniverseView() {
   const { questionEntry, mode, wormIdx } = uiState
   const probeState = exploration.kind === 'probe-approach' || exploration.kind === 'probe-inspection' || exploration.kind === 'probe-scanning'
     ? exploration : null
+  const strataState = exploration.kind === 'surface-approach' || exploration.kind === 'surface-crossing'
+    || exploration.kind === 'strata-free' || exploration.kind === 'strata-snapped'
+    || exploration.kind === 'answer-specimen-focus' || exploration.kind === 'strata-exiting'
+    ? exploration : null
+  const questionWorkspaceVisible = questionEntry !== null
+    && (exploration.kind === 'planet-observatory' || exploration.kind === 'surface-approach')
   const explorationRef = useRef(exploration)
   explorationRef.current = exploration
   const transitionTokenRef = useRef(0)
@@ -69,6 +79,10 @@ export function PrivateUniverseView() {
   const probeCommandKindRef = useRef<'approach' | 'scan' | null>(null)
   const probeReturnFocusRef = useRef<HTMLButtonElement | null>(null)
   const [selectedProbePart, setSelectedProbePart] = useState<ProbePart | null>(null)
+  const [strataScene, setStrataScene] = useState<StrataSceneModel | null>(null)
+  const [strataPose, setStrataPose] = useState<StrataPose | null>(null)
+  const strataPoseReportedAtRef = useRef(0)
+  const strataFocusProxyRef = useRef<HTMLButtonElement>(null)
   const cancelActiveProbe = useCallback(() => {
     if (!probeCommandActiveRef.current) return
     probeCommandActiveRef.current = false
@@ -216,6 +230,33 @@ export function PrivateUniverseView() {
         }
         dispatchUi({ type: 'probe-error', probeId, token, message: safeProbeScanError(cause) })
       },
+      onStrataPhase: ({ questionId, token, phase, ...event }) => {
+        dispatchUi({
+          type: 'strata-phase', questionId, token, phase,
+          ...('snapId' in event ? { snapId: event.snapId } : {}),
+        })
+      },
+      onStrataExited: ({ questionId, token }) => {
+        setStrataScene(null)
+        setStrataPose(null)
+        dispatchUi({ type: 'strata-exited', questionId, token })
+      },
+      onStrataPose: ({ pose }) => {
+        const now = performance.now()
+        if (now - strataPoseReportedAtRef.current < 80) return
+        strataPoseReportedAtRef.current = now
+        setStrataPose(pose)
+      },
+      onAnswerSpecimenFocus: ({ token, questionId, answerId, pose }) => {
+        dispatchUi({ type: 'focus-answer-specimen', token, questionId, answerId, pose })
+      },
+      onStrataError: ({ token, questionId, scope }) => {
+        if (scope === 'transition') {
+          setStrataScene(null)
+          setStrataPose(null)
+        }
+        dispatchUi({ type: 'strata-error', token, questionId, scope })
+      },
       })
       if (disposed) {
         r.destroy()
@@ -278,12 +319,12 @@ export function PrivateUniverseView() {
 
   useEffect(() => {
     const renderer = rendererRef.current
-    renderer?.setWorkspaceOpen(questionEntry !== null)
-    if (!questionEntry) return
+    renderer?.setWorkspaceOpen(questionWorkspaceVisible)
+    if (!questionWorkspaceVisible) return
     return () => {
       renderer?.setWorkspaceOpen(false)
     }
-  }, [questionEntry])
+  }, [questionWorkspaceVisible])
 
   const pickConcept = useCallback((c: string) => {
     const s = universe?.stars.find((x) => x.c === c)
@@ -381,6 +422,35 @@ export function PrivateUniverseView() {
     rendererRef.current?.restoreQuestionPlanet(questionEntry.star.s.id, questionEntry.question.id)
   }, [questionEntry])
 
+  const enterStrata = useCallback((questionId: string) => {
+    if (!universeIndex || !questionEntry || questionEntry.question.id !== questionId || strataState) return
+    const token = ++transitionTokenRef.current
+    const scene = buildStrataSceneModel(universeIndex, questionId)
+    setStrataScene(scene)
+    setStrataPose(null)
+    strataPoseReportedAtRef.current = 0
+    dispatchUi({ type: 'enter-strata', questionId, token })
+    rendererRef.current?.enterStrata({ token, questionId, scene })
+  }, [questionEntry, strataState, universeIndex])
+
+  const moveStrata = useCallback((intent: Parameters<MindverseRenderer['moveStrata']>[0]) => {
+    rendererRef.current?.moveStrata(intent)
+  }, [])
+
+  const exitStrata = useCallback(() => {
+    const current = explorationRef.current
+    if (current.kind !== 'surface-crossing' && current.kind !== 'strata-free'
+      && current.kind !== 'strata-snapped' && current.kind !== 'answer-specimen-focus') return
+    if (current.kind === 'answer-specimen-focus') rendererRef.current?.closeAnswerSpecimen()
+    dispatchUi({ type: 'exit-strata' })
+    rendererRef.current?.exitStrata(current.token)
+  }, [])
+
+  const closeAnswerEvidence = useCallback(() => {
+    rendererRef.current?.closeAnswerSpecimen()
+    dispatchUi({ type: 'close-answer-specimen' })
+  }, [])
+
   const getQuestionReturnFocus = useCallback(
     () => focusReturnRef.current ?? canvasRef.current,
     [],
@@ -464,7 +534,7 @@ export function PrivateUniverseView() {
   const y1 = hasSpan ? new Date(m.span[1] * 1000).getFullYear() : null
 
   return (
-    <div className={questionEntry ? 'uv-workspace-open' : undefined}
+    <div className={[questionWorkspaceVisible ? 'uv-workspace-open' : '', strataState ? 'uv-strata-open' : ''].filter(Boolean).join(' ') || undefined}
       data-testid="universe-root" data-render-state={uiState.renderPhase}>
       <canvas ref={canvasRef} className="uv-canvas" tabIndex={0} aria-label="认知宇宙三维星图" />
       <canvas ref={labelRef} className="uv-canvas uv-labels" />
@@ -541,22 +611,23 @@ export function PrivateUniverseView() {
         </div>
       </div>
       <SharePreview open={sharing} universe={universe} onClose={() => setSharing(false)} getReturnFocus={() => shareReturnFocusRef.current} />
-      {star && <QuestionLane planets={questionPlanets} selectedId={planet?.question.id ?? null} onSelect={selectQuestionFromLane} />}
-      <QuestionPlanetCard ref={cardRef} planet={planet} onEnter={onEnterQuestion}
-        onClose={closePlanet} />
-      {questionEntry && (
+      {!strataState && star && <QuestionLane planets={questionPlanets} selectedId={planet?.question.id ?? null} onSelect={selectQuestionFromLane} />}
+      {!strataState && <QuestionPlanetCard ref={cardRef} planet={planet} onEnter={onEnterQuestion}
+        onClose={closePlanet} />}
+      {questionWorkspaceVisible && questionEntry && (
         <QuestionWorkspaceGate index={universeIndex} questionId={questionEntry.question.id}
           orbitIndex={questionEntry.orbitIndex} shared={false} readOnly={false}
           onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
           onOrbit={(deltaX, deltaY) => rendererRef.current?.orbitWorkspace(deltaX, deltaY)}
+          onEnterStrata={enterStrata} strataActive={exploration.kind === 'surface-approach'}
           getReturnFocus={getQuestionReturnFocus} />
       )}
-      <Panel universe={universe} index={universeIndex} star={star} shared={false}
+      {!strataState && <Panel universe={universe} index={universeIndex} star={star} shared={false}
         onClose={closeStarPanel}
         highlight={undefined}
         onEnterQuestion={enterQuestionFromPanel}
         onInspectProbe={inspectProbe}
-        onPickConcept={pickConcept} />
+        onPickConcept={pickConcept} />}
       {probeState && probeState.kind !== 'probe-approach' && <ProbeInspectionPanel
         probe={probeState.probe} canvas={canvasRef.current}
         scanning={probeState.kind === 'probe-scanning'}
@@ -566,10 +637,16 @@ export function PrivateUniverseView() {
         onPoseChange={(pose) => rendererRef.current?.setProbeInspectionPose(pose)}
         onPartChange={(part) => { setSelectedProbePart(part); rendererRef.current?.focusProbePart(part) }}
         onScan={scanProbe} onClose={closeProbeInspection} />}
-      <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
+      {!strataState && <InfoPanel universe={universe} mode={star ? 'all' : mode} wormIdx={wormIdx}
         shared={false}
         onWorm={(index) => { setQuestionEntry(null); setPlanet(null); setWormIdx(index) }}
-        onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />
+        onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />}
+      {strataState && strataScene && strataState.kind !== 'surface-approach' && <StrataHud
+        scene={strataScene} pose={strataPose} phase={strataState.kind}
+        focusProxyRef={strataFocusProxyRef} onMove={moveStrata} onExit={exitStrata} />}
+      {strataState?.kind === 'answer-specimen-focus' && universeIndex.answersById.get(strataState.answerId) && <AnswerEvidencePanel
+        answer={universeIndex.answersById.get(strataState.answerId)!}
+        onClose={closeAnswerEvidence} getReturnFocus={() => strataFocusProxyRef.current} />}
     </div>
   )
 }

@@ -25,6 +25,26 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('QuestionWorkspace', () => {
+  test('enters the real strata scene once and keeps the evidence disclaimer visible', async () => {
+    const user = userEvent.setup()
+    const onEnterStrata = vi.fn()
+    const source = index([answer('answer:1')])
+    const view = render(<QuestionWorkspace index={source} questionId={question.id}
+      onBack={() => {}} onRestoreCamera={() => {}} onEnterStrata={onEnterStrata} />)
+
+    const enter = screen.getByRole('button', { name: '打开答案地层' })
+    await user.click(enter)
+    expect(onEnterStrata).toHaveBeenCalledOnce()
+    expect(onEnterStrata).toHaveBeenCalledWith(question.id)
+    expect(screen.getByRole('tab', { name: '个人轨道' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText(/当前仍可访问的答案按首发时间排列/)).toBeVisible()
+    expect(screen.getByText(/幸存者偏差与版本偏差/)).toBeVisible()
+
+    view.rerender(<QuestionWorkspace index={source} questionId={question.id}
+      onBack={() => {}} onRestoreCamera={() => {}} onEnterStrata={onEnterStrata} strataActive />)
+    expect(screen.getByRole('button', { name: '正在进入答案地层' })).toBeDisabled()
+  })
+
   test('keeps a real planet observation stage and forwards deliberate drag rotation', () => {
     const onOrbit = vi.fn()
     render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id}

@@ -105,6 +105,13 @@
   .uv-filtered { left: 18px; right: 18px }
 }
 @media (prefers-reduced-motion: reduce) { .uv-canvas { transition: none } }
+
+.uv-strata-open .uv-head,
+.uv-strata-open .uv-filtered,
+.uv-strata-open .uv-hint,
+.uv-strata-open .uv-bar,
+.uv-strata-open .uv-skip,
+.uv-strata-open .uv-scrim { opacity: 0; pointer-events: none; transition: opacity .35s ease }
 .render-fallback {
   position: fixed;
   inset: 0;

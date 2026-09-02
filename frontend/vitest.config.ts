@@ -10,6 +10,11 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: [
+        'src/domain/strata.ts',
+        'src/starmap/babylon/runtime.ts',
+        'src/starmap/babylon/planetSurface.ts',
+        'src/starmap/babylon/strataScene.ts',
+        'src/starmap/babylon/strataTransition.ts',
         'src/starmap/gl/cinematic.ts',
         'src/starmap/gl/planetMaterials.ts',
         'src/starmap/focusEmphasis.ts',
@@ -19,6 +24,7 @@ export default defineConfig({
         'src/starmap/e2eDiagnostics.ts',
         'src/starmap/starIdentity.ts',
         'src/ui/explorationState.ts',
+        'src/ui/AnswerEvidencePanel.tsx',
         'src/ui/ProbeInspectionPanel.tsx',
         'src/ui/RenderFallback.tsx',
       ],

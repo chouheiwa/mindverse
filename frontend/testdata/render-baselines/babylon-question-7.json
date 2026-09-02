@@ -12,8 +12,8 @@
     "height": 215.9375723684327
   },
   "nonBackgroundRatio": 0.120224609375,
-  "firstInteractiveMs": 1755.6485409999998,
-  "p95FrameTime": 9.799999999813735,
-  "sampleCount": 1199,
-  "commitSha": "0d2f852c8662a061c043cb389ed4da33a120dc3c"
+  "firstInteractiveMs": 1811.169542,
+  "p95FrameTime": 10,
+  "sampleCount": 1201,
+  "commitSha": "7eac10a316f42960a770b7df4a1ef8f9fbc26140"
 }

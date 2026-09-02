@@ -6,14 +6,14 @@
     "height": 720
   },
   "selectedPlanetBounds": {
-    "x": 601.389890392408,
-    "y": 321.3898903924079,
-    "width": 77.22021921518423,
-    "height": 77.22021921518423
+    "x": 601.3898903924081,
+    "y": 321.389890392408,
+    "width": 77.22021921518399,
+    "height": 77.22021921518399
   },
   "nonBackgroundRatio": 0.2110622829861111,
-  "firstInteractiveMs": 1839.316167,
+  "firstInteractiveMs": 1883.332708,
   "p95FrameTime": 9.899999999999636,
-  "sampleCount": 1200,
-  "commitSha": "0d2f852c8662a061c043cb389ed4da33a120dc3c"
+  "sampleCount": 1199,
+  "commitSha": "7eac10a316f42960a770b7df4a1ef8f9fbc26140"
 }

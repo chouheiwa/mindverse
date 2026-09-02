@@ -10,14 +10,14 @@ const snapshot = (page: Page) => page.evaluate(() => window.__MINDVERSE_E2E__?.s
 
 interface BrowserLifecycleAudit {
   readonly canvases: number
-  readonly connectedWebglContexts: number
+  readonly liveWebglContexts: number
   readonly pendingAnimationFrames: number
   readonly listeners: number
 }
 
 async function installLifecycleAudit(page: Page) {
   await page.addInitScript(() => {
-    const webglCanvases = new Set<HTMLCanvasElement>()
+    const webglContexts = new Set<WebGLRenderingContext | WebGL2RenderingContext>()
     const listeners: Array<{ target: EventTarget, type: string, listener: EventListenerOrEventListenerObject, capture: boolean }> = []
     const pendingFrames = new Set<number>()
     const nativeGetContext = HTMLCanvasElement.prototype.getContext
@@ -28,7 +28,9 @@ async function installLifecycleAudit(page: Page) {
 
     HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, ...args: Parameters<HTMLCanvasElement['getContext']>) {
       const context = nativeGetContext.apply(this, args)
-      if ((args[0] === 'webgl' || args[0] === 'webgl2') && context) webglCanvases.add(this)
+      if ((args[0] === 'webgl' || args[0] === 'webgl2') && context) {
+        webglContexts.add(context as WebGLRenderingContext | WebGL2RenderingContext)
+      }
       return context
     } as HTMLCanvasElement['getContext']
     EventTarget.prototype.addEventListener = function (this: EventTarget, type, listener, options) {
@@ -64,7 +66,7 @@ async function installLifecycleAudit(page: Page) {
       value: {
         snapshot: (): BrowserLifecycleAudit => ({
           canvases: document.querySelectorAll('canvas[aria-label="认知宇宙三维星图"]').length,
-          connectedWebglContexts: [...webglCanvases].filter((item) => item.isConnected).length,
+          liveWebglContexts: [...webglContexts].filter((context) => !context.isContextLost()).length,
           pendingAnimationFrames: pendingFrames.size,
           listeners: listeners.filter(({ target }) => !(target instanceof Node) || target.isConnected).length,
         }),
@@ -166,7 +168,7 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   await expect(canvas(page)).toHaveCount(1)
   await expect.poll(async () => await lifecycleAudit(page)).toMatchObject({
     canvases: 1,
-    connectedWebglContexts: 1,
+    liveWebglContexts: 1,
     pendingAnimationFrames: 1,
   })
   expect(initial).toMatchObject({
@@ -230,7 +232,7 @@ test('five complete mounts release real canvas, context, listeners and RAF resou
     await expect(page.getByRole('heading', { name: '3D 星图暂时不可用' })).toBeVisible()
     await expect.poll(async () => await lifecycleAudit(page)).toMatchObject({
       canvases: 0,
-      connectedWebglContexts: 0,
+      liveWebglContexts: 0,
       pendingAnimationFrames: 0,
     })
     const released = await lifecycleAudit(page)

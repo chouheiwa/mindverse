@@ -148,6 +148,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.runtime = new BabylonRuntime({
         engine,
         scene,
+        releaseContext: () => canvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext(),
         canvas: {
           addEventListener: (type, listener) => canvas.addEventListener(type, listener),
           removeEventListener: (type, listener) => canvas.removeEventListener(type, listener),
@@ -729,7 +730,9 @@ export class BabylonRenderer implements MindverseRenderer {
         : undatedPassageGeometry(layout.undatedRoom).wallRotationY
       wall.scaling.x = 1 + Math.sin(layer.centerDepth * 1.7) * 0.055
       wall.scaling.z = 1 + Math.cos(layer.centerDepth * 1.3) * 0.07
-      wall.isPickable = false
+      // Opaque cave geometry must participate in picking so diagnostics and user
+      // input cannot select specimens through a sealed wall.
+      wall.isPickable = true
       const material = new StandardMaterial(`${wall.name}:material`, this.scene)
       const base = layerColors[layer.colorIndex % layerColors.length]
       material.diffuseColor = base
@@ -825,7 +828,7 @@ export class BabylonRenderer implements MindverseRenderer {
     chamber.position.set(room.x, -room.centerDepth, room.z)
     chamber.rotation.y = room.angle + Math.PI * 0.64
     chamber.scaling.y = 0.78
-    chamber.isPickable = false
+    chamber.isPickable = true
     const chamberMaterial = new StandardMaterial('undated-debris-room:material', this.scene)
     chamberMaterial.diffuseColor = new Color3(0.16, 0.19, 0.22)
     chamberMaterial.emissiveColor = new Color3(0.025, 0.055, 0.065)
@@ -847,7 +850,7 @@ export class BabylonRenderer implements MindverseRenderer {
     const tunnelDirection = new Vector3(passage.tunnelDirection.x, 0, passage.tunnelDirection.z)
     tunnel.rotationQuaternion = Quaternion.Identity()
     Quaternion.FromUnitVectorsToRef(Vector3.Up(), tunnelDirection, tunnel.rotationQuaternion)
-    tunnel.isPickable = false
+    tunnel.isPickable = true
     tunnel.material = chamberMaterial
   }
 

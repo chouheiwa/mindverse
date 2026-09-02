@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { BabylonRuntime, BabylonWebGL2RequiredError, type BabylonRuntimePorts } from './runtime'
 
-function fakePorts(options: { webGLVersion?: number; failListener?: string } = {}) {
+function fakePorts(options: { webGLVersion?: number; failListener?: string; releaseContext?: boolean } = {}) {
   const log: string[] = []
   const listeners = new Map<string, EventListener>()
   let frame: (() => void) | null = null
@@ -28,6 +28,7 @@ function fakePorts(options: { webGLVersion?: number; failListener?: string } = {
         listeners.delete(type)
       }),
     },
+    ...(options.releaseContext ? { releaseContext: vi.fn(() => { log.push('context:release') }) } : {}),
   }
   return {
     ports, log,
@@ -118,7 +119,7 @@ describe('BabylonRuntime lifecycle shell', () => {
   })
 
   test('destroys listeners, scene and engine exactly once and suppresses late callbacks', () => {
-    const fake = fakePorts()
+    const fake = fakePorts({ releaseContext: true })
     const onReady = vi.fn()
     const onError = vi.fn()
     const runtime = new BabylonRuntime(fake.ports, { onReady, onError })
@@ -132,9 +133,9 @@ describe('BabylonRuntime lifecycle shell', () => {
     fake.dispatch('webglcontextlost', new Event('webglcontextlost', { cancelable: true }))
     fake.dispatch('webglcontextrestored', new Event('webglcontextrestored'))
 
-    expect(fake.log.slice(-5)).toEqual([
+    expect(fake.log.slice(-6)).toEqual([
       'loop:stop', 'unlisten:webglcontextrestored', 'unlisten:webglcontextlost',
-      'scene:dispose', 'engine:dispose',
+      'scene:dispose', 'engine:dispose', 'context:release',
     ])
     expect(onReady).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()

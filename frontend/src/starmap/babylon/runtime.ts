@@ -20,6 +20,7 @@ export interface BabylonRuntimePorts {
   readonly engine: BabylonEnginePort
   readonly scene: BabylonScenePort
   readonly canvas: BabylonCanvasPort
+  readonly releaseContext?: () => void
 }
 
 export interface BabylonRuntimeCallbacks {
@@ -51,6 +52,7 @@ export class BabylonRuntime {
   constructor(ports: BabylonRuntimePorts, callbacks: BabylonRuntimeCallbacks = {}) {
     this.ports = ports
     this.callbacks = callbacks
+    if (ports.releaseContext) this.cleanups.push(ports.releaseContext)
     this.cleanups.push(() => ports.engine.dispose())
     this.cleanups.push(() => ports.scene.dispose())
     try {

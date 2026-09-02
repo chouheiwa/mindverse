@@ -62,6 +62,9 @@ describe('strata transition token protocol', () => {
 
     controller.enter(request(2))
     expect(pending[0].cancelled).toBe(true)
+    expect(port.capturePose).toHaveBeenCalledTimes(1)
+    expect(port.setUniverseVisible).toHaveBeenCalledWith(true)
+    expect(port.applyPose).toHaveBeenCalledWith(initialPose)
     pending[0].complete()
     pending[0].fail(new Error('late'))
     expect(events).toEqual(['surface-approach', 'surface-approach'])
@@ -131,13 +134,14 @@ describe('strata transition token protocol', () => {
     expect(events).not.toContain('error')
   })
 
-  test('cleans up a failed entry and keeps a failed exit retryable', () => {
+  test('restores the exact entry pose after either entry or exit failure', () => {
     const entry = harness()
     entry.controller.enter(request(8))
     entry.pending[0].fail(new Error('approach failed'))
     expect(entry.events).toEqual(['surface-approach', 'error'])
     expect(entry.controller.token).toBeNull()
     expect(entry.port.setUniverseVisible).toHaveBeenLastCalledWith(true)
+    expect(entry.port.applyPose).toHaveBeenLastCalledWith(initialPose)
 
     const exiting = harness()
     exiting.controller.enter(request(9))
@@ -145,7 +149,8 @@ describe('strata transition token protocol', () => {
     exiting.pending[1].complete()
     exiting.controller.exit(9)
     exiting.pending.at(-1)?.fail(new Error('exit failed'))
-    exiting.controller.exit(9)
-    expect(exiting.pending.filter(({ phase }) => phase === 'exit')).toHaveLength(2)
+    expect(exiting.controller.token).toBeNull()
+    expect(exiting.port.setUniverseVisible).toHaveBeenLastCalledWith(true)
+    expect(exiting.port.applyPose).toHaveBeenLastCalledWith(initialPose)
   })
 })

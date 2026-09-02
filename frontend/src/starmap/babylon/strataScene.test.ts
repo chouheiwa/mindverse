@@ -7,7 +7,9 @@ import {
   buildCaveLayout,
   closeSpecimenFocus,
   focusSpecimen,
+  movementDeltaSeconds,
   snapStrataPose,
+  CAVE_CYLINDER_CAP,
 } from './strataScene'
 
 const entryPose: StrataPose = Object.freeze({ depth: 3.25, yaw: 0.42, pitch: -0.18, snapId: null })
@@ -35,7 +37,24 @@ describe('Babylon strata cave layout', () => {
     for (const answerId of scene.undated.map(({ answerId }) => answerId)) {
       expect(layout.specimens.find((item) => item.answerId === answerId)?.room).toBe('undated')
     }
-    expect(layout.specimens.every(({ x, z }) => Math.hypot(x, z) < layout.bounds.radius)).toBe(true)
+    const undated = layout.specimens.filter(({ room }) => room === 'undated')
+    expect(undated.every(({ x, z }) => Math.hypot(x, z) > layout.bounds.radius)).toBe(true)
+    expect(layout.undatedRoom).toMatchObject({ radius: 2.2 })
+  })
+
+  test('orders specimens inside each layer by their real publication time', () => {
+    const scene = buildStrataSceneModel(strataFixture.index, 'question:7')
+    const layout = buildCaveLayout(scene, entryPose)
+    for (const layer of scene.strata) {
+      const placements = layer.specimens.map(({ answerId, publishedAt }) => ({
+        publishedAt,
+        depth: layout.specimens.find((item) => item.answerId === answerId)!.depth,
+      }))
+      const chronological = [...placements].sort((left, right) => left.publishedAt! - right.publishedAt!)
+      for (let index = 1; index < chronological.length; index += 1) {
+        expect(chronological[index - 1].depth).toBeGreaterThan(chronological[index].depth)
+      }
+    }
   })
 
   test('uses a blocked shallow room without chronology or snapping for surface-only evidence', () => {
@@ -78,8 +97,25 @@ describe('Babylon strata cave layout', () => {
     const snapped = snapStrataPose({ depth: layer.centerDepth + 0.7, yaw: 0, pitch: 0, snapId: null }, layout)
     expect(snapped.snapId).toBe(layer.id)
     expect(snapped.depth).toBe(layer.centerDepth)
-    expect(snapStrataPose({ ...snapped, depth: layer.centerDepth + 1.25 }, layout).snapId).toBe(layer.id)
+    expect(snapStrataPose({ ...snapped, depth: layer.centerDepth + 1.25 }, layout)).toMatchObject({
+      depth: layer.centerDepth + 1.25,
+      snapId: layer.id,
+    })
     expect(snapStrataPose({ ...snapped, depth: layer.centerDepth + 2.1 }, layout).snapId).toBeNull()
+
+    let escaping = snapped
+    for (let index = 0; index < 20; index += 1) {
+      escaping = advanceStrataPose(escaping, { forward: 1, yaw: 0, pitch: 0 }, 1 / 60, layout)
+    }
+    expect(escaping.snapId).toBeNull()
+    expect(escaping.depth).toBeGreaterThan(layer.centerDepth + 1.8)
+  })
+
+  test('normalizes real event timing and keeps cave cylinders open-ended', () => {
+    expect(movementDeltaSeconds(null, 1000)).toBeCloseTo(1 / 60)
+    expect(movementDeltaSeconds(1000, 1050)).toBe(0.05)
+    expect(movementDeltaSeconds(1000, 2000)).toBe(0.1)
+    expect(CAVE_CYLINDER_CAP).toBe('none')
   })
 
   test('side-steps for specimen focus and restores the exact prior pose once', () => {

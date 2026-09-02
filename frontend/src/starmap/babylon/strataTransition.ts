@@ -57,9 +57,14 @@ export class StrataTransitionController {
 
   enter(request: StrataRequest): void {
     if (this.active?.request.token === request.token) return
+    const preservedEntryPose = this.active?.layout.entryPose ?? null
     this.cancelCurrentAnimation()
+    if (preservedEntryPose) {
+      this.port.setUniverseVisible(true)
+      this.port.applyPose(preservedEntryPose)
+    }
     const generation = this.nextGeneration++
-    const entryPose = this.port.capturePose()
+    const entryPose = preservedEntryPose ?? this.port.capturePose()
     const layout = buildCaveLayout(request.scene, entryPose)
     const pose = copyPose({ depth: layout.bounds.minDepth, yaw: entryPose.yaw, pitch: entryPose.pitch, snapId: null })
     this.active = { request, layout, pose, focus: null, phase: 'surface-approach', generation }
@@ -173,11 +178,8 @@ export class StrataTransitionController {
         if (!current) return
         this.cancelAnimation = null
         this.emitError(cause, 'transition')
-        if (phase === 'exit') {
-          current.phase = current.pose.snapId ? 'strata-snapped' : 'strata-free'
-          return
-        }
         this.port.setUniverseVisible(true)
+        this.port.applyPose(current.layout.entryPose)
         this.active = null
       },
     )

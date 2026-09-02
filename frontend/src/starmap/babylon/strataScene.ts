@@ -30,7 +30,7 @@ export interface CaveLayout {
   readonly bounds: CaveBounds
   readonly layers: readonly CaveLayerPlacement[]
   readonly specimens: readonly CaveSpecimenPlacement[]
-  readonly undatedRoom: Readonly<{ centerDepth: number; angle: number }> | null
+  readonly undatedRoom: Readonly<{ centerDepth: number; angle: number; x: number; z: number; radius: number }> | null
   readonly blockedDepth: boolean
 }
 
@@ -45,6 +45,7 @@ const CAVE_RADIUS = 4.8
 const SNAP_ENTER_RADIUS = 0.9
 const SNAP_EXIT_RADIUS = 1.8
 const PITCH_LIMIT = 1.15
+export const CAVE_CYLINDER_CAP = 'none' as const
 
 export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose): CaveLayout {
   const entry = copyPose(entryPose)
@@ -68,10 +69,19 @@ export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose):
     colorIndex: index % 4,
   }))
   const dated = scene.strata.flatMap((layer) => layer.specimens.map((item, index) =>
-    specimenPlacement(item, index, layer.specimens.length, layer.centerDepth, 'main')))
+    specimenPlacement(item, index, layer.specimens.length, chronologicalDepth(item, layer), 'main')))
   const sideRoomDepth = Math.max(2.4, Math.min(scene.bounds.bottom - 1, scene.bounds.bottom * 0.58))
+  const sideRoomAngle = Math.PI * 0.38
+  const sideRoomDistance = CAVE_RADIUS + 2.15
+  const undatedRoom = scene.undated.length > 0 ? Object.freeze({
+    centerDepth: sideRoomDepth,
+    angle: sideRoomAngle,
+    x: round(Math.sin(sideRoomAngle) * sideRoomDistance),
+    z: round(Math.cos(sideRoomAngle) * sideRoomDistance),
+    radius: 2.2,
+  }) : null
   const undated = scene.undated.map((item, index) =>
-    specimenPlacement(item, index, scene.undated.length, sideRoomDepth, 'undated'))
+    specimenPlacement(item, index, scene.undated.length, sideRoomDepth, 'undated', undatedRoom))
 
   return Object.freeze({
     evidenceLevel: scene.evidenceLevel,
@@ -79,9 +89,7 @@ export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose):
     bounds: Object.freeze({ minDepth: scene.bounds.top, maxDepth: scene.bounds.bottom, radius: CAVE_RADIUS }),
     layers: Object.freeze(layers),
     specimens: Object.freeze([...dated, ...undated]),
-    undatedRoom: scene.undated.length > 0
-      ? Object.freeze({ centerDepth: sideRoomDepth, angle: Math.PI * 0.38 })
-      : null,
+    undatedRoom,
     blockedDepth: false,
   })
 }
@@ -110,7 +118,7 @@ export function snapStrataPose(pose: StrataPose, layout: CaveLayout): StrataPose
   if (pose.snapId) {
     const active = layout.layers.find(({ id }) => id === pose.snapId)
     if (active && Math.abs(pose.depth - active.centerDepth) <= SNAP_EXIT_RADIUS) {
-      return copyPose({ ...pose, depth: active.centerDepth, snapId: active.id })
+      return copyPose({ ...pose, snapId: active.id })
     }
   }
   const nearest = layout.layers.reduce<CaveLayerPlacement | null>((winner, layer) => {
@@ -145,21 +153,43 @@ function specimenPlacement(
   count: number,
   depth: number,
   room: CaveSpecimenPlacement['room'],
+  undatedRoom: CaveLayout['undatedRoom'] = null,
 ): CaveSpecimenPlacement {
   const seed = stableHash(specimen.answerId)
   const baseAngle = count <= 1 ? 0 : index / count * Math.PI * 2
   const roomOffset = room === 'undated' ? Math.PI * 0.38 : 0
   const angle = baseAngle + roomOffset + ((seed & 255) / 255 - 0.5) * 0.26
-  const radius = room === 'undated' ? 3.6 : 3.85 + ((seed >>> 8 & 255) / 255) * 0.4
+  const radius = room === 'undated' ? 0.85 : 3.85 + ((seed >>> 8 & 255) / 255) * 0.4
+  const centerX = room === 'undated' ? undatedRoom?.x ?? 0 : 0
+  const centerZ = room === 'undated' ? undatedRoom?.z ?? 0 : 0
   return Object.freeze({
     answerId: specimen.answerId,
     depth: round(depth + ((seed >>> 16 & 255) / 255 - 0.5) * 0.72),
-    x: round(Math.sin(angle) * radius),
-    z: round(Math.cos(angle) * radius),
+    x: round(centerX + Math.sin(angle) * radius),
+    z: round(centerZ + Math.cos(angle) * radius),
     scale: round(0.22 + ((seed >>> 24 & 255) / 255) * 0.18),
     room,
     relations: specimen.relations,
   })
+}
+
+function chronologicalDepth(specimen: AnswerSpecimen, layer: Readonly<{
+  startPublishedAt: number
+  endPublishedAt: number
+  centerDepth: number
+  thickness: number
+}>): number {
+  const span = Math.max(1, layer.endPublishedAt - layer.startPublishedAt)
+  const publishedAt = specimen.publishedAt ?? layer.startPublishedAt
+  const chronology = clamp((publishedAt - layer.startPublishedAt) / span, 0, 1)
+  const margin = Math.min(0.6, layer.thickness * 0.12)
+  const usable = Math.max(0.5, layer.thickness - margin * 2)
+  return round(layer.centerDepth + usable / 2 - chronology * usable)
+}
+
+export function movementDeltaSeconds(previousMs: number | null, currentMs: number): number {
+  if (previousMs === null || !Number.isFinite(previousMs) || !Number.isFinite(currentMs)) return 1 / 60
+  return clamp((currentMs - previousMs) / 1000, 1 / 240, 0.1)
 }
 
 const clamp = (value: number, minimum: number, maximum: number): number =>

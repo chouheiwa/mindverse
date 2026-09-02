@@ -8,7 +8,7 @@ import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { CreateIcoSphere } from '@babylonjs/core/Meshes/Builders/icoSphereBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
-import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
@@ -33,7 +33,7 @@ import { BabylonRuntime, BabylonWebGL2RequiredError } from './runtime'
 import { buildPlanetSurfaceDescriptor, type PlanetSurfaceDescriptor } from './planetSurface'
 import { planetFragmentShader } from './shaders/planet.fragment.fx'
 import { planetVertexShader } from './shaders/planet.vertex.fx'
-import type { CaveLayout, CaveSpecimenPlacement } from './strataScene'
+import { CAVE_CYLINDER_CAP, movementDeltaSeconds, type CaveLayout, type CaveSpecimenPlacement } from './strataScene'
 import { StrataTransitionController, type StrataAnimationPhase } from './strataTransition'
 
 const ORBIT_BASE = 2.1
@@ -69,6 +69,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private selectedVisual: PlanetVisual | null = null
   private focusedStar: StarDatum | null = null
   private elapsedMs = 0
+  private lastStrataMoveAt: number | null = null
   private overviewTarget = Vector3.Zero()
   private overviewRadius = 30
   private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
@@ -257,12 +258,15 @@ export class BabylonRenderer implements MindverseRenderer {
       return
     }
     this.strataTransition.enter(request)
+    this.lastStrataMoveAt = null
     const layout = this.strataTransition.layout
     if (layout) this.createCave(layout)
   }
 
   moveStrata(input: StrataMoveIntent): void {
-    this.strataTransition.move(input, 1 / 60)
+    const now = performance.now()
+    this.strataTransition.move(input, movementDeltaSeconds(this.lastStrataMoveAt, now))
+    this.lastStrataMoveAt = now
   }
   focusAnswerSpecimen(answerId: string): void { this.strataTransition.focusAnswer(answerId) }
   closeAnswerSpecimen(): void { this.strataTransition.closeAnswer() }
@@ -359,6 +363,7 @@ export class BabylonRenderer implements MindverseRenderer {
       uniforms: [
         'worldViewProjection', 'uTime', 'uDisplacement', 'uDetailDensity', 'uFaultStrength',
         'uThermal', 'uThermalIce', 'uFreshness', 'uCreated', 'uCollected', 'uSelected', 'uSeed',
+        'uCraterDensity',
       ],
     })
     material.backFaceCulling = true
@@ -378,6 +383,7 @@ export class BabylonRenderer implements MindverseRenderer {
     material.setFloat('uCollected', descriptor.collectedMarker)
     material.setFloat('uSelected', 0)
     material.setFloat('uSeed', datum.material.seed)
+    material.setFloat('uCraterDensity', descriptor.craterCount / 48)
     mesh.material = material
     const visual = Object.freeze({ datum, descriptor, mesh, material })
     this.visualByQuestion.set(datum.question.id, visual)
@@ -529,6 +535,7 @@ export class BabylonRenderer implements MindverseRenderer {
         diameter: layout.bounds.radius * 2,
         tessellation: 18,
         subdivisions: 3,
+        cap: CAVE_CYLINDER_CAP === 'none' ? Mesh.NO_CAP : Mesh.CAP_ALL,
       }, this.scene)
       wall.parent = root
       wall.position.y = -layer.centerDepth
@@ -548,6 +555,7 @@ export class BabylonRenderer implements MindverseRenderer {
         height: 0.10,
         diameter: layout.bounds.radius * 1.96,
         tessellation: 22,
+        cap: CAVE_CYLINDER_CAP === 'none' ? Mesh.NO_CAP : Mesh.CAP_ALL,
       }, this.scene)
       seam.parent = root
       seam.position.y = -(layer.centerDepth + layer.thickness / 2)
@@ -560,6 +568,7 @@ export class BabylonRenderer implements MindverseRenderer {
     }
 
     this.createCaveCap(root, layout)
+    this.createUndatedRoom(root, layout)
     for (const specimen of layout.specimens) this.createSpecimen(root, specimen)
     this.createCaveDust(root, layout)
     this.createCaveLights(root, layout)
@@ -613,6 +622,36 @@ export class BabylonRenderer implements MindverseRenderer {
     material.specularPower = 72
     mesh.material = material
     this.specimenByMeshId.set(mesh.uniqueId, specimen)
+  }
+
+  private createUndatedRoom(root: TransformNode, layout: CaveLayout): void {
+    const room = layout.undatedRoom
+    if (!room) return
+    const chamber = CreateSphere('undated-debris-room', { diameter: room.radius * 2, segments: 14 }, this.scene)
+    chamber.parent = root
+    chamber.position.set(room.x, -room.centerDepth, room.z)
+    chamber.scaling.y = 0.78
+    chamber.isPickable = false
+    const chamberMaterial = new StandardMaterial('undated-debris-room:material', this.scene)
+    chamberMaterial.diffuseColor = new Color3(0.16, 0.19, 0.22)
+    chamberMaterial.emissiveColor = new Color3(0.025, 0.055, 0.065)
+    chamberMaterial.specularColor = new Color3(0.04, 0.06, 0.07)
+    chamberMaterial.backFaceCulling = false
+    chamber.material = chamberMaterial
+
+    const distance = Math.hypot(room.x, room.z)
+    const tunnel = CreateCylinder('undated-debris-tunnel', {
+      height: Math.max(1, distance - layout.bounds.radius + room.radius * 0.7),
+      diameter: 1.8,
+      tessellation: 14,
+      cap: Mesh.NO_CAP,
+    }, this.scene)
+    tunnel.parent = root
+    tunnel.position.set(room.x * 0.63, -room.centerDepth, room.z * 0.63)
+    tunnel.rotation.z = Math.PI / 2
+    tunnel.rotation.y = -room.angle
+    tunnel.isPickable = false
+    tunnel.material = chamberMaterial
   }
 
   private createCaveDust(root: TransformNode, layout: CaveLayout): void {

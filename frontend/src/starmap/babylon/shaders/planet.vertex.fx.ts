@@ -9,13 +9,14 @@ uniform float uTime;
 uniform float uDisplacement;
 uniform float uDetailDensity;
 uniform float uFaultStrength;
+uniform float uSeed;
 
 varying vec3 vLocal;
 varying vec3 vNormal;
 varying float vRelief;
 
 float hash31(vec3 point) {
-  return fract(sin(dot(point, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+  return fract(sin(dot(point, vec3(127.1, 311.7, 74.7)) + uSeed * 29.17) * 43758.5453123);
 }
 
 float terrainNoise(vec3 point) {
@@ -26,7 +27,7 @@ float terrainNoise(vec3 point) {
 }
 
 void main(void) {
-  float relief = terrainNoise(normal + uTime * 0.00003);
+  float relief = terrainNoise(normal);
   vec3 displaced = position + normal * relief * uDisplacement;
   vLocal = displaced;
   vNormal = normalize(normal);

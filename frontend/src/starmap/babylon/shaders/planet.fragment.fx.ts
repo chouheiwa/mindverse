@@ -9,6 +9,7 @@ uniform float uCollected;
 uniform float uSelected;
 uniform float uTime;
 uniform float uSeed;
+uniform float uCraterDensity;
 
 varying vec3 vLocal;
 varying vec3 vNormal;
@@ -28,7 +29,8 @@ void main(void) {
     + rock * uThermal.z + tundra * uThermal.w + ice * uThermalIce;
 
   float cell = hash31(floor(vLocal * 18.0));
-  float crater = smoothstep(0.82, 0.97, cell) * smoothstep(0.2, -0.22, vRelief);
+  float craterThreshold = mix(0.975, 0.76, clamp(uCraterDensity, 0.0, 1.0));
+  float crater = smoothstep(craterThreshold, 0.995, cell) * smoothstep(0.2, -0.22, vRelief);
   float ridge = smoothstep(0.12, 0.48, abs(vRelief));
   vec3 terrain = thermal * (0.72 + ridge * 0.28) * (1.0 - crater * 0.44);
 

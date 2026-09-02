@@ -3,7 +3,7 @@
 - 日期：2026-09-02（Asia/Shanghai）
 - `main` 基线：`fc5cdec9b1f08e647021bc4a011f10f57db1cf0a`
 - 性能样本采集提交：`7eac10a316f42960a770b7df4a1ef8f9fbc26140`
-- 最终审查修正提交：`2587b82788f83974f1570797ae33dbe0fe77af85`
+- 最终审查修正提交：`2587b82788f83974f1570797ae33dbe0fe77af85`、`2d1faefd1f3c1555c5f0d7dca11dacb39c7c22fd`
 - 决策：**PASS — proceed to full Babylon renderer migration plan**
 
 ## 产品闸门
@@ -14,7 +14,7 @@
 - 回溯地层、未定年侧室和证据不足的浅层阻断室均通过真实浏览器验收。
 - 选中行星短边投影为 215.94 px，高于 720 px 视口短边 24% 的 172.8 px 门槛。
 - 洞窟阶段非背景像素占比通过 `>= 35%` 硬门槛。
-- 连续 5 次完整 mount → enter → exit → destroy 后，浏览器探针实测活动 Canvas、连接中的 WebGL context 和待执行 RAF 均回到 0，全局或仍连接节点的监听器回到首次销毁基线。
+- 连续 5 次完整 mount → enter → exit → destroy 后，浏览器探针实测活动 Canvas、`gl.isContextLost() === false` 的 WebGL context 和待执行 RAF 均回到 0，全局或仍连接节点的监听器回到首次销毁基线；销毁路径显式调用 `WEBGL_lose_context`。
 - Engine 初始化失败、WebGL2 不可用、`webglcontextlost` 都进入可读 DOM fallback；上下文丢失可原页重挂载恢复。
 
 ## 同机 Metal 对照
@@ -51,5 +51,6 @@
 - 洞窟阶段停止追随仍在后台更新的公转行星，移动、吸附和标本聚焦姿态保持在主井坐标系。
 - 生命周期门禁改为拦截浏览器真实 Canvas context、RAF 和 EventTarget 注册，并执行 5 次完整销毁重挂载。
 - 标本诊断携带 `answerId` 与房间类型，E2E 会下潜、转向侧室并拾取 `answer:999`，不再以任意可见标本代替。
+- 主井、通道与侧室的不透明几何均参与拾取遮挡，标本只有通过真实开口形成视线时才会被诊断为可点击。
 - 洞窟内壁启用双面光照并下倾初始视线，解决近乎纯黑的内壁。
 - 普通产物会扫描并拒绝 `__MINDVERSE_E2E__`，诊断代码在非 E2E 构建中被编译期删除。

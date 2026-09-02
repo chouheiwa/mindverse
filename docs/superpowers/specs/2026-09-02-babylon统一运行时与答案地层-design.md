@@ -4,7 +4,7 @@
 
 日期：2026-09-02
 
-状态：产品方向与引擎切换已确认，三轮规格复审问题已修正，待用户确认
+状态：产品方向与引擎切换已确认，三轮规格复审问题已修正，用户已确认执行
 
 ## 1. 目标
 
@@ -93,6 +93,11 @@ exitStrata(token: StrataToken): void
 
 ```ts
 onStrataEntered?: (event: { token: StrataToken; questionId: string }) => void
+onStrataPhase?: (event: {
+  token: StrataToken
+  questionId: string
+  phase: 'surface-approach' | 'surface-crossing' | 'strata-free' | 'strata-snapped'
+}) => void
 onStrataExited?: (event: { token: StrataToken; questionId: string }) => void
 onStrataPose?: (event: { questionId: string; pose: StrataPose }) => void
 onAnswerSpecimenFocus?: (event: { questionId: string; answerId: string; pose: StrataPose }) => void

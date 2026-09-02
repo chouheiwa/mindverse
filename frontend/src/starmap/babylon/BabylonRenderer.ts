@@ -4,9 +4,12 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js'
 import { Matrix, Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector.js'
 import { Viewport } from '@babylonjs/core/Maths/math.viewport.js'
+import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
+import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { CreateIcoSphere } from '@babylonjs/core/Meshes/Builders/icoSphereBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration.js'
@@ -30,6 +33,8 @@ import { BabylonRuntime, BabylonWebGL2RequiredError } from './runtime'
 import { buildPlanetSurfaceDescriptor, type PlanetSurfaceDescriptor } from './planetSurface'
 import { planetFragmentShader } from './shaders/planet.fragment.fx'
 import { planetVertexShader } from './shaders/planet.vertex.fx'
+import type { CaveLayout, CaveSpecimenPlacement } from './strataScene'
+import { StrataTransitionController, type StrataAnimationPhase } from './strataTransition'
 
 const ORBIT_BASE = 2.1
 const ORBIT_STEP = 1.15
@@ -51,18 +56,24 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly engine: Engine
   private readonly scene: Scene
   private readonly camera: ArcRotateCamera
+  private readonly universeRoot: TransformNode
+  private caveRoot: TransformNode | null = null
   private readonly planets: readonly PlanetDatum[]
   private readonly visualByQuestion = new Map<string, PlanetVisual>()
   private readonly visualByMeshId = new Map<number, PlanetVisual>()
   private readonly starByMeshId = new Map<number, StarDatum>()
+  private readonly specimenByMeshId = new Map<number, CaveSpecimenPlacement>()
   private readonly probes: ReadonlySet<string>
+  private readonly strataTransition: StrataTransitionController
   private selected: PlanetDatum | null = null
   private selectedVisual: PlanetVisual | null = null
   private focusedStar: StarDatum | null = null
   private elapsedMs = 0
   private overviewTarget = Vector3.Zero()
   private overviewRadius = 30
+  private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
   private destroyed = false
+  private universeVisible = true
   private reducedMotion: boolean
 
   constructor(
@@ -96,6 +107,7 @@ export class BabylonRenderer implements MindverseRenderer {
       scene = new Scene(engine)
       this.scene = scene
       scene.clearColor = new Color4(0, 0, 0, 1)
+      this.universeRoot = new TransformNode('universe-root', scene)
       const camera = new ArcRotateCamera('mindverse-camera', -Math.PI / 2, Math.PI / 2.55, 30, Vector3.Zero(), scene)
       this.camera = camera
       camera.minZ = 0.1
@@ -105,6 +117,12 @@ export class BabylonRenderer implements MindverseRenderer {
       camera.pinchDeltaPercentage = 0.012
       camera.attachControl(canvas, true)
       scene.activeCamera = camera
+      this.strataTransition = new StrataTransitionController({
+        capturePose: () => this.captureStrataEntryPose(),
+        applyPose: (pose) => this.applyStrataPose(pose),
+        setUniverseVisible: (visible) => this.setUniverseVisible(visible),
+        animate: (phase, token, complete, fail) => this.animateStrata(phase, token, complete, fail),
+      }, callbacks)
       this.createScene(index)
       runtimeConstructionStarted = true
       this.runtime = new BabylonRuntime({
@@ -142,6 +160,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.destroyed = true
     this.selected = null
     this.selectedVisual = null
+    this.strataTransition.destroy()
     this.runtime.destroy()
   }
 
@@ -227,18 +246,27 @@ export class BabylonRenderer implements MindverseRenderer {
 
   enterStrata(request: StrataRequest): void {
     if (this.destroyed) return
-    this.callbacks.onStrataError?.({
-      token: request.token,
-      questionId: request.questionId,
-      scope: 'transition',
-      cause: unsupported('答案地层尚未接入 Babylon 垂直样片。'),
-    })
+    if (this.strataTransition.token === request.token) return
+    if (!this.selected || this.selected.question.id !== request.questionId) {
+      this.callbacks.onStrataError?.({
+        token: request.token,
+        questionId: request.questionId,
+        scope: 'transition',
+        cause: unsupported('请先选择对应的问题行星，再打开答案地层。'),
+      })
+      return
+    }
+    this.strataTransition.enter(request)
+    const layout = this.strataTransition.layout
+    if (layout) this.createCave(layout)
   }
 
-  moveStrata(_input: StrataMoveIntent): void {}
-  focusAnswerSpecimen(_answerId: string): void {}
-  closeAnswerSpecimen(): void {}
-  exitStrata(_token: StrataToken): void {}
+  moveStrata(input: StrataMoveIntent): void {
+    this.strataTransition.move(input, 1 / 60)
+  }
+  focusAnswerSpecimen(answerId: string): void { this.strataTransition.focusAnswer(answerId) }
+  closeAnswerSpecimen(): void { this.strataTransition.closeAnswer() }
+  exitStrata(token: StrataToken): void { this.strataTransition.exit(token) }
 
   private createScene(index: UniverseIndex): void {
     this.scene.imageProcessingConfiguration.toneMappingEnabled = true
@@ -261,6 +289,11 @@ export class BabylonRenderer implements MindverseRenderer {
       if (this.destroyed || info.type !== PointerEventTypes.POINTERPICK) return
       const mesh = info.pickInfo?.pickedMesh
       if (!mesh) return
+      const specimen = this.specimenByMeshId.get(mesh.uniqueId)
+      if (specimen) {
+        this.strataTransition.focusAnswer(specimen.answerId)
+        return
+      }
       const visual = this.visualByMeshId.get(mesh.uniqueId)
       if (visual) {
         const starId = 'id' in visual.datum.star.s ? visual.datum.star.s.id : ''
@@ -289,6 +322,7 @@ export class BabylonRenderer implements MindverseRenderer {
       segments: 12,
     }, this.scene)
     mesh.position.set(star.p[0], star.p[1], star.p[2])
+    mesh.parent = this.universeRoot
     mesh.isPickable = true
     const material = new StandardMaterial(`${mesh.name}:material`, this.scene)
     const color = new Color3(star.color[0], star.color[1], star.color[2])
@@ -313,6 +347,7 @@ export class BabylonRenderer implements MindverseRenderer {
       normalizedOrbitDistance: datum.orbitR / ORBIT_BASE,
     })
     const mesh = CreateIcoSphere(`planet:${datum.question.id}`, { radius: 1, subdivisions: 4 }, this.scene)
+    mesh.parent = this.universeRoot
     mesh.scaling.setAll(descriptor.radius * 0.38)
     mesh.isPickable = true
     mesh.metadata = { questionId: datum.question.id, starId: datum.star.s.id }
@@ -382,6 +417,239 @@ export class BabylonRenderer implements MindverseRenderer {
     const projected = Vector3.Project(mesh.getAbsolutePosition(), Matrix.Identity(), this.scene.getTransformMatrix(), viewport)
     const visible = projected.z >= 0 && projected.z <= 1
     this.callbacks.onAnchor(projected.x, projected.y, visible)
+  }
+
+  private captureStrataEntryPose(): Readonly<{ depth: number; yaw: number; pitch: number; snapId: null }> {
+    this.entryCameraSnapshot = Object.freeze({
+      alpha: this.camera.alpha,
+      beta: this.camera.beta,
+      radius: this.camera.radius,
+      target: this.camera.target.clone(),
+    })
+    return Object.freeze({
+      depth: this.camera.radius,
+      yaw: this.camera.alpha,
+      pitch: this.camera.beta,
+      snapId: null,
+    })
+  }
+
+  private applyStrataPose(pose: Readonly<{ depth: number; yaw: number; pitch: number }>): void {
+    if (this.destroyed) return
+    if (this.universeVisible) {
+      const snapshot = this.entryCameraSnapshot
+      this.camera.alpha = pose.yaw
+      this.camera.beta = pose.pitch
+      this.camera.radius = pose.depth
+      if (snapshot) this.camera.setTarget(snapshot.target)
+      return
+    }
+    const position = new Vector3(0, -pose.depth, 0)
+    const horizontal = Math.cos(pose.pitch)
+    const direction = new Vector3(
+      Math.sin(pose.yaw) * horizontal,
+      Math.sin(pose.pitch),
+      Math.cos(pose.yaw) * horizontal,
+    )
+    this.camera.setPosition(position)
+    this.camera.setTarget(position.add(direction))
+  }
+
+  private setUniverseVisible(visible: boolean): void {
+    if (this.destroyed) return
+    this.universeVisible = visible
+    this.universeRoot.setEnabled(visible)
+    this.caveRoot?.setEnabled(!visible)
+    this.scene.fogEnabled = !visible
+    if (visible) this.camera.attachControl(this.canvas, true)
+    else this.camera.detachControl()
+  }
+
+  private animateStrata(
+    phase: StrataAnimationPhase,
+    _token: StrataToken,
+    complete: () => void,
+    fail: (cause: Error) => void,
+  ): () => void {
+    if (this.destroyed) return () => {}
+    if (phase === 'surface-crossing') this.caveRoot?.setEnabled(true)
+    const startTarget = this.camera.target.clone()
+    const startRadius = this.camera.radius
+    const selectedPosition = this.selectedVisual?.mesh.position.clone() ?? startTarget
+    const endTarget = phase === 'surface-approach'
+      ? selectedPosition
+      : phase === 'exit' ? new Vector3(0, -0.35, 1) : new Vector3(0, -1, 1)
+    const endRadius = phase === 'surface-approach'
+      ? Math.max(0.7, (this.selectedVisual?.descriptor.radius ?? 0.7) * 0.82)
+      : 0.9
+    const duration = this.reducedMotion ? 0 : phase === 'surface-approach' ? 720 : 560
+    let elapsed = 0
+    let cancelled = false
+    const observer = this.scene.onBeforeRenderObservable.add(() => {
+      if (cancelled || this.destroyed) return
+      try {
+        elapsed += Math.max(1, this.engine.getDeltaTime())
+        const progress = duration === 0 ? 1 : Math.min(1, elapsed / duration)
+        const eased = progress * progress * (3 - 2 * progress)
+        this.camera.setTarget(Vector3.Lerp(startTarget, endTarget, eased))
+        this.camera.radius = startRadius + (endRadius - startRadius) * eased
+        if (progress < 1) return
+        this.scene.onBeforeRenderObservable.remove(observer)
+        complete()
+      } catch (cause) {
+        this.scene.onBeforeRenderObservable.remove(observer)
+        fail(cause instanceof Error ? cause : new Error(String(cause)))
+      }
+    })
+    return () => {
+      if (cancelled) return
+      cancelled = true
+      this.scene.onBeforeRenderObservable.remove(observer)
+    }
+  }
+
+  private createCave(layout: CaveLayout): void {
+    this.specimenByMeshId.clear()
+    this.caveRoot?.dispose(false, true)
+    const root = new TransformNode('answer-strata-root', this.scene)
+    this.caveRoot = root
+
+    const layerColors = [
+      new Color3(0.28, 0.19, 0.14),
+      new Color3(0.18, 0.23, 0.25),
+      new Color3(0.30, 0.25, 0.17),
+      new Color3(0.17, 0.20, 0.27),
+    ]
+    const renderLayers = layout.layers.length > 0
+      ? layout.layers
+      : [{ id: 'surface-observation-room', centerDepth: 2.5, thickness: 5, colorIndex: 1 }]
+    for (const layer of renderLayers) {
+      const wall = CreateCylinder(`cave-wall:${layer.id}`, {
+        height: layer.thickness + 0.12,
+        diameter: layout.bounds.radius * 2,
+        tessellation: 18,
+        subdivisions: 3,
+      }, this.scene)
+      wall.parent = root
+      wall.position.y = -layer.centerDepth
+      wall.rotation.y = layer.colorIndex * 0.21
+      wall.scaling.x = 1 + Math.sin(layer.centerDepth * 1.7) * 0.055
+      wall.scaling.z = 1 + Math.cos(layer.centerDepth * 1.3) * 0.07
+      wall.isPickable = false
+      const material = new StandardMaterial(`${wall.name}:material`, this.scene)
+      const base = layerColors[layer.colorIndex % layerColors.length]
+      material.diffuseColor = base
+      material.emissiveColor = base.scale(0.075)
+      material.specularColor = new Color3(0.045, 0.055, 0.06)
+      material.backFaceCulling = false
+      wall.material = material
+
+      const seam = CreateCylinder(`cave-seam:${layer.id}`, {
+        height: 0.10,
+        diameter: layout.bounds.radius * 1.96,
+        tessellation: 22,
+      }, this.scene)
+      seam.parent = root
+      seam.position.y = -(layer.centerDepth + layer.thickness / 2)
+      seam.isPickable = false
+      const seamMaterial = new StandardMaterial(`${seam.name}:material`, this.scene)
+      seamMaterial.diffuseColor = new Color3(0.035, 0.085, 0.10)
+      seamMaterial.emissiveColor = new Color3(0.035, 0.19, 0.22)
+      seamMaterial.backFaceCulling = false
+      seam.material = seamMaterial
+    }
+
+    this.createCaveCap(root, layout)
+    for (const specimen of layout.specimens) this.createSpecimen(root, specimen)
+    this.createCaveDust(root, layout)
+    this.createCaveLights(root, layout)
+    this.scene.fogMode = Scene.FOGMODE_EXP2
+    this.scene.fogDensity = 0.028
+    this.scene.fogColor = new Color3(0.012, 0.018, 0.025)
+    root.setEnabled(false)
+  }
+
+  private createCaveCap(root: TransformNode, layout: CaveLayout): void {
+    const capDepth = layout.blockedDepth ? layout.bounds.maxDepth : layout.bounds.maxDepth + 0.25
+    const cap = CreateCylinder('cave-depth-cap', {
+      height: 0.55,
+      diameter: layout.bounds.radius * 1.94,
+      tessellation: 18,
+    }, this.scene)
+    cap.parent = root
+    cap.position.y = -capDepth
+    const material = new StandardMaterial('cave-depth-cap:material', this.scene)
+    material.diffuseColor = layout.blockedDepth ? new Color3(0.22, 0.16, 0.12) : new Color3(0.08, 0.10, 0.12)
+    material.emissiveColor = layout.blockedDepth ? new Color3(0.06, 0.025, 0.012) : Color3.Black()
+    material.specularColor = Color3.Black()
+    cap.material = material
+
+    const crack = CreateIcoSphere('surface-crossing-crack', { radius: 1, subdivisions: 2 }, this.scene)
+    crack.parent = root
+    crack.position.set(0, -0.2, layout.bounds.radius - 0.35)
+    crack.scaling.set(1.9, 0.10, 0.16)
+    crack.isPickable = false
+    const crackMaterial = new StandardMaterial('surface-crossing-crack:material', this.scene)
+    crackMaterial.diffuseColor = new Color3(0.15, 0.44, 0.56)
+    crackMaterial.emissiveColor = new Color3(0.12, 0.68, 0.92)
+    crack.material = crackMaterial
+  }
+
+  private createSpecimen(root: TransformNode, specimen: CaveSpecimenPlacement): void {
+    const mesh = CreateIcoSphere(`answer-specimen:${specimen.answerId}`, { radius: 1, subdivisions: 2 }, this.scene)
+    mesh.parent = root
+    mesh.position.set(specimen.x, -specimen.depth, specimen.z)
+    mesh.scaling.set(specimen.scale * 0.72, specimen.scale * 1.65, specimen.scale)
+    mesh.rotation.set(specimen.depth * 0.17, specimen.x * 0.23, specimen.z * 0.19)
+    mesh.isPickable = true
+    mesh.metadata = { answerId: specimen.answerId }
+    const material = new StandardMaterial(`${mesh.name}:material`, this.scene)
+    const created = specimen.relations.includes('created')
+    material.diffuseColor = created ? new Color3(0.66, 0.38, 0.13) : new Color3(0.37, 0.53, 0.61)
+    material.emissiveColor = created ? new Color3(0.42, 0.18, 0.04) : new Color3(0.08, 0.16, 0.20)
+    material.specularColor = specimen.relations.includes('collected')
+      ? new Color3(0.35, 0.67, 0.88)
+      : new Color3(0.14, 0.19, 0.21)
+    material.specularPower = 72
+    mesh.material = material
+    this.specimenByMeshId.set(mesh.uniqueId, specimen)
+  }
+
+  private createCaveDust(root: TransformNode, layout: CaveLayout): void {
+    const material = new StandardMaterial('cave-dust:material', this.scene)
+    material.disableLighting = true
+    material.emissiveColor = new Color3(0.18, 0.29, 0.32)
+    material.alpha = 0.38
+    for (let index = 0; index < 24; index += 1) {
+      const dust = CreateSphere(`cave-dust:${index}`, { diameter: 0.026 + index % 3 * 0.009, segments: 4 }, this.scene)
+      dust.parent = root
+      const angle = index * 2.399963
+      const radius = 0.7 + index % 7 * 0.48
+      dust.position.set(
+        Math.sin(angle) * radius,
+        -(0.8 + index / 23 * Math.max(1, layout.bounds.maxDepth - 1.2)),
+        Math.cos(angle) * radius,
+      )
+      dust.isPickable = false
+      dust.material = material
+    }
+  }
+
+  private createCaveLights(root: TransformNode, layout: CaveLayout): void {
+    const depths = layout.layers.length > 0
+      ? layout.layers.map(({ centerDepth }) => centerDepth)
+      : [2.2]
+    for (const [index, depth] of depths.entries()) {
+      const light = new PointLight(`cave-light:${index}`, new Vector3(
+        index % 2 === 0 ? 2.4 : -2.4,
+        -depth,
+        index % 3 === 0 ? 1.7 : -1.7,
+      ), this.scene)
+      light.parent = root
+      light.diffuse = index % 2 === 0 ? new Color3(0.22, 0.52, 0.66) : new Color3(0.58, 0.31, 0.16)
+      light.intensity = 0.72
+      light.range = 9
+    }
   }
 
   private focusStar(star: StarDatum): void {

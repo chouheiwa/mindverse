@@ -15,6 +15,7 @@
     "test:e2e": "npm run build:e2e && playwright test",
     "test:e2e:functional": "npm run build:e2e && playwright test --project=swiftshader-functional",
     "test:e2e:performance": "npm run build:e2e && playwright test --project=metal-performance",
+    "compare:render-baselines": "node scripts/compare-render-baselines.mjs testdata/render-baselines/three-question-7.json testdata/render-baselines/babylon-question-7.json",
     "test:e2e:install": "playwright install chromium",
     "preview": "vite preview"
   },

@@ -54,6 +54,7 @@ export class StrataTransitionController {
   get pose(): StrataPose | null { return this.active ? copyPose(this.active.pose) : null }
   get token(): StrataToken | null { return this.active?.request.token ?? null }
   get questionId(): string | null { return this.active?.request.questionId ?? null }
+  get phase(): StrataAnimationPhase | null { return this.active?.phase ?? null }
 
   enter(request: StrataRequest): void {
     if (this.active?.request.token === request.token) return
@@ -153,7 +154,7 @@ export class StrataTransitionController {
     if (!active) return
     this.port.setUniverseVisible(false)
     active.phase = 'strata-free'
-    active.pose = copyPose({ depth: Math.min(1.2, active.layout.bounds.maxDepth), yaw: 0, pitch: 0, snapId: null })
+    active.pose = copyPose({ depth: Math.min(1.2, active.layout.bounds.maxDepth), yaw: 0, pitch: -0.18, snapId: null })
     this.port.applyPose(active.pose)
     const event = { token: active.request.token, questionId: active.request.questionId }
     this.callbacks.onStrataEntered?.(event)

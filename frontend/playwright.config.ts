@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url))
 const e2ePort = process.env.E2E_PORT ?? '14176'
 const e2eBaseURL = `http://127.0.0.1:${e2ePort}`
+const rendererKind = process.env.VITE_RENDERER === 'babylon' ? 'babylon' : 'three'
 
 export default defineConfig({
   testDir: './e2e',
@@ -22,6 +23,7 @@ export default defineConfig({
   projects: [
     {
       name: 'swiftshader-functional',
+      testMatch: rendererKind === 'babylon' ? /babylon-gate\.spec\.ts/ : /production-render\.spec\.ts/,
       grepInvert: /@metal-performance/,
       use: {
         ...devices['Desktop Chrome'],
@@ -32,7 +34,7 @@ export default defineConfig({
     },
     {
       name: 'metal-performance',
-      grep: /@metal-performance/,
+      testMatch: /render-baseline\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {

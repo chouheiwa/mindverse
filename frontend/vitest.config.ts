@@ -4,7 +4,7 @@ import { rendererVirtualModule } from './vite/rendererModule.js'
 export default defineConfig({
   plugins: [rendererVirtualModule('three')],
   test: {
-    exclude: ['e2e/**', '**/node_modules/**', '**/.git/**'],
+    exclude: ['e2e/**', 'scripts/compare-render-baselines.test.mjs', '**/node_modules/**', '**/.git/**'],
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     coverage: {

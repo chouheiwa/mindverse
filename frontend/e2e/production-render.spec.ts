@@ -50,7 +50,7 @@ function collectRuntimeErrors(page: Page) {
 function collectRendererResponses(page: Page) {
   const responses: Response[] = []
   page.on('response', (response) => {
-    if (/\/assets\/Renderer-[^/]+\.js(?:\?.*)?$/.test(response.url())) responses.push(response)
+    if (/\/assets\/(?:Renderer|_virtual_mindverse-renderer)-[^/]+\.js(?:\?.*)?$/.test(response.url())) responses.push(response)
   })
   return responses
 }
@@ -304,7 +304,7 @@ test('a failed Renderer chunk records 503 and reload recovery reaches a 2xx read
   const fixture = await installUniverseFixture(page)
   const responses = collectRendererResponses(page)
   let rendererRequests = 0
-  await page.route(/\/assets\/Renderer-[^/]+\.js$/, async (route) => {
+  await page.route(/\/assets\/(?:Renderer|_virtual_mindverse-renderer)-[^/]+\.js$/, async (route) => {
     rendererRequests += 1
     if (rendererRequests === 1) {
       await route.fulfill({ status: 503, contentType: 'text/javascript', body: 'unavailable' })

@@ -19,6 +19,7 @@ const buildOutputDir = isolatedBuild ? e2eOutputDir : deployOutputDir
 const allowedOutputName = isolatedBuild ? '.e2e-web' : 'web'
 const assertOutputSafety = () => assertSafeBuildOutput(projectRoot, buildOutputDir, allowedOutputName)
 const rendererKind = (process.env.VITE_RENDERER ?? 'three') as RendererKind
+const diagnosticsEnabled = process.env.VITE_E2E_DIAGNOSTICS === '1'
 
 // Config-load gate: no Vite plugin (and therefore no buildStart cleanup) can run first.
 assertOutputSafety()
@@ -65,7 +66,7 @@ function emitBuildMetadata(): Plugin {
       this.emitFile({
         type: 'asset',
         fileName: '.vite/build-metadata.json',
-        source: JSON.stringify({ renderer: rendererKind, chunks }, null, 2),
+        source: JSON.stringify({ renderer: rendererKind, diagnostics: diagnosticsEnabled, chunks }, null, 2),
       })
     },
   }

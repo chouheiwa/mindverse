@@ -30,9 +30,23 @@ const chunkEvidence = (chunk) => [
   ...chunk.moduleIds,
 ].join('\n')
 
-export function validateBuildBoundaries({ renderer, manifest, chunks, assetSizes }) {
+export function validateBuildBoundaries({
+  renderer,
+  manifest,
+  chunks,
+  assetSizes,
+  diagnostics = false,
+  assetSources = {},
+}) {
   if (renderer !== 'three' && renderer !== 'babylon') {
     throw new Error('build boundary: renderer must explicitly be three or babylon')
+  }
+  if (!diagnostics) {
+    const diagnosticAsset = Object.entries(assetSources)
+      .find(([, source]) => typeof source === 'string' && source.includes('__MINDVERSE_E2E__'))
+    if (diagnosticAsset) {
+      throw new Error(`build boundary: E2E diagnostic global found in ordinary production asset ${diagnosticAsset[0]}`)
+    }
   }
   const records = Object.entries(manifest)
   const byKey = new Map(records)
@@ -160,11 +174,22 @@ async function main() {
   const metadata = JSON.parse(await readFile(metadataPath, 'utf8'))
   await unlink(metadataPath)
   const assetSizes = {}
+  const assetSources = {}
   for (const chunk of metadata.chunks) {
-    if (chunk.file.endsWith('.js')) assetSizes[chunk.file] = (await stat(new URL(chunk.file, outputDir))).size
+    if (!chunk.file.endsWith('.js')) continue
+    const chunkUrl = new URL(chunk.file, outputDir)
+    assetSizes[chunk.file] = (await stat(chunkUrl)).size
+    assetSources[chunk.file] = await readFile(chunkUrl, 'utf8')
   }
 
-  const result = validateBuildBoundaries({ renderer: metadata.renderer, manifest, chunks: metadata.chunks, assetSizes })
+  const result = validateBuildBoundaries({
+    renderer: metadata.renderer,
+    manifest,
+    chunks: metadata.chunks,
+    assetSizes,
+    diagnostics: metadata.diagnostics,
+    assetSources,
+  })
   const engineLimit = result.renderer === 'three' ? THREE_CHUNK_BYTES : BABYLON_CHUNK_BYTES
   process.stdout.write(
     `build boundaries verified: ${result.renderer}; ${result.publicChunkCount} public chunks; one engine vendor chunk within ${engineLimit} bytes; ordinary JavaScript chunks within ${MAX_CHUNK_BYTES} bytes\n`,

@@ -643,7 +643,8 @@ export function PrivateUniverseView() {
         onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />}
       {strataState && strataScene && strataState.kind !== 'surface-approach' && <StrataHud
         scene={strataScene} pose={strataPose} phase={strataState.kind}
-        focusProxyRef={strataFocusProxyRef} onMove={moveStrata} onExit={exitStrata} />}
+        focusProxyRef={strataFocusProxyRef} onMove={moveStrata}
+        onPick={(clientX, clientY) => rendererRef.current?.pickStrataAt(clientX, clientY)} onExit={exitStrata} />}
       {strataState?.kind === 'answer-specimen-focus' && universeIndex.answersById.get(strataState.answerId) && <AnswerEvidencePanel
         answer={universeIndex.answersById.get(strataState.answerId)!}
         onClose={closeAnswerEvidence} getReturnFocus={() => strataFocusProxyRef.current} />}

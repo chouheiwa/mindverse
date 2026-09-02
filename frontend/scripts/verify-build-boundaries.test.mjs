@@ -127,6 +127,15 @@ describe('build boundary verifier', () => {
     expect(() => validateBuildBoundaries(fixture)).toThrow(/Three artifact.*Babylon/i)
   })
 
+  test('rejects the E2E diagnostic global from ordinary production source', () => {
+    const fixture = validBabylonFixture()
+    fixture.assetSources = { 'assets/Universe.js': 'window.__MINDVERSE_E2E__={}' }
+    expect(() => validateBuildBoundaries(fixture)).toThrow(/diagnostic.*ordinary production/i)
+
+    fixture.diagnostics = true
+    expect(validateBuildBoundaries(fixture)).toMatchObject({ renderer: 'babylon' })
+  })
+
   test('rejects Three and postprocessing code in a Babylon artifact', () => {
     const fixture = validBabylonFixture()
     fixture.chunks.push({

@@ -1,0 +1,19 @@
+{
+  "fixtureVersion": "strata-universe.v1",
+  "rendererKind": "babylon",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "selectedPlanetBounds": {
+    "x": 527.003613294128,
+    "y": 261.913446159854,
+    "width": 221.8245297700837,
+    "height": 215.9375723684327
+  },
+  "nonBackgroundRatio": 0.120224609375,
+  "firstInteractiveMs": 1755.6485409999998,
+  "p95FrameTime": 9.799999999813735,
+  "sampleCount": 1199,
+  "commitSha": "0d2f852c8662a061c043cb389ed4da33a120dc3c"
+}

@@ -1,6 +1,20 @@
 import type { Quality } from './quality'
 
 export interface RenderSnapshot {
+  rendererKind: 'three' | 'babylon'
+  activeContextCount: number
+  scenePhase: 'universe' | 'surface-approach' | 'surface-crossing' | 'strata-free' | 'strata-snapped' | 'strata-exiting'
+  projectedBounds: {
+    selectedPlanet: { x: number, y: number, width: number, height: number } | null
+    firstAnswerSpecimen?: { x: number, y: number, width: number, height: number } | null
+  }
+  lifecycle: {
+    rafLoops: number
+    listeners: number
+    clickEvents?: number
+    lastPick?: 'none' | 'star' | 'planet' | 'specimen' | 'other'
+  }
+  p95FrameTime: number | null
   renderReady: boolean
   frameTimes: number[]
   frameTimestampsMs: number[]
@@ -19,6 +33,8 @@ export interface RenderSnapshot {
     planetCount: number, probeCount: number, probeNearVisible: boolean,
     firstStarX: number | null, firstStarY: number | null,
     cameraDistance: number, targetDistance: number,
+    cameraAlpha?: number, cameraBeta?: number,
+    cameraTargetX?: number, cameraTargetY?: number, cameraTargetZ?: number,
   }
 }
 
@@ -46,6 +62,15 @@ interface ActiveDiagnostics {
   scene(): RenderSnapshot['scene']
   quality: Quality
   probeTransitionFrames: number
+  details: E2EDiagnosticsDetails
+}
+
+export interface E2EDiagnosticsDetails {
+  readonly rendererKind: 'three' | 'babylon'
+  readonly activeContextCount: () => number
+  readonly scenePhase: () => RenderSnapshot['scenePhase']
+  readonly projectedBounds: () => RenderSnapshot['projectedBounds']
+  readonly lifecycle: () => RenderSnapshot['lifecycle']
 }
 
 declare global {
@@ -70,6 +95,13 @@ export function installE2EDiagnostics(
   quality: Quality,
   memory: () => RenderSnapshot['memory'],
   scene: () => RenderSnapshot['scene'],
+  details: E2EDiagnosticsDetails = {
+    rendererKind: 'three',
+    activeContextCount: () => 1,
+    scenePhase: () => 'universe',
+    projectedBounds: () => ({ selectedPlanet: null }),
+    lifecycle: () => ({ rafLoops: 1, listeners: 0 }),
+  },
 ): void {
   let state: ActiveDiagnostics
   const api: E2EDiagnosticsApi = Object.freeze({
@@ -85,6 +117,12 @@ export function installE2EDiagnostics(
         frameSequences[logicalIndex] = sample.sequence
       }
       return {
+        rendererKind: state.details.rendererKind,
+        activeContextCount: state.details.activeContextCount(),
+        scenePhase: state.details.scenePhase(),
+        projectedBounds: structuredClone(state.details.projectedBounds()),
+        lifecycle: { ...state.details.lifecycle() },
+        p95FrameTime: p95FrameTime(frameTimes),
         renderReady: state.renderReady,
         frameTimes,
         frameTimestampsMs,
@@ -116,10 +154,17 @@ export function installE2EDiagnostics(
     scene,
     quality,
     probeTransitionFrames: 0,
+    details,
     api,
   }
   active = state
   window.__MINDVERSE_E2E__ = state.api
+}
+
+export function p95FrameTime(samples: readonly number[]): number | null {
+  if (samples.length === 0) return null
+  const sorted = [...samples].sort((left, right) => left - right)
+  return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)]
 }
 
 export function recordE2EFrame(

@@ -3,6 +3,7 @@ import {
   E2E_FRAME_CAPACITY,
   forcedE2EQuality,
   installE2EDiagnostics,
+  p95FrameTime,
   recordE2EFrame,
   removeE2EDiagnostics,
 } from './e2eDiagnostics'
@@ -23,7 +24,13 @@ function installDiagnostics() {
   installE2EDiagnostics(owner, 'medium', () => ({ geometries: 9, textures: 3 }), () => ({
     planetCount: 512, probeCount: 300, probeNearVisible: true, firstStarX: 320, firstStarY: 180,
     cameraDistance: 16, targetDistance: 4.5,
-  }))
+  }), {
+    rendererKind: 'babylon',
+    activeContextCount: () => 1,
+    scenePhase: () => 'strata-free',
+    projectedBounds: () => ({ selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } }),
+    lifecycle: () => ({ rafLoops: 1, listeners: 4 }),
+  })
   return owner
 }
 
@@ -46,6 +53,13 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
     planetCount: 512, probeCount: 300, probeNearVisible: true, firstStarX: 320, firstStarY: 180,
     cameraDistance: 16, targetDistance: 4.5,
   })
+  expect(first).toMatchObject({
+    rendererKind: 'babylon',
+    activeContextCount: 1,
+    scenePhase: 'strata-free',
+    projectedBounds: { selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } },
+    lifecycle: { rafLoops: 1, listeners: 4 },
+  })
   first.frameTimes.length = 0
   first.scene.planetCount = 0
   expect(window.__MINDVERSE_E2E__!.snapshot()).toMatchObject({
@@ -55,6 +69,27 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
   })
   removeE2EDiagnostics(owner)
   expect(window.__MINDVERSE_E2E__).toBeUndefined()
+})
+
+test('calculates p95 without mutating samples and resets all public diagnostics after destroy', () => {
+  const samples = [30, 10, 50, 20, 40]
+  expect(p95FrameTime(samples)).toBe(50)
+  expect(samples).toEqual([30, 10, 50, 20, 40])
+  expect(p95FrameTime([])).toBeNull()
+  const owner = installDiagnostics()
+  recordE2EFrame(owner, 16)
+  expect(window.__MINDVERSE_E2E__?.snapshot().p95FrameTime).toBe(16)
+  removeE2EDiagnostics(owner)
+  expect(window.__MINDVERSE_E2E__).toBeUndefined()
+})
+
+test('diagnostic snapshots contain no content or OAuth evidence fields', () => {
+  const owner = installDiagnostics()
+  const serialized = JSON.stringify(window.__MINDVERSE_E2E__?.snapshot())
+  for (const forbidden of ['title', 'summary', 'url', 'oauth', 'bindings', 'authorName']) {
+    expect(serialized.toLowerCase()).not.toContain(forbidden.toLowerCase())
+  }
+  removeE2EDiagnostics(owner)
 })
 
 test('retains the closed 35-second interval at 240Hz and reports the first overflow', () => {

@@ -1,0 +1,19 @@
+{
+  "fixtureVersion": "strata-universe.v1",
+  "rendererKind": "three",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "selectedPlanetBounds": {
+    "x": 601.389890392408,
+    "y": 321.3898903924079,
+    "width": 77.22021921518423,
+    "height": 77.22021921518423
+  },
+  "nonBackgroundRatio": 0.2110622829861111,
+  "firstInteractiveMs": 1839.316167,
+  "p95FrameTime": 9.899999999999636,
+  "sampleCount": 1200,
+  "commitSha": "0d2f852c8662a061c043cb389ed4da33a120dc3c"
+}

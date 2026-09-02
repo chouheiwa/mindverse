@@ -234,6 +234,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
         <main className="qw-main">
           <section className="qw-planet-stage" aria-label="问题行星近景"
             onPointerDown={(event) => {
+              if (isInteractivePointerTarget(event.target)) return
               dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
               event.currentTarget.setPointerCapture?.(event.pointerId)
             }}
@@ -293,4 +294,8 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
       )}
     </dialog>
   )
+}
+
+function isInteractivePointerTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('button, a, input, select, textarea, [role="button"]'))
 }

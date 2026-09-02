@@ -1,4 +1,5 @@
 import { Engine } from '@babylonjs/core/Engines/engine.js'
+import '@babylonjs/core/Culling/ray.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js'
@@ -14,10 +15,10 @@ import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration.js'
 import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/defaultRenderingPipeline.js'
-import { PointerEventTypes } from '@babylonjs/core/Events/pointerEvents.js'
 import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput } from '../gl/planetMaterials'
+import { installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot } from '../e2eDiagnostics'
 import { starData, type StarDatum } from '../gl/starData'
 import type { PlanetDatum } from '../gl/bodies'
 import type {
@@ -81,7 +82,11 @@ export class BabylonRenderer implements MindverseRenderer {
   private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
   private destroyed = false
   private universeVisible = true
+  private workspaceOpen = false
   private reducedMotion: boolean
+  private loopActive = false
+  private diagnosticClickEvents = 0
+  private diagnosticLastPick: NonNullable<RenderSnapshot['lifecycle']['lastPick']> = 'none'
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -97,12 +102,19 @@ export class BabylonRenderer implements MindverseRenderer {
     this.planets = buildPlanetBookkeeping(index)
     this.probes = new Set(index.probesById.keys())
 
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
+      && new URLSearchParams(location.search).get('e2eEngineFail') === '1') {
+      throw new Error('E2E injected Babylon Engine initialization failure')
+    }
+
     const engine = new Engine(canvas, true, {
       preserveDrawingBuffer: false,
       stencil: false,
       disableWebGL2Support: false,
     })
-    if (engine.webGLVersion < 2) {
+    const forceWebGL2Unavailable = import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
+      && new URLSearchParams(location.search).get('e2eWebGL2Unavailable') === '1'
+    if (engine.webGLVersion < 2 || forceWebGL2Unavailable) {
       engine.dispose()
       throw new BabylonWebGL2RequiredError()
     }
@@ -131,6 +143,7 @@ export class BabylonRenderer implements MindverseRenderer {
         animate: (phase, token, complete, fail) => this.animateStrata(phase, token, complete, fail),
       }, callbacks)
       this.createScene(index)
+      canvas.addEventListener('click', this.onCanvasClick)
       runtimeConstructionStarted = true
       this.runtime = new BabylonRuntime({
         engine,
@@ -144,6 +157,29 @@ export class BabylonRenderer implements MindverseRenderer {
         onError: callbacks.onRenderError,
       })
       this.resizeLabels()
+      if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+        installE2EDiagnostics(
+          this,
+          'high',
+          () => ({ geometries: this.scene.meshes.length, textures: this.scene.textures.length }),
+          () => this.diagnosticScene(),
+          {
+            rendererKind: 'babylon',
+            activeContextCount: () => this.destroyed ? 0 : 1,
+            scenePhase: () => this.diagnosticPhase(),
+            projectedBounds: () => ({
+              selectedPlanet: this.selectedPlanetBounds(),
+              firstAnswerSpecimen: this.firstAnswerSpecimenBounds(),
+            }),
+            lifecycle: () => ({
+              rafLoops: this.loopActive ? 1 : 0,
+              listeners: this.destroyed ? 0 : 3,
+              clickEvents: this.diagnosticClickEvents,
+              lastPick: this.diagnosticLastPick,
+            }),
+          },
+        )
+      }
     } catch (cause) {
       if (!runtimeConstructionStarted) {
         if (scene) scene.dispose()
@@ -153,10 +189,10 @@ export class BabylonRenderer implements MindverseRenderer {
     }
   }
 
-  start(): void { this.runtime.start() }
-  stop(): void { this.runtime.stop() }
-  suspend(): void { this.runtime.suspend() }
-  resume(): void { this.runtime.resume() }
+  start(): void { this.runtime.start(); this.loopActive = true }
+  stop(): void { this.runtime.stop(); this.loopActive = false }
+  suspend(): void { this.runtime.suspend(); this.loopActive = false }
+  resume(): void { this.runtime.resume(); this.loopActive = true }
   resize(): void {
     this.runtime.resize()
     this.resizeLabels()
@@ -168,6 +204,9 @@ export class BabylonRenderer implements MindverseRenderer {
     this.selected = null
     this.selectedVisual = null
     this.strataTransition.destroy()
+    this.loopActive = false
+    this.canvas.removeEventListener('click', this.onCanvasClick)
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') removeE2EDiagnostics(this)
     this.runtime.destroy()
   }
 
@@ -218,7 +257,10 @@ export class BabylonRenderer implements MindverseRenderer {
 
   setWorkspaceOpen(open: boolean): void {
     if (this.destroyed) return
+    this.workspaceOpen = open
     this.canvas.style.pointerEvents = open ? 'none' : ''
+    if (open) this.camera.detachControl()
+    else if (this.universeVisible) this.camera.attachControl(this.canvas, true)
     this.camera.viewport = open && this.engine.getRenderWidth() > 760
       ? new Viewport(0.18, 0, 0.82, 1)
       : open ? new Viewport(0, 0.16, 1, 0.84) : new Viewport(0, 0, 1, 1)
@@ -295,24 +337,43 @@ export class BabylonRenderer implements MindverseRenderer {
     for (const planet of this.planets) this.createPlanet(planet)
 
     this.scene.onBeforeRenderObservable.add(() => this.updateScene())
-    this.scene.onPointerObservable.add((info) => {
-      if (this.destroyed || info.type !== PointerEventTypes.POINTERPICK) return
-      const mesh = info.pickInfo?.pickedMesh
-      if (!mesh) return
-      const specimen = this.specimenByMeshId.get(mesh.uniqueId)
-      if (specimen) {
-        this.strataTransition.focusAnswer(specimen.answerId)
-        return
-      }
-      const visual = this.visualByMeshId.get(mesh.uniqueId)
-      if (visual) {
-        const starId = 'id' in visual.datum.star.s ? visual.datum.star.s.id : ''
-        if (starId) this.selectQuestionPlanet(starId, visual.datum.question.id)
-        return
-      }
-      const star = this.starByMeshId.get(mesh.uniqueId)
-      if (star) this.focusStar(star)
-    }, PointerEventTypes.POINTERPICK)
+  }
+
+  private readonly onCanvasClick = (event: MouseEvent): void => {
+    this.pickAtClient(event.clientX, event.clientY)
+  }
+
+  pickStrataAt(clientX: number, clientY: number): void {
+    if (!this.universeVisible) this.pickAtClient(clientX, clientY)
+  }
+
+  private pickAtClient(clientX: number, clientY: number): void {
+    if (this.destroyed) return
+    const rect = this.canvas.getBoundingClientRect()
+    const x = (clientX - rect.left) * this.engine.getRenderWidth() / Math.max(1, rect.width)
+    const y = (clientY - rect.top) * this.engine.getRenderHeight() / Math.max(1, rect.height)
+    const mesh = this.scene.pick(x, y)?.pickedMesh
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+      this.diagnosticClickEvents += 1
+      this.diagnosticLastPick = !mesh ? 'none'
+        : this.specimenByMeshId.has(mesh.uniqueId) ? 'specimen'
+          : this.visualByMeshId.has(mesh.uniqueId) ? 'planet'
+            : this.starByMeshId.has(mesh.uniqueId) ? 'star' : 'other'
+    }
+    if (!mesh) return
+    const specimen = this.specimenByMeshId.get(mesh.uniqueId)
+    if (specimen) {
+      this.strataTransition.focusAnswer(specimen.answerId)
+      return
+    }
+    const visual = this.visualByMeshId.get(mesh.uniqueId)
+    if (visual) {
+      const starId = 'id' in visual.datum.star.s ? visual.datum.star.s.id : ''
+      if (starId) this.selectQuestionPlanet(starId, visual.datum.question.id)
+      return
+    }
+    const star = this.starByMeshId.get(mesh.uniqueId)
+    if (star) this.focusStar(star)
   }
 
   private configureOverview(stars: readonly StarDatum[]): void {
@@ -399,7 +460,8 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updateScene(): void {
     if (this.destroyed) return
-    this.elapsedMs += this.reducedMotion ? 0 : Math.min(50, Math.max(0, this.engine.getDeltaTime()))
+    const deltaTime = Math.min(50, Math.max(0, this.engine.getDeltaTime()))
+    this.elapsedMs += this.reducedMotion ? 0 : deltaTime
     for (const visual of this.visualByQuestion.values()) {
       this.updatePlanetPosition(visual, this.elapsedMs)
       visual.material.setFloat('uTime', this.elapsedMs)
@@ -407,6 +469,84 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.selectedVisual) {
       this.camera.target.copyFrom(this.selectedVisual.mesh.position)
       this.updateAnchor(this.selectedVisual.mesh)
+    }
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, deltaTime)
+  }
+
+  private diagnosticPhase(): RenderSnapshot['scenePhase'] {
+    switch (this.strataTransition.phase) {
+      case 'surface-approach': return 'surface-approach'
+      case 'surface-crossing': return 'surface-crossing'
+      case 'strata-snapped': return 'strata-snapped'
+      case 'strata-free': return 'strata-free'
+      case 'exit': return 'strata-exiting'
+      default: return 'universe'
+    }
+  }
+
+  private diagnosticScene(): RenderSnapshot['scene'] {
+    const firstStarMeshId = this.starByMeshId.keys().next().value as number | undefined
+    const firstStarMesh = firstStarMeshId === undefined
+      ? null
+      : this.scene.meshes.find(({ uniqueId }) => uniqueId === firstStarMeshId) ?? null
+    const firstStar = firstStarMesh ? this.projectToCss(firstStarMesh.getAbsolutePosition()) : null
+    return {
+      planetCount: this.visualByQuestion.size,
+      probeCount: this.probes.size,
+      probeNearVisible: false,
+      firstStarX: firstStar?.x ?? null,
+      firstStarY: firstStar?.y ?? null,
+      cameraDistance: this.camera.radius,
+      targetDistance: this.camera.radius,
+      cameraAlpha: this.camera.alpha,
+      cameraBeta: this.camera.beta,
+      cameraTargetX: this.camera.target.x,
+      cameraTargetY: this.camera.target.y,
+      cameraTargetZ: this.camera.target.z,
+    }
+  }
+
+  private selectedPlanetBounds(): RenderSnapshot['projectedBounds']['selectedPlanet'] {
+    const mesh = this.selectedVisual?.mesh
+    if (!mesh || !this.universeVisible) return null
+    mesh.computeWorldMatrix(true)
+    const points = mesh.getBoundingInfo().boundingBox.vectorsWorld.map((point) => this.projectToCss(point))
+    const minX = Math.min(...points.map(({ x }) => x))
+    const maxX = Math.max(...points.map(({ x }) => x))
+    const minY = Math.min(...points.map(({ y }) => y))
+    const maxY = Math.max(...points.map(({ y }) => y))
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+  }
+
+  private firstAnswerSpecimenBounds(): NonNullable<RenderSnapshot['projectedBounds']['firstAnswerSpecimen']> | null {
+    if (this.universeVisible) return null
+    const rect = this.canvas.getBoundingClientRect()
+    const candidates = [...this.specimenByMeshId.keys()].flatMap((meshId) => {
+      const mesh = this.scene.meshes.find(({ uniqueId }) => uniqueId === meshId)
+      if (!mesh || !mesh.isEnabled()) return []
+      const point = this.projectToCss(mesh.getAbsolutePosition())
+      return point.z >= 0 && point.z <= 1
+        && point.x >= 12 && point.x <= rect.width - 12 && point.y >= 12 && point.y <= rect.height - 12
+        ? [point]
+        : []
+    })
+    if (candidates.length === 0) return null
+    const point = candidates.reduce((best, candidate) => {
+      const bestDistance = Math.hypot(best.x - rect.width / 2, best.y - rect.height / 2)
+      const candidateDistance = Math.hypot(candidate.x - rect.width / 2, candidate.y - rect.height / 2)
+      return candidateDistance < bestDistance ? candidate : best
+    })
+    return { x: point.x - 12, y: point.y - 12, width: 24, height: 24 }
+  }
+
+  private projectToCss(point: Vector3): { x: number; y: number; z: number } {
+    const viewport = this.camera.viewport.toGlobal(this.engine.getRenderWidth(), this.engine.getRenderHeight())
+    const projected = Vector3.Project(point, Matrix.Identity(), this.scene.getTransformMatrix(), viewport)
+    const rect = this.canvas.getBoundingClientRect()
+    return {
+      x: projected.x * rect.width / Math.max(1, this.engine.getRenderWidth()),
+      y: projected.y * rect.height / Math.max(1, this.engine.getRenderHeight()),
+      z: projected.z,
     }
   }
 
@@ -450,10 +590,10 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.destroyed) return
     if (this.universeVisible) {
       const snapshot = this.entryCameraSnapshot
+      if (snapshot) this.camera.setTarget(snapshot.target)
       this.camera.alpha = pose.yaw
       this.camera.beta = pose.pitch
       this.camera.radius = pose.depth
-      if (snapshot) this.camera.setTarget(snapshot.target)
       return
     }
     const position = new Vector3(0, -pose.depth, 0)
@@ -473,7 +613,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.universeRoot.setEnabled(visible)
     this.caveRoot?.setEnabled(!visible)
     this.scene.fogEnabled = !visible
-    if (visible) this.camera.attachControl(this.canvas, true)
+    if (visible && !this.workspaceOpen) this.camera.attachControl(this.canvas, true)
     else this.camera.detachControl()
   }
 
@@ -558,9 +698,10 @@ export class BabylonRenderer implements MindverseRenderer {
       const material = new StandardMaterial(`${wall.name}:material`, this.scene)
       const base = layerColors[layer.colorIndex % layerColors.length]
       material.diffuseColor = base
-      material.emissiveColor = base.scale(0.075)
+      material.emissiveColor = base.scale(0.36)
       material.specularColor = new Color3(0.045, 0.055, 0.06)
       material.backFaceCulling = false
+      material.twoSidedLighting = true
       wall.material = material
 
       const seam = CreateCylinder(`cave-seam:${layer.id}`, {
@@ -655,6 +796,7 @@ export class BabylonRenderer implements MindverseRenderer {
     chamberMaterial.emissiveColor = new Color3(0.025, 0.055, 0.065)
     chamberMaterial.specularColor = new Color3(0.04, 0.06, 0.07)
     chamberMaterial.backFaceCulling = false
+    chamberMaterial.twoSidedLighting = true
     chamber.material = chamberMaterial
 
     const distance = Math.hypot(room.x, room.z)

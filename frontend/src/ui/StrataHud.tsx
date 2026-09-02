@@ -9,14 +9,15 @@ export interface StrataHudProps {
   phase: 'surface-crossing' | 'strata-free' | 'strata-snapped' | 'answer-specimen-focus' | 'strata-exiting'
   focusProxyRef?: RefObject<HTMLButtonElement | null>
   onMove: (intent: StrataMoveIntent) => void
+  onPick: (clientX: number, clientY: number) => void
   onExit: () => void
 }
 
 const EMPTY_INTENT: StrataMoveIntent = { forward: 0, yaw: 0, pitch: 0 }
 
-export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onExit }: StrataHudProps) {
+export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onPick, onExit }: StrataHudProps) {
   const keysRef = useRef(new Set<string>())
-  const touchRef = useRef<{ pointerId: number; x: number; y: number } | null>(null)
+  const touchRef = useRef<{ pointerId: number; x: number; y: number; moved: number } | null>(null)
   const activeLayer = pose?.snapId ? scene.strata.find(({ id }) => id === pose.snapId) : null
   const interactionDisabled = phase === 'surface-crossing' || phase === 'strata-exiting' || phase === 'answer-specimen-focus'
 
@@ -52,7 +53,8 @@ export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onExit }:
       }}
       onPointerDown={(event) => {
         if (interactionDisabled) return
-        touchRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+        if (isInteractivePointerTarget(event.target)) return
+        touchRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: 0 }
         event.currentTarget.setPointerCapture?.(event.pointerId)
       }}
       onPointerMove={(event) => {
@@ -63,10 +65,19 @@ export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onExit }:
           yaw: clamp((event.clientX - previous.x) / 36),
           pitch: clamp((event.clientY - previous.y) / 36),
         })
-        touchRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+        touchRef.current = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          moved: previous.moved + Math.hypot(event.clientX - previous.x, event.clientY - previous.y),
+        }
       }}
       onPointerUp={(event) => {
-        if (touchRef.current?.pointerId === event.pointerId) touchRef.current = null
+        const gesture = touchRef.current
+        if (gesture?.pointerId === event.pointerId) {
+          if (gesture.moved <= 6 && !interactionDisabled) onPick(event.clientX, event.clientY)
+          touchRef.current = null
+        }
         event.currentTarget.releasePointerCapture?.(event.pointerId)
       }}
       onPointerCancel={() => { touchRef.current = null }}>
@@ -99,6 +110,8 @@ function axis(keys: ReadonlySet<string>, positive: readonly string[], negative: 
 }
 const isMovementKey = (code: string): boolean => ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)
 const clamp = (value: number): number => Math.max(-1, Math.min(1, value))
+const isInteractivePointerTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element && Boolean(target.closest('button, a, input, select, textarea, [role="button"]'))
 
 function depthProgress(scene: StrataSceneModel, pose: StrataPose | null): number {
   if (!pose) return 0

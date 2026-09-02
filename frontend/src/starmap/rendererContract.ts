@@ -116,6 +116,7 @@ export interface MindverseRenderer {
   skipGenesis(): void
   enterStrata(request: StrataRequest): void
   moveStrata(input: StrataMoveIntent): void
+  pickStrataAt(clientX: number, clientY: number): void
   focusAnswerSpecimen(answerId: string): void
   closeAnswerSpecimen(): void
   exitStrata(token: StrataToken): void

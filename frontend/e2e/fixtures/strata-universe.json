@@ -1,0 +1,40 @@
+{
+  "fixtureVersion": "strata-universe.v1",
+  "generation": {
+    "state": "done", "stage": "宇宙已成形", "progress": 100, "filtered": 0,
+    "source": "e2e-strata-fixture", "calls": 0,
+    "universe": {
+      "schemaVersion": "universe.v1", "analysisVersion": "engine.v1",
+      "meta": { "items": 15, "concepts": 1, "clusters": 1, "own": 1, "fav": 1, "span": [1577836800, 1735603200], "medz": 0, "p10z": 0, "source": "e2e-strata-fixture", "splits": 0 },
+      "clusters": [{ "g": 0, "name": "地层测试星群", "lead": "Alpha", "c": [0, 0, 0], "n": 15, "o": 1, "f": 1, "hue": 218, "sat": 70, "mem": ["Alpha"] }],
+      "stars": [{
+        "id": "star:v1:public:8ed3f6ad685b959e", "scope": "public", "externalQueryAllowed": true,
+        "questionIds": ["question:7", "question:8"], "probeIds": [], "c": "Alpha", "g": 0, "p": [0, 0, 0],
+        "n": 15, "o": 1, "f": 1, "hue": 218, "sat": 70, "pe": 1, "bu": 0, "fi": "2020.01", "la": "2024.12", "ev": []
+      }],
+      "particles": [[0, 0, 0, 0, 1]], "wormholes": [], "solo": [], "dark": [], "nebula": [],
+      "questions": [
+        { "id": "question:7", "questionId": "7", "title": "固定地层问题", "url": "https://www.zhihu.com/question/7", "answerIds": ["answer:1", "answer:10", "answer:11", "answer:12", "answer:2", "answer:3", "answer:4", "answer:5", "answer:6", "answer:7", "answer:8", "answer:9", "answer:999"] },
+        { "id": "question:8", "questionId": "8", "title": "当前表层问题", "url": "https://www.zhihu.com/question/8", "answerIds": ["answer:801", "answer:802"] }
+      ],
+      "answers": [
+        { "id": "answer:1", "questionId": "question:7", "title": "固定答案 1", "summary": "当前版本摘要 1", "url": "https://www.zhihu.com/question/7/answer/1", "authorId": "author:1", "authorName": "作者 1", "publishedAt": 1577836800, "updatedAt": 1577923200, "observedAt": 1767139200, "bindings": [{"relation":"created","folders":[]},{"relation":"collected","folders":["研究"]}], "discoverySources": ["own_content"] },
+        { "id": "answer:2", "questionId": "question:7", "title": "固定答案 2", "summary": "当前版本摘要 2", "url": "https://www.zhihu.com/question/7/answer/2", "authorId": "author:2", "authorName": "作者 2", "publishedAt": 1580515200, "updatedAt": 1580601600, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:3", "questionId": "question:7", "title": "固定答案 3", "summary": "当前版本摘要 3", "url": "https://www.zhihu.com/question/7/answer/3", "authorId": "author:3", "authorName": "作者 3", "publishedAt": 1583193600, "updatedAt": 1583280000, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:4", "questionId": "question:7", "title": "固定答案 4", "summary": "当前版本摘要 4", "url": "https://www.zhihu.com/question/7/answer/4", "authorId": "author:4", "authorName": "作者 4", "publishedAt": 1585872000, "updatedAt": 1585958400, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:5", "questionId": "question:7", "title": "固定答案 5", "summary": "当前版本摘要 5", "url": "https://www.zhihu.com/question/7/answer/5", "authorId": "author:5", "authorName": "作者 5", "publishedAt": 1588550400, "updatedAt": 1588636800, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:6", "questionId": "question:7", "title": "固定答案 6", "summary": "当前版本摘要 6", "url": "https://www.zhihu.com/question/7/answer/6", "authorId": "author:6", "authorName": "作者 6", "publishedAt": 1591228800, "updatedAt": 1591315200, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:7", "questionId": "question:7", "title": "固定答案 7", "summary": "当前版本摘要 7", "url": "https://www.zhihu.com/question/7/answer/7", "authorId": "author:1", "authorName": "作者 1", "publishedAt": 1704067200, "updatedAt": 1704153600, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:8", "questionId": "question:7", "title": "固定答案 8", "summary": "当前版本摘要 8", "url": "https://www.zhihu.com/question/7/answer/8", "authorId": "author:2", "authorName": "作者 2", "publishedAt": 1706745600, "updatedAt": 1706832000, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:9", "questionId": "question:7", "title": "固定答案 9", "summary": "当前版本摘要 9", "url": "https://www.zhihu.com/question/7/answer/9", "authorId": "author:3", "authorName": "作者 3", "publishedAt": 1709424000, "updatedAt": 1709510400, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:10", "questionId": "question:7", "title": "固定答案 10", "summary": "当前版本摘要 10", "url": "https://www.zhihu.com/question/7/answer/10", "authorId": "author:4", "authorName": "作者 4", "publishedAt": 1712102400, "updatedAt": 1712188800, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:11", "questionId": "question:7", "title": "固定答案 11", "summary": "当前版本摘要 11", "url": "https://www.zhihu.com/question/7/answer/11", "authorId": "author:5", "authorName": "作者 5", "publishedAt": 1714780800, "updatedAt": 1714867200, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:12", "questionId": "question:7", "title": "固定答案 12", "summary": "当前版本摘要 12", "url": "https://www.zhihu.com/question/7/answer/12", "authorId": "author:6", "authorName": "作者 6", "publishedAt": 1717459200, "updatedAt": 1717545600, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:999", "questionId": "question:7", "title": "未定年答案", "summary": "无合法首发时间", "url": "https://www.zhihu.com/question/7/answer/999", "authorId": "author:undated", "authorName": "未定年作者", "updatedAt": 1704067200, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:801", "questionId": "question:8", "title": "表层答案 1", "summary": "未达年代门槛", "url": "https://www.zhihu.com/question/8/answer/801", "authorId": "author:8", "authorName": "作者 8", "publishedAt": 1733011200, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] },
+        { "id": "answer:802", "questionId": "question:8", "title": "表层答案 2", "summary": "未达年代门槛", "url": "https://www.zhihu.com/question/8/answer/802", "authorId": "author:9", "authorName": "作者 9", "publishedAt": 1735689600, "observedAt": 1767139200, "bindings": [], "discoverySources": ["public_search"] }
+      ],
+      "probes": []
+    }
+  }
+}

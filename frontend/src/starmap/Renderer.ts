@@ -15,7 +15,13 @@ import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
 import { measureFrameTiming, resumeRenderClock } from './renderClock'
 import { RendererSignals, ResourceScope } from './resourceScope'
-import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics } from './e2eDiagnostics'
+import {
+  forcedE2EQuality,
+  installE2EDiagnostics,
+  recordE2EFrame,
+  removeE2EDiagnostics,
+  type RenderSnapshot,
+} from './e2eDiagnostics'
 import { cinematicEnvironment } from './gl/cinematic'
 import { LabelStrategyCache } from './labelVisibility'
 import { makeProbe, probeLayerSnapshot, writeProbeFrame, type ProbeFrame, type ProbeLayer, type ProbePart } from './gl/probe'
@@ -365,6 +371,13 @@ export class Renderer implements MindverseRenderer {
             targetDistance: this.targetDist,
           }
         },
+        {
+          rendererKind: 'three',
+          activeContextCount: () => this.destroyed ? 0 : 1,
+          scenePhase: () => 'universe',
+          projectedBounds: () => ({ selectedPlanet: this.selectedPlanetBounds() }),
+          lifecycle: () => ({ rafLoops: this.raf ? 1 : 0, listeners: this.destroyed ? 0 : 8 }),
+        },
       )
     }
     } catch (cause) {
@@ -609,6 +622,7 @@ export class Renderer implements MindverseRenderer {
   moveStrata(_input: StrataMoveIntent): void {
     // Three compatibility build never enters strata; entry reports the recoverable error.
   }
+  pickStrataAt(_clientX: number, _clientY: number): void {}
 
   focusAnswerSpecimen(_answerId: string): void {
     // Three compatibility build never enters strata; entry reports the recoverable error.
@@ -1176,6 +1190,21 @@ export class Renderer implements MindverseRenderer {
       out.y + (p.u[1] * c + p.v[1] * s) * p.orbitR,
       out.z + (p.u[2] * c + p.v[2] * s) * p.orbitR,
     )
+  }
+
+  private selectedPlanetBounds(): RenderSnapshot['projectedBounds']['selectedPlanet'] {
+    const selected = this.selected
+    if (!selected) return null
+    const elapsed = this.reduceMotion ? 0 : this.lastNow - (this.t0 ?? this.lastNow)
+    this.planetWorld(selected, elapsed, this.tmp)
+    this.tmp2.copy(this.tmp).applyMatrix4(this.camera.matrixWorldInverse)
+    const viewZ = Math.max(1, -this.tmp2.z)
+    const projectionScale = (this.h * this.dpr * 0.5) / Math.tan((FOV * Math.PI) / 360)
+    const radius = selected.radius * projectionScale / viewZ / this.dpr
+    this.tmp.project(this.camera)
+    const centerX = (this.tmp.x * 0.5 + 0.5) * this.w
+    const centerY = (-this.tmp.y * 0.5 + 0.5) * this.h
+    return { x: centerX - radius, y: centerY - radius, width: radius * 2, height: radius * 2 }
   }
 
   /** 恒星此刻的世界坐标，与 gl/starData 喂给着色器的那套公式同式。 */

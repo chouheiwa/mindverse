@@ -24,7 +24,8 @@ describe('public/private universe module boundary', () => {
 
   test('keeps the WebGL renderer out of the private shell until the canvas is ready', () => {
     const privateRoot = source('./ui/Universe.tsx')
-    expect(privateRoot).toMatch(/import\('\.\.\/starmap\/Renderer'\)/)
-    expect(privateRoot).not.toMatch(/^import\s+\{\s*Renderer\s*\}\s+from\s+['"]\.\.\/starmap\/Renderer['"]/m)
+    expect(privateRoot).toMatch(/import\('virtual:mindverse-renderer'\)/)
+    expect(privateRoot).not.toMatch(/import\(['"]\.\.\/starmap\/(?:Renderer|babylon\/BabylonRenderer)['"]\)/)
+    expect(privateRoot).not.toMatch(/^import\s+.*from\s+['"]\.\.\/starmap\/(?:Renderer|babylon\/BabylonRenderer)['"]/m)
   })
 })

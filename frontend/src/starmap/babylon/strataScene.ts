@@ -12,6 +12,7 @@ export interface CaveLayerPlacement {
   readonly centerDepth: number
   readonly thickness: number
   readonly colorIndex: number
+  readonly openingAngle: number | null
 }
 
 export interface CaveSpecimenPlacement {
@@ -30,7 +31,7 @@ export interface CaveLayout {
   readonly bounds: CaveBounds
   readonly layers: readonly CaveLayerPlacement[]
   readonly specimens: readonly CaveSpecimenPlacement[]
-  readonly undatedRoom: Readonly<{ centerDepth: number; angle: number; x: number; z: number; radius: number }> | null
+  readonly undatedRoom: Readonly<{ centerDepth: number; angle: number; x: number; z: number; radius: number; openArc: number }> | null
   readonly blockedDepth: boolean
 }
 
@@ -62,14 +63,6 @@ export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose):
     })
   }
 
-  const layers = scene.strata.map((layer, index): CaveLayerPlacement => Object.freeze({
-    id: layer.id,
-    centerDepth: layer.centerDepth,
-    thickness: layer.thickness,
-    colorIndex: index % 4,
-  }))
-  const dated = scene.strata.flatMap((layer) => layer.specimens.map((item, index) =>
-    specimenPlacement(item, index, layer.specimens.length, chronologicalDepth(item, layer), 'main')))
   const sideRoomDepth = Math.max(2.4, Math.min(scene.bounds.bottom - 1, scene.bounds.bottom * 0.58))
   const sideRoomAngle = Math.PI * 0.38
   const sideRoomDistance = CAVE_RADIUS + 2.15
@@ -79,7 +72,19 @@ export function buildCaveLayout(scene: StrataSceneModel, entryPose: StrataPose):
     x: round(Math.sin(sideRoomAngle) * sideRoomDistance),
     z: round(Math.cos(sideRoomAngle) * sideRoomDistance),
     radius: 2.2,
+    openArc: 0.72,
   }) : null
+  const layers = scene.strata.map((layer, index): CaveLayerPlacement => Object.freeze({
+    id: layer.id,
+    centerDepth: layer.centerDepth,
+    thickness: layer.thickness,
+    colorIndex: index % 4,
+    openingAngle: undatedRoom && Math.abs(layer.centerDepth - undatedRoom.centerDepth) <= layer.thickness / 2
+      ? undatedRoom.angle
+      : null,
+  }))
+  const dated = scene.strata.flatMap((layer) => layer.specimens.map((item, index) =>
+    specimenPlacement(item, index, layer.specimens.length, chronologicalDepth(item, layer), 'main')))
   const undated = scene.undated.map((item, index) =>
     specimenPlacement(item, index, scene.undated.length, sideRoomDepth, 'undated', undatedRoom))
 
@@ -164,7 +169,7 @@ function specimenPlacement(
   const centerZ = room === 'undated' ? undatedRoom?.z ?? 0 : 0
   return Object.freeze({
     answerId: specimen.answerId,
-    depth: round(depth + ((seed >>> 16 & 255) / 255 - 0.5) * 0.72),
+    depth: room === 'main' ? round(depth) : round(depth + ((seed >>> 16 & 255) / 255 - 0.5) * 0.72),
     x: round(centerX + Math.sin(angle) * radius),
     z: round(centerZ + Math.cos(angle) * radius),
     scale: round(0.22 + ((seed >>> 24 & 255) / 255) * 0.18),

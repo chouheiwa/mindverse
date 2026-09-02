@@ -40,6 +40,7 @@ describe('Babylon strata cave layout', () => {
     const undated = layout.specimens.filter(({ room }) => room === 'undated')
     expect(undated.every(({ x, z }) => Math.hypot(x, z) > layout.bounds.radius)).toBe(true)
     expect(layout.undatedRoom).toMatchObject({ radius: 2.2 })
+    expect(layout.layers.some(({ openingAngle }) => openingAngle === layout.undatedRoom?.angle)).toBe(true)
   })
 
   test('orders specimens inside each layer by their real publication time', () => {
@@ -55,6 +56,21 @@ describe('Babylon strata cave layout', () => {
         expect(chronological[index - 1].depth).toBeGreaterThan(chronological[index].depth)
       }
     }
+  })
+
+  test('never lets answer-id variation reorder nearly simultaneous publication times', () => {
+    const scene = buildStrataSceneModel(strataFixture.index, 'question:7')
+    const layer = scene.strata[0]
+    const closeLayer = {
+      ...layer,
+      startPublishedAt: 1_000,
+      endPublishedAt: 2_000,
+      specimens: layer.specimens.slice(0, 2).map((item, index) => ({ ...item, publishedAt: 1_100 + index })),
+    }
+    const layout = buildCaveLayout({ ...scene, strata: [closeLayer, ...scene.strata.slice(1)] }, entryPose)
+    const [earlier, later] = closeLayer.specimens.map(({ answerId }) =>
+      layout.specimens.find((item) => item.answerId === answerId)!)
+    expect(earlier.depth).toBeGreaterThan(later.depth)
   })
 
   test('uses a blocked shallow room without chronology or snapping for surface-only evidence', () => {

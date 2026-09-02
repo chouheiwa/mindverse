@@ -528,7 +528,7 @@ export class BabylonRenderer implements MindverseRenderer {
     ]
     const renderLayers = layout.layers.length > 0
       ? layout.layers
-      : [{ id: 'surface-observation-room', centerDepth: 2.5, thickness: 5, colorIndex: 1 }]
+      : [{ id: 'surface-observation-room', centerDepth: 2.5, thickness: 5, colorIndex: 1, openingAngle: null }]
     for (const layer of renderLayers) {
       const wall = CreateCylinder(`cave-wall:${layer.id}`, {
         height: layer.thickness + 0.12,
@@ -536,10 +536,13 @@ export class BabylonRenderer implements MindverseRenderer {
         tessellation: 18,
         subdivisions: 3,
         cap: CAVE_CYLINDER_CAP === 'none' ? Mesh.NO_CAP : Mesh.CAP_ALL,
+        arc: layer.openingAngle === null ? 1 : 0.82,
+        enclose: false,
       }, this.scene)
       wall.parent = root
       wall.position.y = -layer.centerDepth
       wall.rotation.y = layer.colorIndex * 0.21
+        + (layer.openingAngle === null ? 0 : layer.openingAngle - Math.PI * 0.91)
       wall.scaling.x = 1 + Math.sin(layer.centerDepth * 1.7) * 0.055
       wall.scaling.z = 1 + Math.cos(layer.centerDepth * 1.3) * 0.07
       wall.isPickable = false
@@ -627,9 +630,15 @@ export class BabylonRenderer implements MindverseRenderer {
   private createUndatedRoom(root: TransformNode, layout: CaveLayout): void {
     const room = layout.undatedRoom
     if (!room) return
-    const chamber = CreateSphere('undated-debris-room', { diameter: room.radius * 2, segments: 14 }, this.scene)
+    const chamber = CreateSphere('undated-debris-room', {
+      diameter: room.radius * 2,
+      segments: 14,
+      arc: room.openArc,
+      slice: 1,
+    }, this.scene)
     chamber.parent = root
     chamber.position.set(room.x, -room.centerDepth, room.z)
+    chamber.rotation.y = room.angle + Math.PI * 0.64
     chamber.scaling.y = 0.78
     chamber.isPickable = false
     const chamberMaterial = new StandardMaterial('undated-debris-room:material', this.scene)

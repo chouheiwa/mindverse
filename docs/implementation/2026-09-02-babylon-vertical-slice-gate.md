@@ -3,7 +3,7 @@
 - 日期：2026-09-02（Asia/Shanghai）
 - `main` 基线：`fc5cdec9b1f08e647021bc4a011f10f57db1cf0a`
 - 性能样本采集提交：`7eac10a316f42960a770b7df4a1ef8f9fbc26140`
-- 最终审查修正提交：`2587b82788f83974f1570797ae33dbe0fe77af85`、`2d1faefd1f3c1555c5f0d7dca11dacb39c7c22fd`
+- 最终审查修正提交：`2587b82788f83974f1570797ae33dbe0fe77af85`、`2d1faefd1f3c1555c5f0d7dca11dacb39c7c22fd`、`8c69ee3d8b20e35ffe724edcfc772f66ef82a454`
 - 决策：**PASS — proceed to full Babylon renderer migration plan**
 
 ## 产品闸门
@@ -16,6 +16,7 @@
 - 洞窟阶段非背景像素占比通过 `>= 35%` 硬门槛。
 - 连续 5 次完整 mount → enter → exit → destroy 后，浏览器探针实测活动 Canvas、`gl.isContextLost() === false` 的 WebGL context 和待执行 RAF 均回到 0，全局或仍连接节点的监听器回到首次销毁基线；销毁路径显式调用 `WEBGL_lose_context`。
 - Engine 初始化失败、WebGL2 不可用、`webglcontextlost` 都进入可读 DOM fallback；上下文丢失可原页重挂载恢复。
+- WebGL2 能力拒绝与 Runtime 部分构造失败同样会显式释放已创建的 `webgl2` 或 `webgl` context；两种降级页均实测 live context 为 0。
 
 ## 同机 Metal 对照
 
@@ -37,6 +38,7 @@
 - `VITE_RENDERER=babylon npm run build`：通过，Babylon vendor 1,725.39 kB，低于 1.8 MB 显式上限，无 Three/postprocessing 泄漏，无 E2E 诊断全局变量。
 - `VITE_RENDERER=three ... production-render.spec.ts`：7/7 通过。
 - `VITE_RENDERER=babylon ... babylon-gate.spec.ts`：7/7 通过；包含真实资源释放循环和带答案身份的未定年侧室导航。
+- 未定年侧室导航用例以 20 ms 输入采样连续重复 5 次通过，避免持续旋转越过小标本造成的假阴性。
 - Three/Babylon `metal-performance render-baseline.spec.ts`：各 1/1 通过；确定性比较器通过。
 - `npm run lint`、`npx tsc -b --pretty false`、E2E TypeScript：通过。
 - `go test ./...`、`go test -race ./...`、`go vet ./...`：通过。

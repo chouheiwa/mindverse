@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
-import type { Mode, Star, Universe } from '../types'
+import type { Mode, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
 import { makeStars, modeDim, renderDim, type StarLayer } from './gl/stars'
@@ -24,6 +24,14 @@ import {
   STANDARD_INSPECTION_POSE,
   type InspectionPose,
 } from './probeInspection'
+import type {
+  MindverseRenderer,
+  RendererCallbacks,
+  StrataMoveIntent,
+  StrataRequest,
+  StrataToken,
+} from './rendererContract'
+export type { RendererCallbacks } from './rendererContract'
 
 /**
  * 星图渲染器。
@@ -42,25 +50,6 @@ import {
  * 刻意不由 React 驱动：canvas 每帧重绘，挂在组件重渲染上会掉帧。
  * React 只负责外壳（面板、模式条），通过命令式方法与这里通信。
  */
-export interface RendererCallbacks {
-  onPick?: (star: Star | null) => void
-  /** 点中一颗问题行星（= 一个被恒星引用的真实知乎问题）。传 null 表示取消选中。 */
-  onPickPlanet?: (p: PlanetDatum | null) => void
-  /**
-   * 选中行星在屏幕上的位置，每帧回调。
-   *
-   * 走命令式而不是 React state：行星一直在公转，挂到状态上就是每帧重渲染。
-   */
-  onAnchor?: (x: number, y: number, visible: boolean) => void
-  onGenesisEnd?: () => void
-  onRenderReady?: () => void
-  onRenderError?: (cause: Error) => void
-  onProbeArrived?: (event: { probeId: string; token: number }) => void
-  onProbeScanComplete?: (event: { probeId: string; token: number }) => void
-  onProbePartChange?: (part: ProbePart | null) => void
-  onProbeError?: (event: { probeId: string; token: number; cause: Error }) => void
-}
-
 const CONVERGE_FROM = 1800
 const CONVERGE_MS = 3400
 const SKIP_MS = 500
@@ -119,7 +108,7 @@ export function probeOwnersById(
   return owners
 }
 
-export class Renderer {
+export class Renderer implements MindverseRenderer {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
   private camera: THREE.PerspectiveCamera
@@ -216,6 +205,7 @@ export class Renderer {
   private lost = false
   private destroyed = false
   private suspendedAt: number | null = null
+  private unsupportedStrataRequest: Pick<StrataRequest, 'token' | 'questionId'> | null = null
 
   private canvas: HTMLCanvasElement
   private u: Universe
@@ -604,6 +594,30 @@ export class Renderer {
     if (!hadProbeState) return
     this.resetProbeVisuals()
     this.lastProbeElapsed = -1
+  }
+
+  enterStrata(request: StrataRequest): void {
+    if (this.destroyed) return
+    this.unsupportedStrataRequest = { token: request.token, questionId: request.questionId }
+    const cause = new Error('当前 Three 渲染器不支持答案地层；请切换到 Babylon 构建。')
+    cause.name = 'UnsupportedRendererFeatureError'
+    this.cb.onStrataError?.({ token: request.token, questionId: request.questionId, cause })
+  }
+
+  moveStrata(_input: StrataMoveIntent): void {
+    // Three compatibility build never enters strata; entry reports the recoverable error.
+  }
+
+  focusAnswerSpecimen(_answerId: string): void {
+    // Three compatibility build never enters strata; entry reports the recoverable error.
+  }
+
+  closeAnswerSpecimen(): void {
+    // Three compatibility build never enters strata; entry reports the recoverable error.
+  }
+
+  exitStrata(token: StrataToken): void {
+    if (this.unsupportedStrataRequest?.token === token) this.unsupportedStrataRequest = null
   }
 
   skipGenesis() {

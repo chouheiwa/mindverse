@@ -38,10 +38,12 @@ const SCORE_EPSILON = 1e-12
 
 export class StrataQuestionNotFoundError extends Error {
   readonly code = 'question_not_found'
+  readonly questionId: string
 
-  constructor(readonly questionId: string) {
+  constructor(questionId: string) {
     super(`question not found: ${questionId}`)
     this.name = 'StrataQuestionNotFoundError'
+    this.questionId = questionId
   }
 }
 

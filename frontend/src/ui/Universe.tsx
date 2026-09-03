@@ -17,6 +17,7 @@ import { SharePreview } from './SharePreview'
 import { RenderFallback } from './RenderFallback'
 import { ProbeInspectionPanel } from './ProbeInspectionPanel'
 import type { ProbePart } from '../starmap/gl/probe'
+import { starIdentity } from '../starmap/starIdentity'
 import { initialUniverseUiState, universeUiReducer } from './explorationState'
 import { buildStrataSceneModel, type StrataSceneModel } from '../domain/strata'
 import { StrataHud } from './StrataHud'
@@ -327,16 +328,18 @@ export function PrivateUniverseView() {
   }, [questionWorkspaceVisible])
 
   const pickConcept = useCallback((c: string) => {
-    const s = universe?.stars.find((x) => x.c === c)
-    if (s) {
-      cancelActiveProbe()
-      setQuestionEntry(null)
-      setPlanet(null)
-      focusReturnRef.current = null
-      focusCardFromLaneRef.current = false
-      rendererRef.current?.clearPlanet()
-      setStar(s)
-    }
+    const candidate = universe?.stars.find((x) => x.c === c)
+    if (!candidate) return
+    const panelReturnTarget = panelFocusReturnRef.current
+    const focused = rendererRef.current?.focusStar(starIdentity(candidate))
+    if (!focused) return
+    panelFocusReturnRef.current = panelReturnTarget
+    cancelActiveProbe()
+    setQuestionEntry(null)
+    setPlanet(null)
+    focusReturnRef.current = null
+    focusCardFromLaneRef.current = false
+    setStar(focused)
   }, [cancelActiveProbe, setPlanet, setQuestionEntry, setStar, universe])
 
   const restorePanelFocus = useCallback(() => {

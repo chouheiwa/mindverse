@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { RendererCallbacks } from '../starmap/rendererContract'
 import type { PlanetDatum } from '../starmap/gl/bodies'
-import type { CurrentUniverse } from '../types'
+import type { CurrentUniverse, Star } from '../types'
+import { starIdentity } from '../starmap/starIdentity'
 
 const testState = vi.hoisted(() => ({
   moduleGate: (() => {
@@ -26,6 +27,9 @@ const testState = vi.hoisted(() => ({
   poseCalls: [] as unknown[],
   partCalls: [] as unknown[],
   reducedCalls: [] as boolean[],
+  focusCalls: [] as string[],
+  focusResult: null as Star | null,
+  focusPickResult: null as Star | null,
   orbitCalls: [] as Array<[number, number]>,
   strataEnterCalls: [] as unknown[],
   strataMoveCalls: [] as unknown[],
@@ -53,6 +57,11 @@ vi.mock('virtual:mindverse-renderer', async () => {
     resize() {}
     destroy() { testState.destroyCalls += 1 }
     setMode() {}
+    focusStar(starKey: string) {
+      testState.focusCalls.push(starKey)
+      if (testState.focusPickResult) testState.callbacks?.onPick?.(testState.focusPickResult)
+      return testState.focusResult
+    }
     resetView() { testState.callbacks?.onPick?.(null) }
     skipGenesis() {}
     clearPlanet() { testState.callbacks?.onPickPlanet?.(null) }
@@ -94,11 +103,22 @@ const star = {
   n: 1, o: 0, f: 1, hue: 218, sat: 50, pe: 1, bu: 0, fi: '2026.01', la: '2026.01', ev: [],
 } satisfies NonNullable<CurrentUniverse['stars']>[number]
 
+const siblingStar = {
+  ...star,
+  id: 'star:v1:private:f44e64e75f3948e9', c: 'Beta', p: [1, 0, 0] as [number, number, number],
+  questionIds: [], probeIds: [],
+} satisfies NonNullable<CurrentUniverse['stars']>[number]
+
+const canonicalSiblingStar = {
+  ...siblingStar,
+  c: 'Renderer canonical Beta',
+} satisfies Star
+
 const fixture = {
   schemaVersion: 'universe.v1', analysisVersion: 'engine.v1',
   meta: { items: 1, concepts: 1, clusters: 1, own: 0, fav: 1, span: [1, 2] as [number, number], medz: 0, p10z: 0, source: 'test', splits: 0 },
-  clusters: [{ g: 0, name: 'Cluster', lead: 'Alpha', c: [0, 0, 0] as [number, number, number], n: 1, o: 0, f: 1, hue: 218, sat: 50, mem: ['Alpha'] }],
-  stars: [star], particles: [], wormholes: [], solo: [], dark: [], nebula: [],
+  clusters: [{ g: 0, name: 'Cluster', lead: 'Alpha', c: [0, 0, 0] as [number, number, number], n: 2, o: 0, f: 2, hue: 218, sat: 50, mem: ['Alpha', 'Beta'] }],
+  stars: [star, siblingStar], particles: [], wormholes: [], solo: [], dark: [], nebula: [],
   questions: [{ id: 'question:7', questionId: '7', title: '真实问题标题', url: 'https://www.zhihu.com/question/7', answerIds: ['answer:8'] }],
   answers: [{
     id: 'answer:8', questionId: 'question:7', title: '真实问题标题', summary: '摘要',
@@ -134,6 +154,9 @@ beforeEach(() => {
   testState.poseCalls = []
   testState.partCalls = []
   testState.reducedCalls = []
+  testState.focusCalls = []
+  testState.focusResult = null
+  testState.focusPickResult = null
   testState.orbitCalls = []
   testState.strataEnterCalls = []
   testState.strataMoveCalls = []
@@ -332,6 +355,40 @@ describe('Universe question keyboard integration', () => {
     expect(document.activeElement).not.toBe(document.body)
   })
 
+  test('routes a concept-list selection through the renderer and opens its canonical star', async () => {
+    const user = userEvent.setup()
+    testState.focusResult = canonicalSiblingStar
+    testState.focusPickResult = siblingStar
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    const canvas = screen.getByLabelText('认知宇宙三维星图')
+    canvas.focus()
+    act(() => testState.callbacks?.onPick?.(star))
+
+    await user.click(await screen.findByRole('button', { name: 'Beta' }))
+
+    expect(testState.focusCalls).toEqual([starIdentity(siblingStar)])
+    expect(await screen.findByRole('heading', { name: canonicalSiblingStar.c })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(canvas).toHaveFocus())
+  })
+
+  test('keeps the current star panel when the renderer rejects a concept-list selection', async () => {
+    const user = userEvent.setup()
+    testState.focusResult = null
+    render(<UniverseView />)
+    await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
+    act(() => testState.callbacks?.onPick?.(star))
+
+    await user.click(await screen.findByRole('button', { name: 'Beta' }))
+
+    expect(testState.focusCalls).toEqual([starIdentity(siblingStar)])
+    expect(screen.getByRole('heading', { name: star.c })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: siblingStar.c })).not.toBeInTheDocument()
+  })
+
   test('restores focus after the star breadcrumb closes its own panel', async () => {
     const user = userEvent.setup()
     render(<UniverseView />)
@@ -471,6 +528,7 @@ describe('Universe question keyboard integration', () => {
     const user = userEvent.setup()
     render(<UniverseView />)
     await screen.findByRole('heading', { name: '好奇心星图' })
+    await waitFor(() => expect(testState.callbacks).not.toBeNull())
     act(() => testState.callbacks?.onPick?.(star))
 
     const laneButton = await screen.findByRole('button', { name: /轨道 1.*真实问题标题/ })

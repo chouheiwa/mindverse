@@ -2,7 +2,6 @@ import { Constants } from '@babylonjs/core/Engines/constants.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Material } from '@babylonjs/core/Materials/material.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
-import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { CreatePlane } from '@babylonjs/core/Meshes/Builders/planeBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
@@ -86,6 +85,36 @@ uniform mat4 worldViewProjection;
 varying vec2 vUV;
 void main(void) { vUV = uv; gl_Position = worldViewProjection * vec4(position, 1.0); }
 `
+const FALLBACK_SURFACE_VERTEX = /* glsl */ `
+precision highp float;
+attribute vec3 position;
+attribute vec3 normal;
+uniform mat4 worldViewProjection;
+uniform mat4 world;
+uniform vec3 cameraPosition;
+varying vec3 vNormal;
+varying vec3 vViewDirection;
+void main(void) {
+  vec3 worldPosition = (world * vec4(position, 1.0)).xyz;
+  vNormal = normalize(mat3(world) * normal);
+  vViewDirection = cameraPosition - worldPosition;
+  gl_Position = worldViewProjection * vec4(position, 1.0);
+}
+`
+const FALLBACK_SURFACE_FRAGMENT = /* glsl */ `
+precision highp float;
+uniform vec3 uColor;
+uniform float uSurfaceAlpha;
+varying vec3 vNormal;
+varying vec3 vViewDirection;
+void main(void) {
+  float facing = max(0.0, dot(normalize(vNormal), normalize(vViewDirection)));
+  float limb = 0.34 + 0.66 * pow(facing, 0.58);
+  vec3 hotCore = mix(uColor, vec3(1.0), 0.64);
+  vec3 analyticCore = hotCore * min(2.2, 0.72 + limb * 1.18);
+  gl_FragColor = vec4(analyticCore, clamp(uSurfaceAlpha, 0.0, 1.0));
+}
+`
 const FALLBACK_CORONA_FRAGMENT = /* glsl */ `
 precision highp float;
 uniform vec3 uColor;
@@ -126,6 +155,7 @@ export class StarLayer {
   private pressedKey: string | null = null
   private fallbackActive = false
   private fallbackFailed = false
+  private advancedFailure: Error | null = null
   private focusedReady = false
   private disposed = false
   private focusUniforms = { kelvin: 0, seed: 0, rot: 0, activity: 0, time: 0 }
@@ -272,7 +302,7 @@ export class StarLayer {
     }, { attributes: PANORAMA_ATTRIBUTES, uniforms: PANORAMA_UNIFORMS, needAlphaBlending: true })
     material.fillMode = Constants.MATERIAL_PointFillMode
     material.alphaMode = Constants.ALPHA_ADD
-    material.disableDepthWrite = true
+    material.disableDepthWrite = layer !== 0
     material.setFloat('uLayer', layer)
     material.setFloat('uTime', 0)
     material.setFloat('uBobAmplitude', this.reducedMotion ? 0 : 1.35)
@@ -319,20 +349,19 @@ export class StarLayer {
     else this.markFocusedReady('advanced')
   }
 
-  private activateFallback(_advancedCause: Error): void {
+  private activateFallback(advancedCause: Error): void {
     if (this.disposed || this.fallbackActive) return
+    this.advancedFailure = advancedCause
     this.fallbackActive = true
     this.focusedReady = false
     const scene = this.focusSphere.getScene()
     const oldMaterials = this.focusedMaterials
-    const surface = new StandardMaterial('stellar:focus:surface:fallback', scene)
-    surface.diffuseColor = Color3.Black()
-    surface.specularColor = Color3.Black()
-    surface.emissiveColor = Color3.White()
+    const surface = createFallbackSurfaceMaterial(scene)
     const corona = createCoronaMaterial(scene, 'fallback', FALLBACK_CORONA_FRAGMENT)
-    corona.alphaMode = Constants.ALPHA_COMBINE
+    corona.alphaMode = Constants.ALPHA_ADD
     corona.disableDepthWrite = true
     const fail = (_effect: unknown, errors: string) => this.failFallback(new Error(errors))
+    surface.onError = fail
     corona.onError = fail
     this.focusedMaterials = [surface, corona]
     this.focusSphere.material = surface
@@ -354,7 +383,11 @@ export class StarLayer {
     this.fallbackFailed = true
     this.focusSphere.setEnabled(false)
     this.focusCorona.setEnabled(false)
-    this.options.onError?.(cause)
+    const original = this.advancedFailure ?? cause
+    if (original !== cause && !('cause' in original)) {
+      Object.defineProperty(original, 'cause', { value: cause, configurable: true })
+    }
+    this.options.onError?.(original)
   }
 
   private applyFocusDatum(datum: StarDatum): void {
@@ -378,8 +411,6 @@ export class StarLayer {
         material.setFloat('uRot', datum.rot)
         material.setFloat('uActivity', descriptor.surfaceActivity)
         material.setFloat('uCoronaLayers', this.qualityConfig.coronaLayers)
-      } else if (material instanceof StandardMaterial) {
-        material.emissiveColor = color.scale(1.15)
       }
     }
   }
@@ -447,6 +478,7 @@ function createCoronaMaterial(scene: Scene, suffix: string, fragmentSource: stri
     uniforms: ['worldViewProjection', 'uColor', 'uActivity', 'uSeed', 'uRot', 'uTime', 'uCoronaAlpha', 'uCoronaIntensity', 'uCoronaLayers'],
     needAlphaBlending: true,
   })
+  material.backFaceCulling = false
   material.setColor3('uColor', Color3.White())
   material.setFloat('uActivity', 0)
   material.setFloat('uSeed', 0)
@@ -455,6 +487,22 @@ function createCoronaMaterial(scene: Scene, suffix: string, fragmentSource: stri
   material.setFloat('uCoronaAlpha', 0)
   material.setFloat('uCoronaIntensity', 1)
   material.setFloat('uCoronaLayers', 1)
+  return material
+}
+
+function createFallbackSurfaceMaterial(scene: Scene): ShaderMaterial {
+  const material = new ShaderMaterial('stellar:focus:surface:fallback', scene, {
+    vertexSource: FALLBACK_SURFACE_VERTEX,
+    fragmentSource: FALLBACK_SURFACE_FRAGMENT,
+  }, {
+    attributes: ['position', 'normal'],
+    uniforms: ['worldViewProjection', 'world', 'cameraPosition', 'uColor', 'uSurfaceAlpha'],
+    needAlphaBlending: true,
+  })
+  material.alphaMode = Constants.ALPHA_COMBINE
+  material.disableDepthWrite = true
+  material.setColor3('uColor', Color3.White())
+  material.setFloat('uSurfaceAlpha', 0)
   return material
 }
 

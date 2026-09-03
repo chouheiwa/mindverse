@@ -35,13 +35,17 @@ describe('stellar shader contracts', () => {
     expect(starCoreFragmentShader).toMatch(/if\s*\(d2\s*>\s*1\.0\)\s*discard/)
     expect(starCoreFragmentShader).toMatch(/mix\(vColor,\s*vec3\(1\.0\)/)
     expect(starCoreFragmentShader).toContain('min(')
+    expect(starCoreFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^,]+,\s*alpha\)/)
     expect(starHaloFragmentShader).toContain('exp(')
     expect(starHaloFragmentShader).toContain('pow(')
     expect(starHaloFragmentShader).toContain('uHaloAlpha')
+    expect(starHaloFragmentShader).toMatch(/if\s*\(radius\s*>\s*1\.0\)\s*discard/)
+    expect(starHaloFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^,]+,\s*alpha\)/)
     expect(starFlareFragmentShader).toContain('uFlareThreshold')
     expect(starFlareFragmentShader).toMatch(/if\s*\(gate\s*<=/)
     expect(starFlareFragmentShader).toContain('vRot')
     expect(starFlareFragmentShader).toContain('secondary')
+    expect(starFlareFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^;]+,\s*clamp\(/)
   })
 
   it('keeps the focused surface bounded, colored, detailed, and quality-controlled', () => {
@@ -55,6 +59,15 @@ describe('stellar shader contracts', () => {
     expect(starSurfaceVertexShader).toContain('worldViewProjection')
     expect(starSurfaceVertexShader).toContain('vLocal')
     expect(starSurfaceVertexShader).toContain('vViewDirection')
+    expect(starSurfaceVertexShader).toContain('uniform float uSeed')
+    expect(starSurfaceVertexShader).toContain('uniform float uActivity')
+    expect(starSurfaceVertexShader).toContain('uniform float uTime')
+    expect(starSurfaceVertexShader).toContain('#if STAR_NOISE_OCTAVES')
+    expect(starSurfaceVertexShader).toMatch(/for\s*\(int\s+i\s*=\s*0;\s*i\s*<\s*4;/)
+    expect(starSurfaceVertexShader).toContain('surfaceHeight')
+    expect(starSurfaceVertexShader).toContain('displacedPosition')
+    expect(starSurfaceVertexShader).toContain('cross(')
+    expect(starSurfaceVertexShader).toMatch(/gl_Position\s*=\s*worldViewProjection\s*\*\s*vec4\(displacedPosition/)
     expect(starSurfaceFragmentShader).toMatch(/dot\(normal,\s*normalize\(vViewDirection\)\)/)
   })
 
@@ -66,6 +79,16 @@ describe('stellar shader contracts', () => {
     expect(starCoronaFragmentShader).not.toMatch(/uCoronaAlpha\s*\*\s*uCoronaAlpha/)
     expect(starCoronaFragmentShader).not.toMatch(/float alpha\s*=.*uCoronaIntensity/)
     expect(starCoronaFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^;]*uCoronaIntensity[^;]*,\s*alpha\)/)
+  })
+
+  it('leaves depth ordering to layer material state instead of overriding fragment depth', () => {
+    for (const source of [
+      starCoreFragmentShader, starHaloFragmentShader, starFlareFragmentShader,
+      starSurfaceFragmentShader, starCoronaFragmentShader,
+    ]) {
+      expect(source).toContain('gl_FragColor')
+      expect(source).not.toContain('gl_FragDepth')
+    }
   })
 
   it('contains no Three-only matrix identifiers', () => {

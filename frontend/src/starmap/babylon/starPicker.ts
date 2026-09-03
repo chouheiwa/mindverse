@@ -29,7 +29,7 @@ export interface StarPickInput {
 export function pickProjectedStar(
   input: StarPickInput,
   candidates: readonly ProjectedStarCandidate[],
-): string | null {
+): ProjectedStarCandidate | null {
   if (input.capturedByHigherPriority) return null
 
   const [minimumRadius, maximumRadius] = input.inputKind === 'mouse'
@@ -50,7 +50,7 @@ export function pickProjectedStar(
     || a.candidate.depth - b.candidate.depth
     || a.candidate.starKey.localeCompare(b.candidate.starKey),
   )
-  return hits[0]?.candidate.starKey ?? null
+  return hits[0]?.candidate ?? null
 }
 
 function isPickable(candidate: ProjectedStarCandidate, width: number, height: number): boolean {

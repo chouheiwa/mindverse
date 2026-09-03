@@ -33,17 +33,26 @@ function pick(
 }
 
 describe('pickProjectedStar', () => {
+  it('returns the winning projected candidate object with its metadata intact', () => {
+    const star = candidate({ x: 48, y: 39, depth: 0.25, visualRadiusPx: 17 })
+
+    expect(pick(50, 40, 'mouse', [star])).toBe(star)
+    expect(pick(50, 40, 'mouse', [star])).toEqual({
+      starKey: 'star-a', x: 48, y: 39, depth: 0.25, visualRadiusPx: 17, visible: true,
+    })
+  })
+
   it('clamps mouse hit radii to 10..28 CSS pixels and includes the exact edge', () => {
-    expect(pick(60, 40, 'mouse', [candidate({ visualRadiusPx: 1 })])).toBe('star-a')
+    expect(pick(60, 40, 'mouse', [candidate({ visualRadiusPx: 1 })])).toMatchObject({ starKey: 'star-a' })
     expect(pick(60.001, 40, 'mouse', [candidate({ visualRadiusPx: 1 })])).toBeNull()
-    expect(pick(78, 40, 'mouse', [candidate({ visualRadiusPx: 100 })])).toBe('star-a')
+    expect(pick(78, 40, 'mouse', [candidate({ visualRadiusPx: 100 })])).toMatchObject({ starKey: 'star-a' })
     expect(pick(78.001, 40, 'mouse', [candidate({ visualRadiusPx: 100 })])).toBeNull()
   })
 
   it.each(['touch', 'pen'] as const)('%s clamps hit radii to 22..36 CSS pixels', (inputKind) => {
-    expect(pick(72, 40, inputKind, [candidate({ visualRadiusPx: 1 })])).toBe('star-a')
+    expect(pick(72, 40, inputKind, [candidate({ visualRadiusPx: 1 })])).toMatchObject({ starKey: 'star-a' })
     expect(pick(72.001, 40, inputKind, [candidate({ visualRadiusPx: 1 })])).toBeNull()
-    expect(pick(86, 40, inputKind, [candidate({ visualRadiusPx: 100 })])).toBe('star-a')
+    expect(pick(86, 40, inputKind, [candidate({ visualRadiusPx: 100 })])).toMatchObject({ starKey: 'star-a' })
     expect(pick(86.001, 40, inputKind, [candidate({ visualRadiusPx: 100 })])).toBeNull()
   })
 
@@ -62,17 +71,17 @@ describe('pickProjectedStar', () => {
     expect(pick(50, 40, 'mouse', [
       candidate({ starKey: 'nearer-screen', x: 51, depth: 0.9 }),
       candidate({ starKey: 'farther-screen', x: 52, depth: 0.1 }),
-    ])).toBe('nearer-screen')
+    ])).toMatchObject({ starKey: 'nearer-screen' })
 
     expect(pick(50, 40, 'mouse', [
       candidate({ starKey: 'far-depth', x: 51, depth: 0.8 }),
       candidate({ starKey: 'near-depth', x: 49, depth: 0.2 }),
-    ])).toBe('near-depth')
+    ])).toMatchObject({ starKey: 'near-depth' })
 
     expect(pick(50, 40, 'mouse', [
       candidate({ starKey: 'star-z', x: 51, depth: 0.2 }),
       candidate({ starKey: 'star-a', x: 49, depth: 0.2 }),
-    ])).toBe('star-a')
+    ])).toMatchObject({ starKey: 'star-a' })
   })
 
   it('returns null when a higher-priority planet or specimen captured the event', () => {

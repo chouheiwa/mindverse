@@ -36,7 +36,7 @@ describe('QuestionWorkspace', () => {
     await user.click(enter)
     expect(onEnterStrata).toHaveBeenCalledOnce()
     expect(onEnterStrata).toHaveBeenCalledWith(question.id)
-    expect(screen.getByRole('tab', { name: '个人轨道' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '我的证据轨迹' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByText(/当前仍可访问的答案按首发时间排列/)).toBeVisible()
     expect(screen.getByText(/幸存者偏差与版本偏差/)).toBeVisible()
 
@@ -69,7 +69,7 @@ describe('QuestionWorkspace', () => {
     expect(screen.getByRole('link', { name: '知乎原问题' })).toHaveAttribute('href', question.url)
     expect(screen.getByText(/当前样本/)).toBeVisible()
     expect(screen.getByText('2 个当前可访问回答')).toBeVisible()
-    expect(screen.getByRole('tab', { name: '个人轨道' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '我的证据轨迹' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('heading', { name: '我创作' })).toBeVisible()
     expect(screen.getByRole('heading', { name: '我收藏' })).toBeVisible()
     expect(screen.queryByText(/认同/)).not.toBeInTheDocument()
@@ -86,7 +86,7 @@ describe('QuestionWorkspace', () => {
   test('uses ARIA tabs with roving keyboard focus and no focus loss', async () => {
     const user = userEvent.setup()
     render(<QuestionWorkspace index={index([])} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
-    const personal = screen.getByRole('tab', { name: '个人轨道' })
+    const personal = screen.getByRole('tab', { name: '我的证据轨迹' })
     personal.focus()
     await user.keyboard('{ArrowRight}')
     expect(screen.getByRole('tab', { name: '回溯' })).toHaveFocus()
@@ -108,7 +108,7 @@ describe('QuestionWorkspace', () => {
 
   test.each([{ shared: true }, { readOnly: true }])('in public mode %o defaults to retrospective and renders no private orbit tab, panel, or copy', (mode) => {
     render(<QuestionWorkspace {...mode} index={index([answer('answer:1', { bindings: [{ relation: 'created', folders: [] }] })])} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
-    expect(screen.queryByRole('tab', { name: '个人轨道' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '我的证据轨迹' })).not.toBeInTheDocument()
     expect(screen.queryByText('我创作')).not.toBeInTheDocument()
     expect(screen.queryByText('我收藏')).not.toBeInTheDocument()
     expect(screen.getByRole('tab', { name: '回溯' })).toHaveAttribute('aria-selected', 'true')
@@ -118,10 +118,10 @@ describe('QuestionWorkspace', () => {
     const source = index([answer('answer:1', { bindings: [{ relation: 'created', folders: ['私密目录'] }] })])
     const props = { index: source, questionId: question.id, onBack: () => {}, onRestoreCamera: () => {} }
     const view = render(<QuestionWorkspace {...props} />)
-    screen.getByRole('tab', { name: '个人轨道' }).focus()
+    screen.getByRole('tab', { name: '我的证据轨迹' }).focus()
 
     view.rerender(<QuestionWorkspace {...props} shared />)
-    expect(screen.queryByRole('tab', { name: '个人轨道' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '我的证据轨迹' })).not.toBeInTheDocument()
     const retrospective = screen.getByRole('tab', { name: '回溯' })
     expect(retrospective).toHaveAttribute('aria-selected', 'true')
     expect(retrospective).toHaveAttribute('aria-controls', 'qw-panel-retrospective')
@@ -131,10 +131,10 @@ describe('QuestionWorkspace', () => {
     await waitFor(() => expect(retrospective).toHaveFocus())
 
     view.rerender(<QuestionWorkspace {...props} />)
-    const personal = screen.getByRole('tab', { name: '个人轨道' })
+    const personal = screen.getByRole('tab', { name: '我的证据轨迹' })
     expect(personal).toHaveAttribute('aria-selected', 'true')
     expect(personal).toHaveAttribute('aria-controls', 'qw-panel-personal')
-    expect(screen.getByRole('tabpanel', { name: '个人轨道' })).toHaveAttribute('id', 'qw-panel-personal')
+    expect(screen.getByRole('tabpanel', { name: '我的证据轨迹' })).toHaveAttribute('id', 'qw-panel-personal')
     expect(personal).toHaveFocus()
   })
 

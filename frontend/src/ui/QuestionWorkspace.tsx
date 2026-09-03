@@ -86,7 +86,7 @@ function PersonalPanel({ answers }: { answers: readonly PersonalWorkspaceAnswer[
   return (
     <div className="qw-personal">
       {!answers.length && (
-        <p className="qw-guidance">这里还没有可证明的个人轨道。只有 OAuth 返回的创作或收藏绑定，才能说明你与回答的关系；公开搜索、收藏列表发现或本人内容发现都不能单独证明个人关系。</p>
+        <p className="qw-guidance">这里还没有可证明的个人证据轨迹。只有 OAuth 返回的创作或收藏绑定，才能说明你与回答的关系；公开搜索、收藏列表发现或本人内容发现都不能单独证明个人关系。</p>
       )}
       <section aria-labelledby="qw-created">
         <p className="qw-kicker">RELATION · CREATED</p>
@@ -219,7 +219,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
     }
   }
 
-  const labels: Record<Mode, string> = { personal: '个人轨道', retrospective: '回溯', prism: '棱镜' }
+  const labels: Record<Mode, string> = { personal: '我的证据轨迹', retrospective: '回溯', prism: '棱镜' }
   return (
     <dialog ref={dialogRef} className="qw" aria-modal="true" aria-labelledby="qw-title" onKeyDown={onDialogKeyDown}
       onCancel={(event) => { event.preventDefault(); close() }}>

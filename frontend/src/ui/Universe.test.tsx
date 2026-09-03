@@ -358,7 +358,7 @@ describe('Universe question keyboard integration', () => {
     await user.click(trigger)
     expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(screen.queryByRole('button', { name: '关闭问题行星入口' })).not.toBeInTheDocument()
-    expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
+    expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
     expect(testState.suspendCalls).toBe(0)
     await user.click(screen.getByRole('button', { name: '返回问题航道' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -395,7 +395,7 @@ describe('Universe question keyboard integration', () => {
     await user.click(screen.getByRole('button', { name: '返回行星表面' }))
     expect(testState.strataExitCalls).toEqual([1])
     act(() => testState.callbacks?.onStrataExited?.({ token: 1, questionId: 'question:7' }))
-    expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
+    expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
   })
 
   test('hands lane focus to the card, enters and leaves the workspace, and clears stale entry state', async () => {
@@ -429,7 +429,7 @@ describe('Universe question keyboard integration', () => {
 
     await user.keyboard('{Enter}')
     expect(testState.suspendCalls).toBe(0)
-    expect(await screen.findByRole('tab', { name: '个人轨道' })).toBeVisible()
+    expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
     const stage = screen.getByRole('region', { name: '问题行星近景' })
     fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 30 }))
     fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 19 }))

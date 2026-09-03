@@ -14,7 +14,6 @@ export interface StarPresentationInput {
   readonly approachProgress?: number
   readonly hoverProgress?: number
   readonly pressedProgress?: number
-  readonly reducedMotion?: boolean
 }
 
 export interface StarPresentation {
@@ -28,7 +27,9 @@ export interface StarPresentation {
   readonly coronaIntensity: number
   readonly systemReveal: number
   readonly focusedOpacity: number
-  readonly nonFocusedOpacity: number
+  readonly nonFocusedTargetOpacity: number
+  readonly backgroundDimMix: number
+  readonly effectiveNonFocusedOpacity: number
   readonly lodIntent: StarLodIntent
 }
 
@@ -41,13 +42,20 @@ function smoothstep(value: number): number {
   return value * value * (3 - 2 * value)
 }
 
+function lerp(from: number, to: number, progress: number): number {
+  if (progress === 0) return from
+  if (progress === 1) return to
+  return from + (to - from) * progress
+}
+
 function basePresentation(
   input: StarPresentationInput,
 ): Omit<StarPresentation, 'coreScale' | 'coreBrightness' | 'haloIntensity'> {
   if (input.phase === 'strata') {
     return {
       coreAlpha: 0, haloAlpha: 0, surfaceAlpha: 0, coronaAlpha: 0,
-      coronaIntensity: 0, systemReveal: 0, focusedOpacity: 0, nonFocusedOpacity: 0,
+      coronaIntensity: 0, systemReveal: 0, focusedOpacity: 0,
+      nonFocusedTargetOpacity: 0, backgroundDimMix: 0, effectiveNonFocusedOpacity: 0,
       lodIntent: 'hidden',
     }
   }
@@ -61,10 +69,12 @@ function basePresentation(
       haloAlpha: 1 - handoff,
       surfaceAlpha: handoff,
       coronaAlpha: handoff,
-      coronaIntensity: handoff,
+      coronaIntensity: 1,
       systemReveal,
       focusedOpacity: 1,
-      nonFocusedOpacity: 0.18,
+      nonFocusedTargetOpacity: 0.18,
+      backgroundDimMix: handoff,
+      effectiveNonFocusedOpacity: lerp(1, 0.18, handoff),
       lodIntent: progress === 0 ? 'point' : progress === 1 ? 'surface' : 'transition',
     }
   }
@@ -79,14 +89,17 @@ function basePresentation(
       coronaIntensity: planetFocus ? 0.55 : 1,
       systemReveal: 1,
       focusedOpacity: 1,
-      nonFocusedOpacity: 0.18,
+      nonFocusedTargetOpacity: 0.18,
+      backgroundDimMix: 1,
+      effectiveNonFocusedOpacity: 0.18,
       lodIntent: 'surface',
     }
   }
 
   return {
     coreAlpha: 1, haloAlpha: 1, surfaceAlpha: 0, coronaAlpha: 0,
-    coronaIntensity: 0, systemReveal: 0, focusedOpacity: 1, nonFocusedOpacity: 1,
+    coronaIntensity: 0, systemReveal: 0, focusedOpacity: 1,
+    nonFocusedTargetOpacity: 0.18, backgroundDimMix: 0, effectiveNonFocusedOpacity: 1,
     lodIntent: 'point',
   }
 }
@@ -99,9 +112,8 @@ export function describeStarPresentation(input: StarPresentationInput): StarPres
 
   const hover = unit(input.hoverProgress)
   const pressed = unit(input.pressedProgress)
-  const coreScale = pressed > 0
-    ? 1 + (0.94 - 1) * pressed
-    : 1 + (1.08 - 1) * hover
+  const hoveredScale = lerp(1, 1.08, hover)
+  const coreScale = lerp(hoveredScale, 0.94, pressed)
 
   return Object.freeze({
     ...base,

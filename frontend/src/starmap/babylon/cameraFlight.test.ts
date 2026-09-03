@@ -30,24 +30,47 @@ function flight(overrides: Partial<Parameters<typeof createCameraFlight>[0]> = {
 
 describe('camera flight geometry', () => {
   it('uses the exact normal duration formula and clamps its bounds', () => {
-    expect(cameraFlightDuration(40, false, 1)).toBe(900 + Math.log1p(40) * 90)
-    expect(cameraFlightDuration(0, false, 1)).toBe(900)
-    expect(cameraFlightDuration(1e9, false, 1)).toBe(1300)
+    expect(cameraFlightDuration(40, false, 1))
+      .toEqual({ ok: true, value: 900 + Math.log1p(40) * 90 })
+    expect(cameraFlightDuration(0, false, 1)).toEqual({ ok: true, value: 900 })
+    expect(cameraFlightDuration(1e9, false, 1)).toEqual({ ok: true, value: 1300 })
   })
 
   it('caps Reduced Motion at 120ms while allowing an immediate jump', () => {
-    expect(cameraFlightDuration(40, true, 500)).toBe(120)
-    expect(cameraFlightDuration(40, true, 80)).toBe(80)
-    expect(cameraFlightDuration(40, true, 0)).toBe(0)
+    expect(cameraFlightDuration(40, true, 500)).toEqual({ ok: true, value: 120 })
+    expect(cameraFlightDuration(40, true, 80)).toEqual({ ok: true, value: 80 })
+    expect(cameraFlightDuration(40, true, 0)).toEqual({ ok: true, value: 0 })
+  })
+
+  it('rejects malformed duration-helper inputs without returning NaN', () => {
+    expect(cameraFlightDuration(Number.NaN, false, 100))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(cameraFlightDuration(10, true, Number.POSITIVE_INFINITY))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(cameraFlightDuration(-1, false, 100))
+      .toEqual({ ok: false, error: 'invalid-input' })
   })
 
   it('computes system extent and falls back to six body radii without planets', () => {
-    expect(computeSystemExtent(2, [])).toBe(12)
-    expect(computeSystemExtent(2, [{ orbitR: 2, radius: 1 }])).toBe(3)
+    expect(computeSystemExtent(2, [])).toEqual({ ok: true, value: 12 })
+    expect(computeSystemExtent(2, [{ orbitR: 2, radius: 1 }]))
+      .toEqual({ ok: true, value: 3 })
     expect(computeSystemExtent(2, [
       { orbitR: 7, radius: 1 },
       { orbitR: 15, radius: 3 },
-    ])).toBe(18)
+    ])).toEqual({ ok: true, value: 18 })
+  })
+
+  it('rejects malformed or overflowing system extents', () => {
+    expect(computeSystemExtent(2, null as unknown as readonly []))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(computeSystemExtent(2, [null] as unknown as readonly []))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(computeSystemExtent(Number.NaN, [])).toEqual({ ok: false, error: 'invalid-input' })
+    expect(computeSystemExtent(Number.MAX_VALUE, []))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(computeSystemExtent(2, [{ orbitR: Number.MAX_VALUE, radius: Number.MAX_VALUE }]))
+      .toEqual({ ok: false, error: 'invalid-input' })
   })
 
   it('targets the star and derives destination radius from body and system extent', () => {
@@ -58,6 +81,15 @@ describe('camera flight geometry', () => {
 
     const capped = flight({ bodyR: 10, systemExtent: 500, overviewRadius: 200 })
     expect(capped.ok && capped.flight.to.radius).toBe(144)
+  })
+
+  it('rejects infeasible or overflowing destination bounds', () => {
+    expect(flight({ bodyR: 100, overviewRadius: 10 }))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(flight({ bodyR: Number.MAX_VALUE }))
+      .toEqual({ ok: false, error: 'invalid-input' })
+    expect(flight({ systemExtent: Number.MAX_VALUE }))
+      .toEqual({ ok: false, error: 'invalid-input' })
   })
 
   it('eases target vectors and logarithmically interpolates radius', () => {
@@ -83,6 +115,8 @@ describe('camera flight geometry', () => {
   })
 
   it('returns errors for invalid construction and sampling instead of emitting NaN', () => {
+    expect(createCameraFlight(null as unknown as Parameters<typeof createCameraFlight>[0]))
+      .toEqual({ ok: false, error: 'invalid-input' })
     expect(flight({ targetStar: { x: Number.NaN, y: 0, z: 0 } })).toEqual({
       ok: false, error: 'invalid-input',
     })
@@ -93,6 +127,23 @@ describe('camera flight geometry', () => {
     if (!result.ok) throw new Error('expected valid flight')
     expect(cameraFlightFrame(result.flight, Number.NaN))
       .toEqual({ ok: false, error: 'invalid-frame' })
+  })
+
+  it('rejects malformed structural flights instead of returning stuck valid frames', () => {
+    const result = flight()
+    if (!result.ok) throw new Error('expected valid flight')
+    const malformedFlights: unknown[] = [
+      { ...result.flight, durationMs: Number.NaN },
+      { ...result.flight, durationMs: -1 },
+      { ...result.flight, token: -1 },
+      { ...result.flight, starKey: '' },
+      { ...result.flight, starKey: null },
+      { ...result.flight, from: null },
+    ]
+    for (const malformed of malformedFlights) {
+      expect(cameraFlightFrame(malformed as typeof result.flight, 0))
+        .toEqual({ ok: false, error: 'invalid-frame' })
+    }
   })
 
   it('completes a zero-duration Reduced Motion flight at zero elapsed milliseconds', () => {
@@ -120,6 +171,8 @@ describe('CameraFlightController', () => {
     expect(controller.isActive(first.flight.token)).toBe(false)
     expect(controller.isActive(second.flight.token)).toBe(true)
     expect(second.flight.token).toBeGreaterThan(first.flight.token)
+    expect(controller.frame(first.flight, 0)).toEqual({ ok: false, error: 'stale-token' })
+    expect(controller.frame(second.flight, 0)).toEqual(expect.objectContaining({ ok: true }))
   })
 
   it('preserves selected intent on user cancellation but clears it for hierarchy changes', () => {
@@ -133,6 +186,7 @@ describe('CameraFlightController', () => {
     controller.cancel('user')
     expect(controller.isActive(first.flight.token)).toBe(false)
     expect(controller.selectedStarKey).toBe('star-a')
+    expect(controller.frame(first.flight, 0)).toEqual({ ok: false, error: 'cancelled' })
 
     controller.cancel('planet')
     expect(controller.selectedStarKey).toBeNull()

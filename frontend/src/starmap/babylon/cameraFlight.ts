@@ -49,6 +49,13 @@ export type CameraFrameResult =
   | { readonly ok: true, readonly frame: CameraFlightFrame }
   | { readonly ok: false, readonly error: 'invalid-frame' }
 
+export type ControlledCameraFrameResult = CameraFrameResult
+  | { readonly ok: false, readonly error: 'cancelled' | 'stale-token' }
+
+export type NumericResult =
+  | { readonly ok: true, readonly value: number }
+  | { readonly ok: false, readonly error: 'invalid-input' }
+
 export type CameraFlightCancelReason =
   | 'user'
   | 'reset'
@@ -68,8 +75,34 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value))
 }
 
-function finiteVector(value: Vector3Like): boolean {
-  return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)
+function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function finiteVector(value: unknown): value is Vector3Like {
+  return isRecord(value)
+    && Number.isFinite(value.x)
+    && Number.isFinite(value.y)
+    && Number.isFinite(value.z)
+}
+
+function validPose(value: unknown): value is CameraPose {
+  return isRecord(value)
+    && finiteVector(value.target)
+    && Number.isFinite(value.radius)
+    && (value.radius as number) > 0
+}
+
+function validFlight(value: unknown): value is CameraFlight {
+  return isRecord(value)
+    && Number.isSafeInteger(value.token)
+    && (value.token as number) >= 0
+    && typeof value.starKey === 'string'
+    && value.starKey.length > 0
+    && Number.isFinite(value.durationMs)
+    && (value.durationMs as number) >= 0
+    && validPose(value.from)
+    && validPose(value.to)
 }
 
 function freezeVector(value: Vector3Like): Vector3Like {
@@ -84,62 +117,104 @@ export function cameraFlightDuration(
   distance: number,
   reducedMotion: boolean,
   requestedMs: number,
-): number {
-  if (reducedMotion) return Math.min(120, requestedMs)
-  return clamp(900 + Math.log1p(distance) * 90, 900, 1300)
+): NumericResult {
+  if (!Number.isFinite(distance)
+    || distance < 0
+    || !Number.isFinite(requestedMs)
+    || requestedMs < 0) {
+    return Object.freeze({ ok: false, error: 'invalid-input' })
+  }
+  const value = reducedMotion
+    ? Math.min(120, requestedMs)
+    : clamp(900 + Math.log1p(distance) * 90, 900, 1300)
+  return Number.isFinite(value)
+    ? Object.freeze({ ok: true, value })
+    : Object.freeze({ ok: false, error: 'invalid-input' })
 }
 
 export function computeSystemExtent(
   bodyR: number,
   planets: readonly PlanetExtent[],
-): number {
-  if (planets.length === 0) return bodyR * 6
+): NumericResult {
+  if (!Number.isFinite(bodyR) || bodyR <= 0) {
+    return Object.freeze({ ok: false, error: 'invalid-input' })
+  }
+  if (!Array.isArray(planets)) return Object.freeze({ ok: false, error: 'invalid-input' })
+  if (planets.length === 0) {
+    const fallback = bodyR * 6
+    return Number.isFinite(fallback)
+      ? Object.freeze({ ok: true, value: fallback })
+      : Object.freeze({ ok: false, error: 'invalid-input' })
+  }
 
   let extent = 0
   for (const planet of planets) {
-    extent = Math.max(extent, planet.orbitR + planet.radius)
+    if (!isRecord(planet)
+      || !Number.isFinite(planet.orbitR)
+      || (planet.orbitR as number) < 0
+      || !Number.isFinite(planet.radius)
+      || (planet.radius as number) < 0) {
+      return Object.freeze({ ok: false, error: 'invalid-input' })
+    }
+    const outerRadius = (planet.orbitR as number) + (planet.radius as number)
+    if (!Number.isFinite(outerRadius)) {
+      return Object.freeze({ ok: false, error: 'invalid-input' })
+    }
+    extent = Math.max(extent, outerRadius)
   }
-  return extent
+  return Object.freeze({ ok: true, value: extent })
 }
 
-function validInput(input: CameraFlightInput): boolean {
-  return Number.isSafeInteger(input.token)
-    && input.token >= 0
+function validInput(input: unknown): input is CameraFlightInput {
+  return isRecord(input)
+    && Number.isSafeInteger(input.token)
+    && (input.token as number) >= 0
+    && typeof input.starKey === 'string'
     && input.starKey.length > 0
-    && finiteVector(input.start.target)
+    && validPose(input.start)
     && finiteVector(input.targetStar)
-    && Number.isFinite(input.start.radius)
-    && input.start.radius > 0
     && Number.isFinite(input.bodyR)
-    && input.bodyR > 0
+    && (input.bodyR as number) > 0
     && Number.isFinite(input.systemExtent)
-    && input.systemExtent >= 0
+    && (input.systemExtent as number) >= 0
     && Number.isFinite(input.overviewRadius)
-    && input.overviewRadius > 0
+    && (input.overviewRadius as number) > 0
     && Number.isFinite(input.distance)
-    && input.distance >= 0
+    && (input.distance as number) >= 0
     && Number.isFinite(input.requestedMs)
-    && input.requestedMs >= 0
+    && (input.requestedMs as number) >= 0
+    && typeof input.reducedMotion === 'boolean'
 }
 
 export function createCameraFlight(input: CameraFlightInput): CameraFlightResult {
   if (!validInput(input)) return Object.freeze({ ok: false, error: 'invalid-input' })
 
+  const minimumRadius = input.bodyR * 8
+  const maximumRadius = input.overviewRadius * 0.72
+  const bodyRadius = input.bodyR * 14
+  const systemRadius = input.systemExtent * 1.35
+  if (![minimumRadius, maximumRadius, bodyRadius, systemRadius].every(Number.isFinite)
+    || minimumRadius > maximumRadius) {
+    return Object.freeze({ ok: false, error: 'invalid-input' })
+  }
   const destinationRadius = clamp(
-    Math.max(input.bodyR * 14, input.systemExtent * 1.35),
-    input.bodyR * 8,
-    input.overviewRadius * 0.72,
+    Math.max(bodyRadius, systemRadius),
+    minimumRadius,
+    maximumRadius,
   )
   if (!Number.isFinite(destinationRadius) || destinationRadius <= 0) {
     return Object.freeze({ ok: false, error: 'invalid-input' })
   }
+
+  const duration = cameraFlightDuration(input.distance, input.reducedMotion, input.requestedMs)
+  if (!duration.ok) return Object.freeze({ ok: false, error: duration.error })
 
   const flight = Object.freeze({
     token: input.token,
     starKey: input.starKey,
     from: freezePose(input.start),
     to: freezePose({ target: input.targetStar, radius: destinationRadius }),
-    durationMs: cameraFlightDuration(input.distance, input.reducedMotion, input.requestedMs),
+    durationMs: duration.value,
   })
   return Object.freeze({ ok: true, flight })
 }
@@ -150,12 +225,7 @@ function smoothstep(value: number): number {
 
 export function cameraFlightFrame(flight: CameraFlight, elapsedMs: number): CameraFrameResult {
   if (!Number.isFinite(elapsedMs)
-    || !finiteVector(flight.from.target)
-    || !finiteVector(flight.to.target)
-    || !Number.isFinite(flight.from.radius)
-    || !Number.isFinite(flight.to.radius)
-    || flight.from.radius <= 0
-    || flight.to.radius <= 0) {
+    || !validFlight(flight)) {
     return Object.freeze({ ok: false, error: 'invalid-frame' })
   }
 
@@ -199,6 +269,7 @@ export function cameraFlightFrame(flight: CameraFlight, elapsedMs: number): Came
 export class CameraFlightController {
   #generation = 0
   #activeToken: number | null = null
+  #cancelledToken: number | null = null
   #selectedStarKey: string | null = null
 
   get selectedStarKey(): string | null {
@@ -221,6 +292,7 @@ export class CameraFlightController {
   }
 
   cancel(reason: CameraFlightCancelReason): void {
+    this.#cancelledToken = this.#activeToken
     this.#generation += 1
     this.#activeToken = null
     if (reason !== 'user') this.#selectedStarKey = null
@@ -228,6 +300,15 @@ export class CameraFlightController {
 
   isActive(token: number): boolean {
     return token === this.#activeToken
+  }
+
+  frame(flight: CameraFlight, elapsedMs: number): ControlledCameraFrameResult {
+    if (!validFlight(flight)) return Object.freeze({ ok: false, error: 'invalid-frame' })
+    if (flight.token === this.#activeToken) return cameraFlightFrame(flight, elapsedMs)
+    if (flight.token === this.#cancelledToken) {
+      return Object.freeze({ ok: false, error: 'cancelled' })
+    }
+    return Object.freeze({ ok: false, error: 'stale-token' })
   }
 }
 

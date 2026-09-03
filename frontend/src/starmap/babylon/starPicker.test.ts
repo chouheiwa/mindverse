@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { StarDatum } from '../gl/starData'
 import { starWorldPosition } from '../gl/starData'
+import * as starPickerModule from './starPicker'
 import {
   PointerGestureController,
   buildProjectedStarCandidates,
@@ -84,6 +85,26 @@ describe('pickProjectedStar', () => {
     ])).toMatchObject({ starKey: 'star-a' })
   })
 
+  it('uses deterministic UTF-16 ordering for non-ASCII star-key ties', () => {
+    expect(pick(50, 40, 'mouse', [
+      candidate({ starKey: 'ä', x: 51, depth: 0.2 }),
+      candidate({ starKey: 'z', x: 49, depth: 0.2 }),
+    ])).toMatchObject({ starKey: 'z' })
+  })
+
+  it('selects the winner without array combinators or sorting in the pointer hot path', () => {
+    const flatMap = vi.spyOn(Array.prototype, 'flatMap')
+    const sort = vi.spyOn(Array.prototype, 'sort')
+
+    const result = pick(50, 40, 'mouse', [candidate()])
+
+    expect(result).toMatchObject({ starKey: 'star-a' })
+    expect(flatMap).not.toHaveBeenCalled()
+    expect(sort).not.toHaveBeenCalled()
+    flatMap.mockRestore()
+    sort.mockRestore()
+  })
+
   it('returns null when a higher-priority planet or specimen captured the event', () => {
     expect(pick(50, 40, 'mouse', [candidate()], true)).toBeNull()
   })
@@ -145,6 +166,44 @@ describe('buildProjectedStarCandidates', () => {
   })
 })
 
+describe('ProjectedStarCandidateBuffer', () => {
+  it('caches prepared identity and descriptor while reusing update storage', () => {
+    const star = datum()
+    const buffer = new starPickerModule.ProjectedStarCandidateBuffer([star])
+    let firstDescriptor: unknown
+    let firstWorld: unknown
+    const firstCandidates = buffer.update(0, 1.35, (world, _datum, descriptor) => {
+      firstDescriptor = descriptor
+      firstWorld = world
+      return { x: world.x, y: world.y, depth: 0.2, visible: true }
+    })
+    const firstCandidate = firstCandidates[0]
+    const firstX = firstCandidate?.x
+
+    if ('id' in star.s) star.s.id = 'mutated-after-preparation'
+    star.bright = 2
+    let secondDescriptor: unknown
+    let secondWorld: unknown
+    const secondCandidates = buffer.update(2317, 1.35, (world, _datum, descriptor) => {
+      secondDescriptor = descriptor
+      secondWorld = world
+      return { x: world.x, y: world.y, depth: 0.4, visible: false }
+    })
+
+    expect(secondCandidates).toBe(firstCandidates)
+    expect(secondCandidates[0]).toBe(firstCandidate)
+    expect(secondCandidates[0]?.x).not.toBe(firstX)
+    expect(secondCandidates[0]).toMatchObject({
+      starKey: 'star:v1:private:alpha',
+      depth: 0.4,
+      visible: false,
+    })
+    expect(secondDescriptor).toBe(firstDescriptor)
+    expect(Object.isFrozen(secondDescriptor)).toBe(true)
+    expect(secondWorld).toBe(firstWorld)
+  })
+})
+
 describe('PointerGestureController', () => {
   it('accepts 5.999 CSS pixels of cumulative movement but treats exactly 6 as drag', () => {
     const click = new PointerGestureController()
@@ -202,6 +261,57 @@ describe('PointerGestureController', () => {
       multiPointerInvalidated: true,
     })
     expect(gesture.pointerUp({ pointerId: 1, x: 1, y: 2, starKey: 'star-a' })).toBeNull()
+    expect(gesture.snapshot().activePointerId).toBeNull()
+    expect(gesture.snapshot().pressedStarKey).toBeNull()
+  })
+
+  it('keeps the original gesture invalid when the secondary pointer releases first', () => {
+    const gesture = new PointerGestureController()
+    gesture.pointerDown({ pointerId: 1, inputKind: 'touch', x: 1, y: 2, starKey: 'star-a' })
+    gesture.pointerDown({ pointerId: 2, inputKind: 'touch', x: 3, y: 4, starKey: 'star-b' })
+
+    expect(gesture.pointerUp({ pointerId: 2, x: 3, y: 4, starKey: 'star-b' })).toBeNull()
+    expect(gesture.snapshot()).toMatchObject({
+      activePointerId: 1,
+      pressedStarKey: null,
+      cancelled: true,
+      multiPointerInvalidated: true,
+    })
+    expect(gesture.pointerUp({ pointerId: 1, x: 1, y: 2, starKey: 'star-a' })).toBeNull()
+    expect(gesture.snapshot()).toEqual({
+      activePointerId: null, inputKind: null, origin: null, lastPoint: null,
+      accumulatedMovement: 0, pressedStarKey: null, cancelled: false,
+      multiPointerInvalidated: false,
+    })
+  })
+
+  it.each(['pointerCancel', 'lostPointerCapture'] as const)(
+    '%s fully resets a multitouch-invalidated gesture',
+    (transition) => {
+      const gesture = new PointerGestureController()
+      gesture.pointerDown({ pointerId: 1, inputKind: 'touch', x: 1, y: 2, starKey: 'star-a' })
+      gesture.pointerDown({ pointerId: 2, inputKind: 'touch', x: 3, y: 4, starKey: 'star-b' })
+
+      gesture[transition](1)
+
+      expect(gesture.snapshot().activePointerId).toBeNull()
+      expect(gesture.snapshot().pressedStarKey).toBeNull()
+      expect(gesture.pointerUp({ pointerId: 1, x: 1, y: 2, starKey: 'star-a' })).toBeNull()
+    },
+  )
+
+  it('never restores pressed state across a third-pointer sequence', () => {
+    const gesture = new PointerGestureController()
+    gesture.pointerDown({ pointerId: 1, inputKind: 'touch', x: 1, y: 1, starKey: 'star-a' })
+    gesture.pointerDown({ pointerId: 2, inputKind: 'touch', x: 2, y: 2, starKey: 'star-b' })
+    gesture.pointerDown({ pointerId: 3, inputKind: 'pen', x: 3, y: 3, starKey: 'star-c' })
+    expect(gesture.snapshot().pressedStarKey).toBeNull()
+
+    expect(gesture.pointerUp({ pointerId: 2, x: 2, y: 2, starKey: 'star-b' })).toBeNull()
+    expect(gesture.snapshot().pressedStarKey).toBeNull()
+    expect(gesture.pointerUp({ pointerId: 3, x: 3, y: 3, starKey: 'star-c' })).toBeNull()
+    expect(gesture.snapshot().pressedStarKey).toBeNull()
+    expect(gesture.pointerUp({ pointerId: 1, x: 1, y: 1, starKey: 'star-a' })).toBeNull()
     expect(gesture.snapshot().activePointerId).toBeNull()
     expect(gesture.snapshot().pressedStarKey).toBeNull()
   })

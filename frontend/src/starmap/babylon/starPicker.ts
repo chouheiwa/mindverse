@@ -32,25 +32,38 @@ export function pickProjectedStar(
 ): ProjectedStarCandidate | null {
   if (input.capturedByHigherPriority) return null
 
-  const [minimumRadius, maximumRadius] = input.inputKind === 'mouse'
-    ? [10, 28]
-    : [22, 36]
+  const isMouse = input.inputKind === 'mouse'
+  const minimumRadius = isMouse ? 10 : 22
+  const maximumRadius = isMouse ? 28 : 36
+  let winner: ProjectedStarCandidate | null = null
+  let winnerDistanceSquared = Number.POSITIVE_INFINITY
 
-  const hits = candidates.flatMap((candidate) => {
-    if (!isPickable(candidate, input.viewport.width, input.viewport.height)) return []
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]
+    if (!candidate) continue
+    if (!isPickable(candidate, input.viewport.width, input.viewport.height)) continue
     const radius = clamp(candidate.visualRadiusPx, minimumRadius, maximumRadius)
     const dx = input.x - candidate.x
     const dy = input.y - candidate.y
     const distanceSquared = dx * dx + dy * dy
-    return distanceSquared <= radius * radius ? [{ candidate, distanceSquared }] : []
-  })
+    if (distanceSquared > radius * radius) continue
+    if (!winner
+      || distanceSquared < winnerDistanceSquared
+      || (distanceSquared === winnerDistanceSquared && precedesAtEqualDistance(candidate, winner))) {
+      winner = candidate
+      winnerDistanceSquared = distanceSquared
+    }
+  }
+  return winner
+}
 
-  hits.sort((a, b) =>
-    a.distanceSquared - b.distanceSquared
-    || a.candidate.depth - b.candidate.depth
-    || a.candidate.starKey.localeCompare(b.candidate.starKey),
-  )
-  return hits[0]?.candidate ?? null
+function precedesAtEqualDistance(candidate: ProjectedStarCandidate, winner: ProjectedStarCandidate): boolean {
+  if (candidate.depth !== winner.depth) return candidate.depth < winner.depth
+  return compareCodeUnits(candidate.starKey, winner.starKey) < 0
+}
+
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 function isPickable(candidate: ProjectedStarCandidate, width: number, height: number): boolean {
@@ -86,25 +99,69 @@ export type StarProjector = (
   visual: StarVisualDescriptor,
 ) => ProjectedPosition
 
+interface PreparedStar {
+  readonly datum: StarDatum
+  readonly starKey: string
+  readonly visual: StarVisualDescriptor
+}
+
+interface MutableProjectedStarCandidate {
+  readonly starKey: string
+  x: number
+  y: number
+  depth: number
+  readonly visualRadiusPx: number
+  visible: boolean
+}
+
+export class ProjectedStarCandidateBuffer {
+  private readonly prepared: readonly PreparedStar[]
+  private readonly candidates: MutableProjectedStarCandidate[]
+  private readonly world = mutableWorldPosition()
+
+  constructor(stars: readonly StarDatum[]) {
+    this.prepared = stars.map((datum) => ({
+      datum,
+      starKey: starIdentity(datum.s),
+      visual: describeStarVisual(datum),
+    }))
+    this.candidates = this.prepared.map(({ starKey, visual }) => ({
+      starKey,
+      x: 0,
+      y: 0,
+      depth: 0,
+      visualRadiusPx: visual.panoramaHaloPx,
+      visible: false,
+    }))
+  }
+
+  update(
+    elapsedMs: number,
+    bobAmplitude: number,
+    project: StarProjector,
+  ): readonly ProjectedStarCandidate[] {
+    for (let index = 0; index < this.prepared.length; index += 1) {
+      const prepared = this.prepared[index]
+      const candidate = this.candidates[index]
+      if (!prepared || !candidate) continue
+      starWorldPosition(prepared.datum, elapsedMs, bobAmplitude, this.world)
+      const projected = project(this.world, prepared.datum, prepared.visual)
+      candidate.x = projected.x
+      candidate.y = projected.y
+      candidate.depth = projected.depth
+      candidate.visible = projected.visible
+    }
+    return this.candidates
+  }
+}
+
 export function buildProjectedStarCandidates(
   stars: readonly StarDatum[],
   elapsedMs: number,
   bobAmplitude: number,
   project: StarProjector,
 ): ProjectedStarCandidate[] {
-  return stars.map((datum) => {
-    const world = starWorldPosition(datum, elapsedMs, bobAmplitude, mutableWorldPosition())
-    const visual = describeStarVisual(datum)
-    const projected = project(world, datum, visual)
-    return {
-      starKey: starIdentity(datum.s),
-      x: projected.x,
-      y: projected.y,
-      depth: projected.depth,
-      visualRadiusPx: visual.panoramaHaloPx,
-      visible: projected.visible,
-    }
-  })
+  return [...new ProjectedStarCandidateBuffer(stars).update(elapsedMs, bobAmplitude, project)]
 }
 
 function mutableWorldPosition() {

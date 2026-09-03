@@ -12,7 +12,7 @@
     "lint": "oxlint",
     "test": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "npm run build:e2e && playwright test",
+    "test:e2e": "VITE_RENDERER=babylon npm run build:e2e && VITE_RENDERER=babylon playwright test",
     "test:e2e:functional": "VITE_RENDERER=babylon npm run build:e2e && VITE_RENDERER=babylon playwright test --project=swiftshader-functional",
     "test:e2e:performance": "VITE_RENDERER=babylon npm run build:e2e && VITE_RENDERER=babylon playwright test --project=metal-performance",
     "compare:render-baselines": "node scripts/compare-render-baselines.mjs testdata/render-baselines/three-question-7.json testdata/render-baselines/babylon-question-7.json",

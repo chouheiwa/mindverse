@@ -34,6 +34,22 @@ test('dense fixture is a repeatable versioned 500-star universe without content 
   expect(universe.probes).toEqual([])
 })
 
+test('baseline and candidate outputs derive disjoint PNG paths from their JSON stems', () => {
+  const root = resolve(process.cwd(), 'testdata/render-baselines')
+  const baseline = resolveBaselineOutput('testdata/render-baselines/babylon-stellar-v1.json')
+  const candidate = resolveBaselineOutput('testdata/render-baselines/babylon-stellar-candidate.json')
+  if (!baseline || !candidate) throw new Error('expected explicit baseline outputs')
+  const baselineImages = Object.values(baseline.images)
+  const candidateImages = Object.values(candidate.images)
+
+  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v1-${name}.png`))
+  expect(candidateImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-candidate-${name}.png`))
+  expect(baselineImages.some((path) => candidateImages.includes(path))).toBe(false)
+  for (const path of [...baselineImages, ...candidateImages]) {
+    expect(relative(root, path).startsWith('..')).toBe(false)
+  }
+})
+
 async function expectReady(page: Page) {
   await expect(page.getByTestId('universe-root')).toHaveAttribute('data-render-state', 'ready', { timeout: 60_000 })
   await expect.poll(async () => (await snapshot(page)).renderReady).toBe(true)
@@ -251,7 +267,7 @@ async function writeOrAttachBaseline(
   if (output) {
     await mkdir(dirname(output.json), { recursive: true })
     await writeFile(output.json, JSON.stringify(metrics, null, 2) + '\n')
-    for (const name of STATE_NAMES) await writeFile(resolve(output.directory, `babylon-${name}.png`), states[name].png)
+    for (const name of STATE_NAMES) await writeFile(output.images[name], states[name].png)
     return
   }
   await testInfo.attach('babylon-stellar-v1.json', {
@@ -262,7 +278,11 @@ async function writeOrAttachBaseline(
   }
 }
 
-export function resolveBaselineOutput(value: string | undefined): { json: string; directory: string } | null {
+export function resolveBaselineOutput(value: string | undefined): {
+  json: string
+  directory: string
+  images: Record<StateName, string>
+} | null {
   if (!value) return null
   const root = resolve(process.cwd(), 'testdata/render-baselines')
   const json = resolve(process.cwd(), value)
@@ -270,5 +290,10 @@ export function resolveBaselineOutput(value: string | undefined): { json: string
   if (extname(json) !== '.json' || pathFromRoot.startsWith('..') || pathFromRoot === '' || basename(json) === '.json') {
     throw new Error('MINDVERSE_BASELINE_OUT must be a .json file inside testdata/render-baselines')
   }
-  return { json, directory: dirname(json) }
+  const directory = dirname(json)
+  const stem = basename(json, '.json')
+  const images = Object.fromEntries(
+    STATE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]),
+  ) as Record<StateName, string>
+  return { json, directory, images }
 }

@@ -1,9 +1,9 @@
 {
-  "_PublicShareContent-B_tS-BP5.js": {
-    "file": "assets/PublicShareContent-B_tS-BP5.js",
+  "_PublicShareContent-C_zLrOhg.js": {
+    "file": "assets/PublicShareContent-C_zLrOhg.js",
     "name": "PublicShareContent",
     "imports": [
-      "_theme-ENJpZHcd.js",
+      "_theme-Dor0K0Z_.js",
       "_apiCore-BzPZ3njc.js"
     ]
   },
@@ -18,109 +18,108 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_postprocessing-wtPlhSw8.js": {
-    "file": "assets/postprocessing-wtPlhSw8.js",
-    "name": "postprocessing",
+  "_babylon-CH-mBqnL.js": {
+    "file": "assets/babylon-CH-mBqnL.js",
+    "name": "babylon",
     "imports": [
-      "_three-D9i4NVAn.js"
+      "_theme-Dor0K0Z_.js",
+      "universe.html"
+    ],
+    "dynamicImports": [
+      "_babylon-CH-mBqnL.js"
     ]
   },
   "_theme-CbzUqeID.css": {
     "file": "assets/theme-CbzUqeID.css",
     "src": "_theme-CbzUqeID.css"
   },
-  "_theme-ENJpZHcd.js": {
-    "file": "assets/theme-ENJpZHcd.js",
+  "_theme-Dor0K0Z_.js": {
+    "file": "assets/theme-Dor0K0Z_.js",
     "name": "theme",
     "css": [
       "assets/theme-CbzUqeID.css"
     ]
   },
-  "_three-D9i4NVAn.js": {
-    "file": "assets/three-D9i4NVAn.js",
-    "name": "three"
-  },
   "index.html": {
-    "file": "assets/landing-DjEU8Lvc.js",
+    "file": "assets/landing-BBGwprRe.js",
     "name": "landing",
     "src": "index.html",
     "isEntry": true,
     "imports": [
-      "_theme-ENJpZHcd.js",
+      "_theme-Dor0K0Z_.js",
       "_api-vGgttR-j.js"
     ],
     "css": [
       "assets/landing-s2Lwws91.css"
     ]
   },
-  "src/starmap/Renderer.ts": {
-    "file": "assets/Renderer-Irf1Y5xy.js",
-    "name": "Renderer",
-    "src": "src/starmap/Renderer.ts",
-    "isDynamicEntry": true,
-    "imports": [
-      "_api-vGgttR-j.js",
-      "_three-D9i4NVAn.js",
-      "_postprocessing-wtPlhSw8.js",
-      "src/ui/Universe.tsx"
-    ]
-  },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-CREFiJba.js",
+    "file": "assets/QuestionWorkspace-CccVglg2.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
     "imports": [
-      "_theme-ENJpZHcd.js",
+      "_theme-Dor0K0Z_.js",
       "src/ui/Universe.tsx"
     ],
     "css": [
-      "assets/QuestionWorkspace-FGmk3qXM.css"
+      "assets/QuestionWorkspace-G6qutOul.css"
     ]
   },
   "src/ui/SharedView.tsx": {
-    "file": "assets/SharedView-CmzqTJ3g.js",
+    "file": "assets/SharedView-n3fKMcRz.js",
     "name": "SharedView",
     "src": "src/ui/SharedView.tsx",
     "isDynamicEntry": true,
     "imports": [
-      "_theme-ENJpZHcd.js",
-      "_PublicShareContent-B_tS-BP5.js"
+      "_theme-Dor0K0Z_.js",
+      "_PublicShareContent-C_zLrOhg.js"
     ],
     "css": [
       "assets/SharedView-BYyUodOf.css"
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-BGK4MpHP.js",
+    "file": "assets/Universe-f7rPMu-7.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
     "imports": [
-      "_theme-ENJpZHcd.js",
+      "_theme-Dor0K0Z_.js",
       "_api-vGgttR-j.js",
       "_apiCore-BzPZ3njc.js",
       "universe.html",
-      "_PublicShareContent-B_tS-BP5.js"
+      "_PublicShareContent-C_zLrOhg.js"
     ],
     "dynamicImports": [
       "src/ui/QuestionWorkspace.tsx",
-      "src/starmap/Renderer.ts"
+      "virtual:mindverse-renderer"
     ],
     "css": [
-      "assets/Universe-TtcHVf7q.css"
+      "assets/Universe-1VgeqSLT.css"
     ]
   },
   "universe.html": {
-    "file": "assets/universe-B-ZT9U8d.js",
+    "file": "assets/universe-BWDNi54w.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,
     "imports": [
-      "_theme-ENJpZHcd.js"
+      "_theme-Dor0K0Z_.js"
     ],
     "dynamicImports": [
       "src/ui/SharedView.tsx",
+      "src/ui/Universe.tsx"
+    ]
+  },
+  "virtual:mindverse-renderer": {
+    "file": "assets/_virtual_mindverse-renderer-Dl6yozV4.js",
+    "name": "_virtual_mindverse-renderer",
+    "src": "virtual:mindverse-renderer",
+    "isDynamicEntry": true,
+    "imports": [
+      "_api-vGgttR-j.js",
+      "_babylon-CH-mBqnL.js",
       "src/ui/Universe.tsx"
     ]
   }

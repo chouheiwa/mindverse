@@ -21,11 +21,11 @@ import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput } from '../gl/planetMaterials'
 import { starColor } from '../gl/blackbody'
-import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot } from '../e2eDiagnostics'
+import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot, type StellarDiagnosticsSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
 import { starIdentity } from '../starIdentity'
 import { renderDim, resolveInteractiveStar, starInteractionEligible } from '../starVisibility'
-import { detectQuality } from '../quality'
+import { detectQuality, type Quality } from '../quality'
 import { clusterAxis, orbitRing } from '../projection'
 import type { PlanetDatum } from '../gl/bodies'
 import type {
@@ -63,6 +63,7 @@ import { StarLayer } from './starLayer'
 import { describeStarPresentation, HOVER_INTERPOLATION_MS, type StarPresentation } from './starPresentation'
 import { ProjectedStarCandidateBuffer, pickProjectedStar, type PointerInputKind } from './starPicker'
 import { CameraFlightController, computeSystemExtent, exitTarget, shouldExitOnWheel, type CameraFlight } from './cameraFlight'
+import { describeStarVisual } from './starVisualDescriptor'
 
 const ORBIT_BASE = 2.1
 const ORBIT_STEP = 1.15
@@ -96,6 +97,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly stars: readonly StarDatum[]
   private readonly starLayer: StarLayer
   private readonly candidateBuffer: ProjectedStarCandidateBuffer
+  private readonly quality: Quality
   private readonly pointerPresentation = new StellarPointerPresentationController()
   private readonly cameraFlightController = new CameraFlightController()
   private caveRoot: TransformNode | null = null
@@ -138,6 +140,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private reducedMotion: boolean
   private diagnosticClickEvents = 0
   private diagnosticLastPick: NonNullable<RenderSnapshot['lifecycle']['lastPick']> = 'none'
+  private readonly diagnosticCameraSamples: StellarDiagnosticsSnapshot['cameraSamples'] = []
   private readonly starPositionScratch = new Vector3()
   private readonly flightTargetScratch = new Vector3()
   private readonly planetStarPositionScratch = new Vector3()
@@ -205,7 +208,8 @@ export class BabylonRenderer implements MindverseRenderer {
       const forcedQuality = import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
         ? forcedE2EQuality(location.search)
         : null
-      this.starLayer = new StarLayer(scene, this.stars, forcedQuality ?? detectQuality(reducedMotion), reducedMotion, {
+      this.quality = forcedQuality ?? detectQuality(reducedMotion)
+      this.starLayer = new StarLayer(scene, this.stars, this.quality, reducedMotion, {
         parent: this.universeRoot,
         onError: callbacks.onRenderError,
       })
@@ -239,7 +243,7 @@ export class BabylonRenderer implements MindverseRenderer {
       if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
         installE2EDiagnostics(
           this,
-          'high',
+          this.quality,
           () => ({ geometries: this.scene.meshes.length, textures: this.scene.textures.length }),
           () => this.diagnosticScene(),
           {
@@ -264,6 +268,7 @@ export class BabylonRenderer implements MindverseRenderer {
                 lastPick: this.diagnosticLastPick,
               }
             },
+            stellar: () => this.diagnosticStellar(),
           },
         )
       }
@@ -742,6 +747,44 @@ export class BabylonRenderer implements MindverseRenderer {
     }
   }
 
+  private diagnosticStellar(): StellarDiagnosticsSnapshot {
+    const projectedStars = this.stars.flatMap((star) => {
+      if (!this.isInteractive(star) || !this.universeVisible) return []
+      const projected = this.projectToCss(this.currentStarPosition(star))
+      if (projected.z < 0 || projected.z > 1) return []
+      const visual = describeStarVisual(star)
+      const focusedBodyVisible = star === this.focusedStar && this.presentation.lodIntent !== 'point'
+      const rect = this.canvas.getBoundingClientRect()
+      const focusedCoreSize = star.bodyR * rect.height
+        / Math.max(0.001, Math.tan(this.camera.fov * 0.5) * this.camera.radius)
+      const coreSize = focusedBodyVisible ? Math.max(visual.panoramaCorePx, focusedCoreSize) : visual.panoramaCorePx
+      const haloSize = focusedBodyVisible
+        ? Math.max(visual.panoramaHaloPx, focusedCoreSize * visual.coronaScale)
+        : visual.panoramaHaloPx
+      return [{
+        starKey: starIdentity(star.s),
+        core: { x: projected.x - coreSize / 2, y: projected.y - coreSize / 2, width: coreSize, height: coreSize },
+        halo: { x: projected.x - haloSize / 2, y: projected.y - haloSize / 2, width: haloSize, height: haloSize },
+      }]
+    })
+    const approachProgress = this.activeFlight && this.activeFlight.flight.durationMs > 0
+      ? Math.min(1, this.activeFlight.elapsedMs / this.activeFlight.flight.durationMs)
+      : this.focusedStar ? 1 : 0
+    return {
+      starCount: this.stars.length,
+      projectedStars,
+      hoveredStarKey: this.hoverKey,
+      hoverProgress: this.hoverProgress,
+      focusedStarKey: this.focusedStar ? starIdentity(this.focusedStar.s) : null,
+      approachProgress,
+      systemReveal: this.presentation.systemReveal,
+      visibleQuestionOrbits: [...this.visualByQuestion.values()].filter(({ orbit }) => orbit.isEnabled() && orbit.alpha > 0).length,
+      visibleQuestionPlanets: [...this.visualByQuestion.values()].filter(({ mesh }) => mesh.isEnabled()).length,
+      cameraSamples: this.diagnosticCameraSamples ?? [],
+      shaderFallback: this.starLayer.diagnostics().stellarShaderFallback,
+    }
+  }
+
   private selectedPlanetBounds(): RenderSnapshot['projectedBounds']['selectedPlanet'] {
     const mesh = this.selectedVisual?.mesh
     if (!mesh || !this.universeVisible) return null
@@ -1147,6 +1190,7 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private applyStarFocus(star: StarDatum): boolean {
     try {
+      this.diagnosticCameraSamples?.splice(0)
       this.clearPlanet()
       this.focusedStar = star
       const starKey = starIdentity(star.s)
@@ -1176,6 +1220,7 @@ export class BabylonRenderer implements MindverseRenderer {
       if (result.kind === 'started') {
         this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
         this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
+        this.recordDiagnosticCameraSample()
       } else if (result.kind === 'noop') {
         this.activeFlight = null
         this.camera.setTarget(target)
@@ -1266,6 +1311,7 @@ export class BabylonRenderer implements MindverseRenderer {
       if (!finiteVector3(target)) throw new Error('Invalid camera flight target')
       this.camera.setTarget(target)
       this.camera.radius = frame.radius
+      this.recordDiagnosticCameraSample()
       this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: frame.progress })
       this.activeFlight = frame.complete ? null : Object.freeze({ flight: active.flight, elapsedMs })
       if (frame.complete) this.presentation = describeStarPresentation({ phase: 'star-focus' })
@@ -1274,6 +1320,16 @@ export class BabylonRenderer implements MindverseRenderer {
     } catch (cause) {
       this.recoverCamera(cause)
     }
+  }
+
+  private recordDiagnosticCameraSample(): void {
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS !== '1' || !this.diagnosticCameraSamples) return
+    this.diagnosticCameraSamples.push({
+      sequence: this.diagnosticCameraSamples.length,
+      timestampMs: performance.now(),
+      distance: this.camera.radius,
+    })
+    if (this.diagnosticCameraSamples.length > 180) this.diagnosticCameraSamples.shift()
   }
 
   private recoverCamera(cause: unknown): void {

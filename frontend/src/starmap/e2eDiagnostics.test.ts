@@ -30,6 +30,27 @@ function installDiagnostics() {
     scenePhase: () => 'strata-free',
     projectedBounds: () => ({ selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } }),
     lifecycle: () => ({ rafLoops: 1, listeners: 4 }),
+    stellar: () => ({
+      projectedStars: [{
+        starKey: 'star:v1:public:alpha',
+        core: { x: 314, y: 174, width: 12, height: 12 },
+        halo: { x: 296, y: 156, width: 48, height: 48 },
+      }],
+      starCount: 1,
+      hoveredStarKey: 'star:v1:public:alpha',
+      hoverProgress: 0.75,
+      focusedStarKey: null,
+      approachProgress: 0.5,
+      systemReveal: 0.25,
+      visibleQuestionOrbits: 2,
+      visibleQuestionPlanets: 2,
+      cameraSamples: [
+        { sequence: 1, timestampMs: 10, distance: 30 },
+        { sequence: 2, timestampMs: 20, distance: 20 },
+        { sequence: 3, timestampMs: 30, distance: 10 },
+      ],
+      shaderFallback: false,
+    }),
   })
   return owner
 }
@@ -59,13 +80,32 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
     scenePhase: 'strata-free',
     projectedBounds: { selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } },
     lifecycle: { rafLoops: 1, listeners: 4 },
+    stellar: {
+      projectedStars: [{
+        starKey: 'star:v1:public:alpha',
+        core: { x: 314, y: 174, width: 12, height: 12 },
+        halo: { x: 296, y: 156, width: 48, height: 48 },
+      }],
+      starCount: 1,
+      hoveredStarKey: 'star:v1:public:alpha', focusedStarKey: null,
+      hoverProgress: 0.75,
+      approachProgress: 0.5, systemReveal: 0.25, shaderFallback: false,
+      visibleQuestionOrbits: 2, visibleQuestionPlanets: 2,
+      cameraSamples: { length: 3 },
+    },
   })
+  first.stellar.projectedStars[0]!.halo.width = 1
+  first.stellar.cameraSamples.length = 0
   first.frameTimes.length = 0
   first.scene.planetCount = 0
   expect(window.__MINDVERSE_E2E__!.snapshot()).toMatchObject({
     frameTimes: { length: sampleCount },
     frames: { firstSequence: 0, nextSequence: sampleCount, dropped: 0 },
     scene: { planetCount: 512 },
+    stellar: {
+      projectedStars: [{ halo: { width: 48 } }],
+      cameraSamples: { length: 3 },
+    },
   })
   removeE2EDiagnostics(owner)
   expect(window.__MINDVERSE_E2E__).toBeUndefined()

@@ -22,6 +22,7 @@ export interface RenderSnapshot {
     clickEvents?: number
     lastPick?: 'none' | 'star' | 'planet' | 'specimen' | 'other'
   }
+  stellar: StellarDiagnosticsSnapshot
   p95FrameTime: number | null
   renderReady: boolean
   frameTimes: number[]
@@ -46,6 +47,35 @@ export interface RenderSnapshot {
     strataPose?: { depth: number, yaw: number, pitch: number, snapId: string | null } | null,
     undatedRoom?: { centerDepth: number, angle: number } | null,
   }
+}
+
+export interface DiagnosticBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface StellarDiagnosticsSnapshot {
+  starCount: number
+  projectedStars: Array<{
+    starKey: string
+    core: DiagnosticBounds
+    halo: DiagnosticBounds
+  }>
+  hoveredStarKey: string | null
+  hoverProgress: number
+  focusedStarKey: string | null
+  approachProgress: number
+  systemReveal: number
+  visibleQuestionOrbits: number
+  visibleQuestionPlanets: number
+  cameraSamples: Array<{
+    sequence: number
+    timestampMs: number
+    distance: number
+  }>
+  shaderFallback: boolean
 }
 
 interface E2EDiagnosticsApi {
@@ -81,6 +111,7 @@ export interface E2EDiagnosticsDetails {
   readonly scenePhase: () => RenderSnapshot['scenePhase']
   readonly projectedBounds: () => RenderSnapshot['projectedBounds']
   readonly lifecycle: () => RenderSnapshot['lifecycle']
+  readonly stellar?: () => StellarDiagnosticsSnapshot
 }
 
 declare global {
@@ -132,6 +163,19 @@ export function installE2EDiagnostics(
         scenePhase: state.details.scenePhase(),
         projectedBounds: structuredClone(state.details.projectedBounds()),
         lifecycle: { ...state.details.lifecycle() },
+        stellar: structuredClone(state.details.stellar?.() ?? {
+          starCount: 0,
+          projectedStars: [],
+          hoveredStarKey: null,
+          hoverProgress: 0,
+          focusedStarKey: null,
+          approachProgress: 0,
+          systemReveal: 0,
+          visibleQuestionOrbits: 0,
+          visibleQuestionPlanets: 0,
+          cameraSamples: [],
+          shaderFallback: false,
+        }),
         p95FrameTime: p95FrameTime(frameTimes),
         renderReady: state.renderReady,
         frameTimes,

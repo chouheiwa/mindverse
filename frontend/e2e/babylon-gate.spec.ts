@@ -96,10 +96,10 @@ async function nonBackgroundRatio(page: Page): Promise<number> {
   }))
 }
 
-async function openBabylonUniverse(page: Page, query = '') {
+async function openBabylonUniverse(page: Page, query = '', reducedMotion: 'reduce' | 'no-preference' = 'reduce') {
   await installLifecycleAudit(page)
   await installStrataFixture(page)
-  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.emulateMedia({ reducedMotion })
   await page.goto(`/universe.html${query}`)
 }
 
@@ -120,6 +120,151 @@ async function openStar(page: Page) {
   await canvas(page).click({ position: { x: scene.firstStarX!, y: scene.firstStarY! }, force: true })
   await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible()
 }
+
+async function firstProjectedStar(page: Page) {
+  await expect.poll(async () => (await snapshot(page))?.stellar.projectedStars[0] ?? null).not.toBeNull()
+  return (await snapshot(page))!.stellar.projectedStars[0]!
+}
+
+async function dispatchPointer(
+  page: Page,
+  type: string,
+  point: { x: number; y: number },
+  pointerId: number,
+  pointerType: 'mouse' | 'touch' = 'mouse',
+) {
+  await canvas(page).evaluate((node, event) => {
+    const rect = node.getBoundingClientRect()
+    node.dispatchEvent(new PointerEvent(event.type, {
+      bubbles: true,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      isPrimary: event.pointerId === 1,
+      clientX: rect.left + event.point.x,
+      clientY: rect.top + event.point.y,
+      buttons: event.type === 'pointerup' ? 0 : 1,
+      button: 0,
+    }))
+  }, { type, point, pointerId, pointerType })
+}
+
+test('stellar halo hover, edge click and camera approach progressively reveal the system', async ({ page }) => {
+  await openBabylonUniverse(page, '', 'no-preference')
+  await expectReady(page)
+  const star = await firstProjectedStar(page)
+  const haloEdge = {
+    x: star.halo.x + star.halo.width - 1,
+    y: star.halo.y + star.halo.height / 2,
+  }
+
+  await canvas(page).hover({ position: haloEdge, force: true })
+  await expect(canvas(page)).toHaveCSS('cursor', 'pointer')
+  await expect.poll(async () => (await snapshot(page))?.stellar.hoveredStarKey).toBe(star.starKey)
+  await expect.poll(async () => (await snapshot(page))?.stellar.hoverProgress ?? 0).toBeGreaterThan(0)
+  await canvas(page).click({ position: haloEdge, force: true })
+
+  await expect.poll(async () => (await snapshot(page))?.stellar.focusedStarKey).toBe(star.starKey)
+  await expect.poll(async () => (await snapshot(page))!.stellar.cameraSamples.length).toBeGreaterThanOrEqual(3)
+  await expect.poll(async () => {
+    const stellar = (await snapshot(page))!.stellar
+    return stellar.approachProgress > 0.55 && stellar.approachProgress < 0.98
+      && stellar.systemReveal > 0
+      && stellar.visibleQuestionOrbits > 0
+      && stellar.visibleQuestionPlanets > 0
+  }, { timeout: 5_000, intervals: [16, 32, 64] }).toBe(true)
+  await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+  const distances = (await snapshot(page))!.stellar.cameraSamples.map(({ distance }) => distance)
+  expect(new Set(distances.map((distance) => distance.toFixed(3))).size).toBeGreaterThanOrEqual(3)
+})
+
+test('dragging more than six pixels rotates without selecting a star', async ({ page }) => {
+  await openBabylonUniverse(page, '', 'no-preference')
+  await expectReady(page)
+  const star = await firstProjectedStar(page)
+  const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
+  const alpha = (await snapshot(page))!.scene.cameraAlpha!
+  const bounds = await canvas(page).boundingBox()
+  if (!bounds) throw new Error('stellar canvas has no bounds')
+  await canvas(page).hover({ position: center })
+  await page.mouse.down()
+  await page.mouse.move(bounds.x + center.x + 30, bounds.y + center.y + 12, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(async () => (await snapshot(page))!.scene.cameraAlpha).not.toBe(alpha)
+  expect((await snapshot(page))!.stellar.focusedStarKey).toBeNull()
+})
+
+test('blank click, outward wheel and Escape share the star-to-panorama return', async ({ page }) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  const star = await firstProjectedStar(page)
+  const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
+  const focus = async () => {
+    await canvas(page).click({ position: center, force: true })
+    await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBe(star.starKey)
+  }
+  const panorama = async () => {
+    await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBeNull()
+  }
+
+  await focus()
+  await canvas(page).click({ position: { x: 3, y: 3 }, force: true })
+  await panorama()
+  await focus()
+  await page.keyboard.press('Escape')
+  await panorama()
+  await focus()
+  for (let attempt = 0; attempt < 12 && (await snapshot(page))!.stellar.focusedStarKey; attempt += 1) {
+    await canvas(page).hover({ position: { x: 3, y: 3 } })
+    await page.mouse.wheel(0, 2_000)
+  }
+  await panorama()
+})
+
+for (const cancellation of ['pointercancel', 'lostpointercapture', 'second-touch'] as const) {
+  test(`${cancellation} clears click eligibility without selecting`, async ({ page }) => {
+    await openBabylonUniverse(page)
+    await expectReady(page)
+    const star = await firstProjectedStar(page)
+    const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
+    const clicks = (await snapshot(page))!.lifecycle.clickEvents ?? 0
+    await dispatchPointer(page, 'pointerdown', center, 1, cancellation === 'second-touch' ? 'touch' : 'mouse')
+    if (cancellation === 'second-touch') {
+      await dispatchPointer(page, 'pointerdown', center, 2, 'touch')
+      await dispatchPointer(page, 'pointerup', center, 2, 'touch')
+    } else {
+      await dispatchPointer(page, cancellation, center, 1)
+    }
+    await dispatchPointer(page, 'pointerup', center, 1, cancellation === 'second-touch' ? 'touch' : 'mouse')
+    expect((await snapshot(page))!.stellar.focusedStarKey).toBeNull()
+    expect((await snapshot(page))!.lifecycle.clickEvents).toBe(clicks)
+  })
+}
+
+test('Reduced Motion reaches the same stable focused state without a long flight', async ({ page }) => {
+  await openBabylonUniverse(page, '', 'no-preference')
+  await expectReady(page)
+  const star = await firstProjectedStar(page)
+  const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
+  await canvas(page).click({ position: center, force: true })
+  await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+  const normal = (await snapshot(page))!
+  await page.keyboard.press('Escape')
+  await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBeNull()
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const reducedStar = await firstProjectedStar(page)
+  const reducedCenter = {
+    x: reducedStar.core.x + reducedStar.core.width / 2,
+    y: reducedStar.core.y + reducedStar.core.height / 2,
+  }
+  const start = performance.now()
+  await canvas(page).click({ position: reducedCenter, force: true })
+  await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+  const reduced = (await snapshot(page))!
+  expect(performance.now() - start).toBeLessThan(500)
+  expect(reduced.stellar.focusedStarKey).toBe(normal.stellar.focusedStarKey)
+  expect(reduced.stellar.systemReveal).toBe(normal.stellar.systemReveal)
+  expect(reduced.scene.cameraDistance).toBeCloseTo(normal.scene.cameraDistance, 3)
+})
 
 async function openQuestionWorkspace(page: Page, title: string) {
   const laneButton = page.getByRole('button', { name: new RegExp(title) })

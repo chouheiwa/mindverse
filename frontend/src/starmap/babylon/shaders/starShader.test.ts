@@ -29,10 +29,14 @@ describe('stellar shader contracts', () => {
     expect(starPanoramaVertexShader).toMatch(/6400\.0\s*\+\s*mod\(aSeed\s*\*\s*311\.0,\s*5200\.0\)/)
     expect(starPanoramaVertexShader).toContain('aDim')
     expect(starPanoramaVertexShader).toContain('attribute vec3 aInteraction')
+    expect(starPanoramaVertexShader).toContain('attribute float aCoreDim')
+    expect(starPanoramaVertexShader).toContain('attribute float aHaloDim')
+    expect(starPanoramaVertexShader).toMatch(/mix\(aCoreDim,\s*aHaloDim/)
   })
 
   it('renders radial hot cores, independent two-slope halos, and gated rotated flares', () => {
     expect(starCoreFragmentShader).toMatch(/if\s*\(d2\s*>\s*1\.0\)\s*discard/)
+    expect(starCoreFragmentShader).toMatch(/if\s*\(vAlpha\s*<=\s*0\.001\)\s*discard/)
     expect(starCoreFragmentShader).toMatch(/mix\(vColor,\s*vec3\(1\.0\)/)
     expect(starCoreFragmentShader).toContain('min(')
     expect(starCoreFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^,]+,\s*alpha\)/)

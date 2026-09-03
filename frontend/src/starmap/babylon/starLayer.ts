@@ -8,11 +8,11 @@ import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
-import { starWorldPosition, type StarDatum } from '../gl/starData'
+import type { StarDatum } from '../gl/starData'
 import type { Quality } from '../quality'
 import { starIdentity } from '../starIdentity'
 import type { StarPresentation } from './starPresentation'
-import { describeStarVisual } from './starVisualDescriptor'
+import { describeStarVisual, type StarVisualDescriptor } from './starVisualDescriptor'
 import { starCoreFragmentShader } from './shaders/starCore.fragment.fx'
 import { starCoronaFragmentShader } from './shaders/starCorona.fragment.fx'
 import { starFlareFragmentShader } from './shaders/starFlare.fragment.fx'
@@ -28,9 +28,14 @@ export interface StarLayerFrameInput {
   readonly projectionScale: number
 }
 
+export interface StellarCompileTarget {
+  readonly material: Material
+  readonly mesh: Mesh
+}
+
 export type StellarCompilePort = (
   kind: 'advanced' | 'fallback',
-  materials: readonly Material[],
+  targets: readonly StellarCompileTarget[],
   succeed: () => void,
   fail: (cause: Error) => void,
 ) => void
@@ -55,6 +60,7 @@ export interface StarLayerDiagnostics {
   readonly interactions: readonly (readonly [number, number, number])[]
   readonly quality: Readonly<{ sphereSegments: number; noiseOctaves: number; coronaLayers: number }>
   readonly stellarShaderFallback: boolean
+  readonly focusedReady: boolean
   readonly focusUniforms: Readonly<{
     kelvin: number; seed: number; rot: number; activity: number; time: number
   }>
@@ -69,7 +75,8 @@ const QUALITY_CONFIG = Object.freeze({
 
 const PANORAMA_ATTRIBUTES = [
   'position', 'aCenter', 'aAxis', 'aColor', 'aPeriod', 'aCoreSize', 'aHaloSize',
-  'aBright', 'aBurst', 'aSeed', 'aRot', 'aBodyR', 'aDim', 'aInteraction',
+  'aBright', 'aBurst', 'aSeed', 'aRot', 'aBodyR', 'aDim', 'aCoreDim', 'aHaloDim',
+  'aInteraction',
 ]
 const PANORAMA_UNIFORMS = [
   'worldView', 'projection', 'uTime', 'uBobAmplitude', 'uRenderHeight',
@@ -137,6 +144,8 @@ interface PanoramaBatch {
 
 export class StarLayer {
   private readonly stars: readonly StarDatum[]
+  private readonly descriptors: readonly StarVisualDescriptor[]
+  private readonly descriptorByDatum: ReadonlyMap<StarDatum, StarVisualDescriptor>
   private readonly reducedMotion: boolean
   private readonly options: StarLayerOptions
   private readonly qualityConfig: StarLayerDiagnostics['quality']
@@ -145,6 +154,8 @@ export class StarLayer {
   private readonly dimensionsBuffer: Float32Array
   private readonly baseDimensions: Float32Array
   private readonly interactionBuffer: Float32Array
+  private readonly coreDimensionsBuffer: Float32Array
+  private readonly haloDimensionsBuffer: Float32Array
   private readonly focusSphere: Mesh
   private readonly focusCorona: Mesh
   private focusedMaterials: Material[] = []
@@ -156,6 +167,9 @@ export class StarLayer {
   private fallbackActive = false
   private fallbackFailed = false
   private advancedFailure: Error | null = null
+  private focusedKind: 'advanced' | 'fallback' = 'advanced'
+  private compileGeneration = 0
+  private fallbackScheduled = false
   private focusedReady = false
   private disposed = false
   private focusUniforms = { kelvin: 0, seed: 0, rot: 0, activity: 0, time: 0 }
@@ -168,14 +182,19 @@ export class StarLayer {
     options: StarLayerOptions = {},
   ) {
     this.stars = stars
+    this.descriptors = stars.map(describeStarVisual)
+    this.descriptorByDatum = new Map(stars.map((datum, index) => [datum, this.descriptors[index]!]))
     this.reducedMotion = reducedMotion
     this.options = options
     this.qualityConfig = QUALITY_CONFIG[quality]
     this.dimensionsBuffer = new Float32Array(stars.length).fill(1)
     this.baseDimensions = new Float32Array(stars.length).fill(1)
     this.interactionBuffer = new Float32Array(stars.length * 3).fill(1)
+    this.coreDimensionsBuffer = new Float32Array(stars.length).fill(1)
+    this.haloDimensionsBuffer = new Float32Array(stars.length).fill(1)
     this.geometry = createPanoramaGeometry(
-      scene, stars, reducedMotion, this.dimensionsBuffer, this.interactionBuffer,
+      scene, stars, this.descriptors, this.dimensionsBuffer, this.coreDimensionsBuffer,
+      this.haloDimensionsBuffer, this.interactionBuffer,
     )
     this.panorama = [
       this.createPanoramaBatch(scene, 'core', starCoreFragmentShader, 0),
@@ -198,10 +217,15 @@ export class StarLayer {
 
   setDimensions(values: readonly number[]): void {
     if (this.disposed) return
+    if (values.length !== this.stars.length) {
+      throw new RangeError(`Expected ${this.stars.length} star dimensions, received ${values.length}`)
+    }
     for (let index = 0; index < this.dimensionsBuffer.length; index += 1) {
       const value = values[index]
       this.baseDimensions[index] = Number.isFinite(value) ? Math.min(1, Math.max(0, value as number)) : 1
+      this.dimensionsBuffer[index] = this.baseDimensions[index]!
     }
+    this.geometry.updateVerticesData('aDim', this.dimensionsBuffer, false)
     this.applyPresentationDimensions()
   }
 
@@ -219,12 +243,13 @@ export class StarLayer {
     this.presentation = presentation
     this.hoverKey = hoverKey
     this.pressedKey = pressedKey
-    this.panorama[0]?.material.setFloat('uPanoramaAlpha', presentation.coreAlpha)
+    const wholeLayerAlpha = presentation.lodIntent === 'hidden' ? 0 : 1
+    this.panorama[0]?.material.setFloat('uPanoramaAlpha', wholeLayerAlpha)
     this.panorama[0]?.material.setFloat('uCoreScale', 1)
     this.panorama[0]?.material.setFloat('uCoreBrightness', 1)
-    this.panorama[1]?.material.setFloat('uPanoramaAlpha', presentation.haloAlpha)
+    this.panorama[1]?.material.setFloat('uPanoramaAlpha', wholeLayerAlpha)
     this.panorama[1]?.material.setFloat('uHaloIntensity', 1)
-    this.panorama[2]?.material.setFloat('uPanoramaAlpha', presentation.haloAlpha)
+    this.panorama[2]?.material.setFloat('uPanoramaAlpha', wholeLayerAlpha)
     this.applyFocusedPresentationUniforms()
     this.applyVisibility()
     this.applyInteractions()
@@ -245,7 +270,7 @@ export class StarLayer {
     }
     if (!this.focusedDatum) return
     const datum = this.focusedDatum
-    starWorldPosition(datum, time, this.reducedMotion ? 0 : 1.35, this.focusSphere.position)
+    safeStarWorldPosition(datum, time, this.reducedMotion ? 0 : 1.35, this.focusSphere.position)
     this.focusCorona.position.copyFrom(this.focusSphere.position)
     this.focusUniforms = { ...this.focusUniforms, time }
     for (const material of this.focusedMaterials) {
@@ -271,6 +296,7 @@ export class StarLayer {
       ] as const))),
       quality: this.qualityConfig,
       stellarShaderFallback: this.fallbackActive,
+      focusedReady: this.focusedReady,
       focusUniforms: Object.freeze({ ...this.focusUniforms }),
       disposed: this.disposed,
     })
@@ -279,6 +305,9 @@ export class StarLayer {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.compileGeneration += 1
+    this.fallbackScheduled = false
+    this.focusedReady = false
     for (const { mesh, material } of this.panorama) {
       mesh.dispose(false, false)
       material.dispose()
@@ -314,7 +343,7 @@ export class StarLayer {
     material.setFloat('uHaloIntensity', 1)
     material.setFloat('uPanoramaAlpha', 1)
     material.setFloat('uHaloAlpha', 1)
-    material.setFloat('uFlareThreshold', 0.85)
+    material.setFloat('uFlareThreshold', 2.0)
     material.setFloat('uFlareAlpha', 1)
     mesh.material = material
     return { mesh, material, layer }
@@ -334,48 +363,38 @@ export class StarLayer {
     surface.disableDepthWrite = true
     corona.alphaMode = Constants.ALPHA_ADD
     corona.disableDepthWrite = true
-    const fail = (_effect: unknown, errors: string) => this.activateFallback(new Error(errors))
-    surface.onError = fail
-    corona.onError = fail
     this.focusedMaterials = [surface, corona]
     this.focusSphere.material = surface
     this.focusCorona.material = corona
-    const compile = this.options.compile
-    if (compile) compile(
-      'advanced', this.focusedMaterials,
-      () => this.markFocusedReady('advanced'),
-      (cause) => this.activateFallback(cause),
-    )
-    else this.markFocusedReady('advanced')
+    this.focusedKind = 'advanced'
+    this.startFocusedCompilation('advanced', [
+      { material: surface, mesh: this.focusSphere },
+      { material: corona, mesh: this.focusCorona },
+    ])
   }
 
   private activateFallback(advancedCause: Error): void {
-    if (this.disposed || this.fallbackActive) return
+    if (this.disposed || this.focusedKind !== 'advanced') return
     this.advancedFailure = advancedCause
-    this.fallbackActive = true
+    this.fallbackActive = false
     this.focusedReady = false
+    this.focusedKind = 'fallback'
     const scene = this.focusSphere.getScene()
     const oldMaterials = this.focusedMaterials
     const surface = createFallbackSurfaceMaterial(scene)
     const corona = createCoronaMaterial(scene, 'fallback', FALLBACK_CORONA_FRAGMENT)
     corona.alphaMode = Constants.ALPHA_ADD
     corona.disableDepthWrite = true
-    const fail = (_effect: unknown, errors: string) => this.failFallback(new Error(errors))
-    surface.onError = fail
-    corona.onError = fail
     this.focusedMaterials = [surface, corona]
     this.focusSphere.material = surface
     this.focusCorona.material = corona
     for (const material of oldMaterials) material.dispose()
     if (this.focusedDatum) this.applyFocusDatum(this.focusedDatum)
     this.applyFocusedPresentationUniforms()
-    const compile = this.options.compile
-    if (compile) compile(
-      'fallback', this.focusedMaterials,
-      () => this.markFocusedReady('fallback'),
-      (cause) => this.failFallback(cause),
-    )
-    else this.markFocusedReady('fallback')
+    this.startFocusedCompilation('fallback', [
+      { material: surface, mesh: this.focusSphere },
+      { material: corona, mesh: this.focusCorona },
+    ])
   }
 
   private failFallback(cause: Error): void {
@@ -385,30 +404,37 @@ export class StarLayer {
     this.focusCorona.setEnabled(false)
     const original = this.advancedFailure ?? cause
     if (original !== cause && !('cause' in original)) {
-      Object.defineProperty(original, 'cause', { value: cause, configurable: true })
+      try {
+        Object.defineProperty(original, 'cause', { value: cause, configurable: true })
+      } catch {
+        // Error identity is more important than optional metadata on frozen host errors.
+      }
     }
     this.options.onError?.(original)
   }
 
   private applyFocusDatum(datum: StarDatum): void {
-    const descriptor = describeStarVisual(datum)
+    const descriptor = this.descriptorByDatum.get(datum) ?? describeStarVisual(datum)
     const color = new Color3(descriptor.color[0], descriptor.color[1], descriptor.color[2])
-    this.focusSphere.scaling.setAll(datum.bodyR)
-    this.focusCorona.scaling.setAll(datum.bodyR * descriptor.coronaScale)
+    const bodyRadius = clampFinite(datum.bodyR, 0.3, 0.01, 10)
+    const kelvin = clampFinite(datum.kelvin, 5778, 1000, 50_000)
+    const rotation = finiteOr(datum.rot, 0)
+    this.focusSphere.scaling.setAll(bodyRadius)
+    this.focusCorona.scaling.setAll(bodyRadius * descriptor.coronaScale)
     this.focusUniforms = {
-      kelvin: datum.kelvin, seed: descriptor.seed, rot: datum.rot,
+      kelvin, seed: descriptor.seed, rot: rotation,
       activity: descriptor.surfaceActivity, time: this.focusUniforms.time,
     }
-    starWorldPosition(
+    safeStarWorldPosition(
       datum, this.focusUniforms.time, this.reducedMotion ? 0 : 1.35, this.focusSphere.position,
     )
     this.focusCorona.position.copyFrom(this.focusSphere.position)
     for (const material of this.focusedMaterials) {
       if (material instanceof ShaderMaterial) {
         material.setColor3('uColor', color)
-        material.setFloat('uKelvin', datum.kelvin)
+        material.setFloat('uKelvin', kelvin)
         material.setFloat('uSeed', descriptor.seed)
-        material.setFloat('uRot', datum.rot)
+        material.setFloat('uRot', rotation)
         material.setFloat('uActivity', descriptor.surfaceActivity)
         material.setFloat('uCoronaLayers', this.qualityConfig.coronaLayers)
       }
@@ -425,32 +451,99 @@ export class StarLayer {
 
   private applyPresentationDimensions(): void {
     const presentation = this.presentation
-    for (let index = 0; index < this.dimensionsBuffer.length; index += 1) {
+    for (let index = 0; index < this.baseDimensions.length; index += 1) {
       const key = starIdentity(this.stars[index]!.s)
-      const focusMultiplier = presentation && this.focusedKey
-        ? key === this.focusedKey ? presentation.focusedOpacity : presentation.effectiveNonFocusedOpacity
-        : 1
-      this.dimensionsBuffer[index] = this.baseDimensions[index]! * focusMultiplier
+      const base = this.baseDimensions[index]!
+      if (!presentation) {
+        this.coreDimensionsBuffer[index] = base
+        this.haloDimensionsBuffer[index] = base
+      } else if (presentation.lodIntent === 'hidden') {
+        this.coreDimensionsBuffer[index] = 0
+        this.haloDimensionsBuffer[index] = 0
+      } else if (this.focusedKey) {
+        const focused = key === this.focusedKey
+        this.coreDimensionsBuffer[index] = base * (focused
+          ? presentation.coreAlpha * presentation.focusedOpacity
+          : presentation.effectiveNonFocusedOpacity)
+        this.haloDimensionsBuffer[index] = base * (focused
+          ? presentation.haloAlpha * presentation.focusedOpacity
+          : presentation.effectiveNonFocusedOpacity)
+      } else {
+        this.coreDimensionsBuffer[index] = base * presentation.coreAlpha
+        this.haloDimensionsBuffer[index] = base * presentation.haloAlpha
+      }
     }
-    this.geometry.updateVerticesData('aDim', this.dimensionsBuffer, false)
+    this.geometry.updateVerticesData('aCoreDim', this.coreDimensionsBuffer, false)
+    this.geometry.updateVerticesData('aHaloDim', this.haloDimensionsBuffer, false)
   }
 
   private applyFocusedPresentationUniforms(): void {
     if (!this.presentation) return
     const surface = this.focusSphere.material
     const corona = this.focusCorona.material
+    if (surface) surface.disableDepthWrite = this.presentation.surfaceAlpha < 0.999
     if (surface instanceof ShaderMaterial) surface.setFloat('uSurfaceAlpha', this.presentation.surfaceAlpha)
     else if (surface) surface.alpha = this.presentation.surfaceAlpha
     if (corona instanceof ShaderMaterial) {
+      corona.disableDepthWrite = true
       corona.setFloat('uCoronaAlpha', this.presentation.coronaAlpha)
       corona.setFloat('uCoronaIntensity', this.presentation.coronaIntensity)
     }
   }
 
-  private markFocusedReady(kind: 'advanced' | 'fallback'): void {
-    if (this.disposed || (kind === 'fallback') !== this.fallbackActive) return
+  private startFocusedCompilation(
+    kind: 'advanced' | 'fallback',
+    targets: readonly StellarCompileTarget[],
+  ): void {
+    const generation = ++this.compileGeneration
+    this.focusedReady = false
+    const succeed = () => this.completeFocusedCompilation(kind, generation)
+    const fail = (cause: unknown) => this.rejectFocusedCompilation(kind, generation, asError(cause))
+    for (const { material } of targets) {
+      if (material instanceof ShaderMaterial) {
+        material.onError = (_effect, errors) => fail(new Error(errors))
+      }
+    }
+    try {
+      if (this.options.compile) this.options.compile(kind, targets, succeed, fail)
+      else Promise.all(targets.map(({ material, mesh }) => material.forceCompilationAsync(mesh)))
+        .then(succeed, fail)
+    } catch (cause) {
+      fail(cause)
+    }
+  }
+
+  private completeFocusedCompilation(kind: 'advanced' | 'fallback', generation: number): void {
+    if (!this.isCurrentCompilation(kind, generation)) return
+    this.compileGeneration += 1
     this.focusedReady = true
+    this.fallbackActive = kind === 'fallback'
     this.applyVisibility()
+  }
+
+  private rejectFocusedCompilation(
+    kind: 'advanced' | 'fallback',
+    generation: number,
+    cause: Error,
+  ): void {
+    if (!this.isCurrentCompilation(kind, generation)) return
+    this.compileGeneration += 1
+    this.focusedReady = false
+    if (kind === 'fallback') {
+      this.failFallback(cause)
+      return
+    }
+    if (this.fallbackScheduled) return
+    this.fallbackScheduled = true
+    queueMicrotask(() => {
+      if (this.disposed || !this.fallbackScheduled || this.focusedKind !== 'advanced') return
+      this.fallbackScheduled = false
+      this.activateFallback(cause)
+    })
+  }
+
+  private isCurrentCompilation(kind: 'advanced' | 'fallback', generation: number): boolean {
+    return !this.disposed && this.focusedKind === kind && this.compileGeneration === generation
   }
 
   private applyInteractions(): void {
@@ -509,30 +602,35 @@ function createFallbackSurfaceMaterial(scene: Scene): ShaderMaterial {
 function createPanoramaGeometry(
   scene: Scene,
   stars: readonly StarDatum[],
-  reducedMotion: boolean,
+  descriptors: readonly StarVisualDescriptor[],
   dimensions: Float32Array,
+  coreDimensions: Float32Array,
+  haloDimensions: Float32Array,
   interactions: Float32Array,
 ): Geometry {
   const geometry = new Geometry('stellar:panorama:shared-geometry', scene)
-  const vectors = (select: (datum: StarDatum) => readonly [number, number, number]) => {
+  const vectors = (select: (datum: StarDatum, index: number) => readonly [number, number, number]) => {
     const values = new Float32Array(stars.length * 3)
-    stars.forEach((datum, index) => values.set(select(datum), index * 3))
+    stars.forEach((datum, index) => values.set(select(datum, index), index * 3))
     return values
   }
-  const scalars = (select: (datum: StarDatum) => number) => Float32Array.from(stars, select)
-  geometry.setVerticesData('position', vectors(({ p }) => p), false, 3)
-  geometry.setVerticesData('aCenter', vectors(({ center }) => center), false, 3)
-  geometry.setVerticesData('aAxis', vectors(({ axis }) => axis), false, 3)
-  geometry.setVerticesData('aColor', vectors(({ color }) => color), false, 3)
-  geometry.setVerticesData('aPeriod', scalars(({ period }) => period), false, 1)
-  geometry.setVerticesData('aCoreSize', scalars((datum) => describeStarVisual(datum).panoramaCorePx), false, 1)
-  geometry.setVerticesData('aHaloSize', scalars((datum) => describeStarVisual(datum).panoramaHaloPx), false, 1)
-  geometry.setVerticesData('aBright', scalars(({ bright }) => bright), false, 1)
-  geometry.setVerticesData('aBurst', scalars(({ burst }) => reducedMotion ? 0 : burst), false, 1)
-  geometry.setVerticesData('aSeed', scalars(({ seed }) => seed), false, 1)
-  geometry.setVerticesData('aRot', scalars(({ rot }) => rot), false, 1)
-  geometry.setVerticesData('aBodyR', scalars(({ bodyR }) => bodyR), false, 1)
+  const scalars = (select: (datum: StarDatum, index: number) => number) =>
+    Float32Array.from(stars, select)
+  geometry.setVerticesData('position', vectors(({ p }) => safeVector(p)), false, 3)
+  geometry.setVerticesData('aCenter', vectors(({ center }) => safeVector(center)), false, 3)
+  geometry.setVerticesData('aAxis', vectors(({ axis }) => safeAxis(axis)), false, 3)
+  geometry.setVerticesData('aColor', vectors((_datum, index) => descriptors[index]!.color), false, 3)
+  geometry.setVerticesData('aPeriod', scalars(({ period }) => Math.max(0, finiteOr(period, 0))), false, 1)
+  geometry.setVerticesData('aCoreSize', scalars((_datum, index) => descriptors[index]!.panoramaCorePx), false, 1)
+  geometry.setVerticesData('aHaloSize', scalars((_datum, index) => descriptors[index]!.panoramaHaloPx), false, 1)
+  geometry.setVerticesData('aBright', scalars((_datum, index) => descriptors[index]!.luminance), false, 1)
+  geometry.setVerticesData('aBurst', scalars((_datum, index) => descriptors[index]!.surfaceActivity), false, 1)
+  geometry.setVerticesData('aSeed', scalars((_datum, index) => descriptors[index]!.seed), false, 1)
+  geometry.setVerticesData('aRot', scalars(({ rot }) => finiteOr(rot, 0)), false, 1)
+  geometry.setVerticesData('aBodyR', scalars(({ bodyR }) => clampFinite(bodyR, 0.3, 0.01, 10)), false, 1)
   geometry.setVerticesData('aDim', dimensions, true, 1)
+  geometry.setVerticesData('aCoreDim', coreDimensions, true, 1)
+  geometry.setVerticesData('aHaloDim', haloDimensions, true, 1)
   geometry.setVerticesData('aInteraction', interactions, true, 3)
   return geometry
 }
@@ -543,4 +641,55 @@ function finiteNonNegative(value: number): number {
 
 function rounded(value: number): number {
   return Math.round(value * 10_000) / 10_000
+}
+
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback
+}
+
+function clampFinite(value: number, fallback: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, finiteOr(value, fallback)))
+}
+
+function safeVector(value: readonly [number, number, number]): readonly [number, number, number] {
+  return [finiteOr(value[0], 0), finiteOr(value[1], 0), finiteOr(value[2], 0)]
+}
+
+function safeAxis(value: readonly [number, number, number]): readonly [number, number, number] {
+  const [x, y, z] = safeVector(value)
+  const length = Math.hypot(x, y, z)
+  return length > 0 ? [x / length, y / length, z / length] : [0, 1, 0]
+}
+
+function asError(cause: unknown): Error {
+  return cause instanceof Error ? cause : new Error(String(cause))
+}
+
+function safeStarWorldPosition(
+  datum: StarDatum,
+  elapsedMs: number,
+  bobAmplitude: number,
+  out: { set(x: number, y: number, z: number): unknown },
+): void {
+  const p = safeVector(datum.p)
+  const center = safeVector(datum.center)
+  const axis = safeAxis(datum.axis)
+  const period = Math.max(0, finiteOr(datum.period, 0))
+  const seed = Math.abs(Math.trunc(finiteOr(datum.seed, 1)))
+  const offsetX = p[0] - center[0]
+  const offsetY = p[1] - center[1]
+  const offsetZ = p[2] - center[2]
+  const theta = period === 0 ? 0 : Math.PI * 2 / period * (elapsedMs / 1000)
+  const cosine = Math.cos(theta)
+  const sine = Math.sin(theta)
+  const dot = axis[0] * offsetX + axis[1] * offsetY + axis[2] * offsetZ
+  const crossX = axis[1] * offsetZ - axis[2] * offsetY
+  const crossY = axis[2] * offsetX - axis[0] * offsetZ
+  const crossZ = axis[0] * offsetY - axis[1] * offsetX
+  const bob = Math.sin(elapsedMs / (6400 + seed * 311 % 5200) + seed) * bobAmplitude
+  out.set(
+    center[0] + offsetX * cosine + crossX * sine + axis[0] * (dot * (1 - cosine) + bob),
+    center[1] + offsetY * cosine + crossY * sine + axis[1] * (dot * (1 - cosine) + bob),
+    center[2] + offsetZ * cosine + crossZ * sine + axis[2] * (dot * (1 - cosine) + bob),
+  )
 }

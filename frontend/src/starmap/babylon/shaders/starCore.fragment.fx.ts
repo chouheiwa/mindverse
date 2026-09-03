@@ -4,6 +4,7 @@ varying vec3 vColor;
 varying float vAlpha;
 varying float vBright;
 void main(void) {
+  if (vAlpha <= 0.001) discard;
   vec2 uv = gl_PointCoord * 2.0 - 1.0;
   float d2 = dot(uv, uv);
   if (d2 > 1.0) discard;

@@ -14,6 +14,8 @@ attribute float aSeed;
 attribute float aRot;
 attribute float aBodyR;
 attribute float aDim;
+attribute float aCoreDim;
+attribute float aHaloDim;
 attribute vec3 aInteraction;
 
 uniform mat4 worldView;
@@ -68,7 +70,8 @@ void main(void) {
   vColor = aColor;
   vBright = aBright;
   vRot = aRot;
-  vAlpha = aDim * uPanoramaAlpha * twinkle
+  float effectiveDim = mix(aCoreDim, aHaloDim, step(0.5, uLayer));
+  vAlpha = min(aDim, effectiveDim) * uPanoramaAlpha * twinkle
     * mix(uCoreBrightness * aInteraction.y, 1.0, step(0.5, uLayer));
 }
 `

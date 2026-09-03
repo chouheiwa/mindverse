@@ -158,23 +158,32 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low') {
 
 test('captures four deterministic stellar states and gates dense performance @metal-performance', async ({ page }, testInfo) => {
   await installStrataFixture(page)
-  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/universe.html?e2eQuality=medium')
   await expectReady(page)
 
   const states = {} as Record<StateName, Awaited<ReturnType<typeof captureState>>>
   states.panorama = await captureState(page, 'panorama')
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   const target = (await snapshot(page)).stellar.projectedStars[0]!
   await canvas(page).click({
     position: { x: target.halo.x + target.halo.width / 2, y: target.halo.y + target.halo.height / 2 },
     force: true,
   })
-  await expect.poll(async () => {
-    const progress = (await snapshot(page)).stellar.approachProgress
-    return progress >= 0.52 && progress <= 0.86
-  }, { intervals: [16, 24, 32], timeout: 5_000 }).toBe(true)
+  await expect.poll(async () => page.evaluate(() => window.__MINDVERSE_E2E__!.setApproachProgress(0.65)))
+    .toBe(true)
+  const frozenBefore = await snapshot(page)
+  expect(frozenBefore.stellar.approachProgress).toBeCloseTo(0.65, 8)
   states['approach-midpoint'] = await captureState(page, 'approach-midpoint')
+  const frozenAfter = await snapshot(page)
+  expect(frozenAfter.stellar.approachProgress).toBeCloseTo(0.65, 8)
+  expect(frozenAfter.scene.cameraDistance).toBeCloseTo(frozenBefore.scene.cameraDistance, 8)
+  expect(frozenAfter.scene.cameraTargetX).toBeCloseTo(frozenBefore.scene.cameraTargetX!, 8)
+  expect(frozenAfter.scene.cameraTargetY).toBeCloseTo(frozenBefore.scene.cameraTargetY!, 8)
+  expect(frozenAfter.scene.cameraTargetZ).toBeCloseTo(frozenBefore.scene.cameraTargetZ!, 8)
+  expect(await page.evaluate(() => window.__MINDVERSE_E2E__!.setApproachProgress(null))).toBe(true)
   await expect.poll(async () => (await snapshot(page)).stellar.approachProgress).toBe(1)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   states['focused-star'] = await captureState(page, 'focused-star')
   await page.getByRole('button', { name: /固定地层问题/ }).click()
   await expect.poll(async () => (await snapshot(page)).projectedBounds.selectedPlanet).not.toBeNull()

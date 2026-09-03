@@ -141,6 +141,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private diagnosticClickEvents = 0
   private diagnosticLastPick: NonNullable<RenderSnapshot['lifecycle']['lastPick']> = 'none'
   private readonly diagnosticCameraSamples: StellarDiagnosticsSnapshot['cameraSamples'] = []
+  private diagnosticApproachProgressOverride: number | null = null
   private readonly starPositionScratch = new Vector3()
   private readonly flightTargetScratch = new Vector3()
   private readonly planetStarPositionScratch = new Vector3()
@@ -269,6 +270,7 @@ export class BabylonRenderer implements MindverseRenderer {
               }
             },
             stellar: () => this.diagnosticStellar(),
+            setApproachProgress: (progress) => this.setDiagnosticApproachProgress(progress),
           },
         )
       }
@@ -687,7 +689,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private updateScene(): void {
     if (this.destroyed) return
     const deltaTime = Math.min(50, Math.max(0, this.engine.getDeltaTime()))
-    this.elapsedMs += this.reducedMotion ? 0 : deltaTime
+    this.elapsedMs += this.reducedMotion || this.diagnosticApproachProgressOverride != null ? 0 : deltaTime
     this.updateCameraFlight(deltaTime)
     this.updateStellarPresentation(deltaTime)
     const renderHeight = Math.max(1, this.engine.getRenderHeight())
@@ -1190,6 +1192,7 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private applyStarFocus(star: StarDatum): boolean {
     try {
+      this.diagnosticApproachProgressOverride = null
       this.diagnosticCameraSamples?.splice(0)
       this.clearPlanet()
       this.focusedStar = star
@@ -1275,10 +1278,11 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private motionTime(): number {
-    return this.reducedMotion ? 0 : this.elapsedMs
+    return this.reducedMotion || this.diagnosticApproachProgressOverride != null ? 0 : this.elapsedMs
   }
 
   private cancelFlight(reason: Parameters<CameraFlightController['cancel']>[0]): void {
+    this.diagnosticApproachProgressOverride = null
     this.cameraFlightController.cancel(reason)
     this.activeFlight = null
     this.presentation = describeStarPresentation({
@@ -1290,7 +1294,10 @@ export class BabylonRenderer implements MindverseRenderer {
   private updateCameraFlight(deltaTime: number): void {
     const active = this.activeFlight
     if (!active) return
-    const elapsedMs = active.elapsedMs + deltaTime
+    const override = this.diagnosticApproachProgressOverride
+    const elapsedMs = typeof override === 'number'
+      ? active.flight.durationMs * override
+      : active.elapsedMs + deltaTime
     const result = this.cameraFlightController.frame(active.flight, elapsedMs)
     if (!result.ok) {
       if (result.error === 'invalid-frame') this.recoverCamera(new Error('Invalid camera flight frame'))
@@ -1314,12 +1321,46 @@ export class BabylonRenderer implements MindverseRenderer {
       this.recordDiagnosticCameraSample()
       this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: frame.progress })
       this.activeFlight = frame.complete ? null : Object.freeze({ flight: active.flight, elapsedMs })
-      if (frame.complete) this.presentation = describeStarPresentation({ phase: 'star-focus' })
+      if (frame.complete) {
+        this.diagnosticApproachProgressOverride = null
+        this.presentation = describeStarPresentation({ phase: 'star-focus' })
+      }
       this.lastPresentationInput = null
       this.syncOrbitPresentation()
     } catch (cause) {
       this.recoverCamera(cause)
     }
+  }
+
+  private setDiagnosticApproachProgress(progress: number | null): boolean {
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS !== '1') return false
+    if (progress === null) {
+      const wasFrozen = this.diagnosticApproachProgressOverride !== null
+      this.diagnosticApproachProgressOverride = null
+      return wasFrozen
+    }
+    const active = this.activeFlight
+    if (!active || !this.focusedStar || !Number.isFinite(progress) || progress < 0 || progress > 1) return false
+    const deterministicTarget = starWorldPosition(this.focusedStar, 0, 0, new Vector3())
+    const deterministicFlight: CameraFlight = Object.freeze({
+      ...active.flight,
+      to: Object.freeze({
+        target: Object.freeze({
+          x: deterministicTarget.x,
+          y: deterministicTarget.y,
+          z: deterministicTarget.z,
+        }),
+        radius: active.flight.to.radius,
+      }),
+    })
+    this.elapsedMs = 0
+    this.diagnosticApproachProgressOverride = progress
+    this.activeFlight = Object.freeze({
+      flight: deterministicFlight,
+      elapsedMs: deterministicFlight.durationMs * progress,
+    })
+    this.updateCameraFlight(0)
+    return true
   }
 
   private recordDiagnosticCameraSample(): void {

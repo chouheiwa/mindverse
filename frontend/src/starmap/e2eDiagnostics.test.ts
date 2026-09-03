@@ -132,6 +132,31 @@ test('diagnostic snapshots contain no content or OAuth evidence fields', () => {
   removeE2EDiagnostics(owner)
 })
 
+test('forwards only bounded deterministic approach controls to the active renderer', () => {
+  const owner = {}
+  const controls: Array<number | null> = []
+  installE2EDiagnostics(owner, 'medium', () => ({ geometries: 0, textures: 0 }), () => ({
+    planetCount: 0, probeCount: 0, probeNearVisible: false, firstStarX: 0, firstStarY: 0,
+    cameraDistance: 30, targetDistance: 30,
+  }), {
+    rendererKind: 'babylon',
+    activeContextCount: () => 1,
+    scenePhase: () => 'universe',
+    projectedBounds: () => ({ selectedPlanet: null }),
+    lifecycle: () => ({ rafLoops: 1, listeners: 0 }),
+    setApproachProgress: (progress) => {
+      controls.push(progress)
+      return true
+    },
+  })
+  expect(window.__MINDVERSE_E2E__!.setApproachProgress(0.65)).toBe(true)
+  expect(window.__MINDVERSE_E2E__!.setApproachProgress(null)).toBe(true)
+  expect(window.__MINDVERSE_E2E__!.setApproachProgress(-0.1)).toBe(false)
+  expect(window.__MINDVERSE_E2E__!.setApproachProgress(1.1)).toBe(false)
+  expect(window.__MINDVERSE_E2E__!.setApproachProgress(Number.NaN)).toBe(false)
+  expect(controls).toEqual([0.65, null])
+})
+
 test('retains the closed 35-second interval at 240Hz and reports the first overflow', () => {
   const closedIntervalSamples = 35 * 240 + 1
   expect(E2E_FRAME_CAPACITY).toBe(closedIntervalSamples)

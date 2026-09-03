@@ -80,6 +80,7 @@ export interface StellarDiagnosticsSnapshot {
 
 interface E2EDiagnosticsApi {
   snapshot(): RenderSnapshot
+  setApproachProgress(progress: number | null): boolean
 }
 
 interface FrameSample {
@@ -112,6 +113,7 @@ export interface E2EDiagnosticsDetails {
   readonly projectedBounds: () => RenderSnapshot['projectedBounds']
   readonly lifecycle: () => RenderSnapshot['lifecycle']
   readonly stellar?: () => StellarDiagnosticsSnapshot
+  readonly setApproachProgress?: (progress: number | null) => boolean
 }
 
 declare global {
@@ -146,6 +148,10 @@ export function installE2EDiagnostics(
 ): void {
   let state: ActiveDiagnostics
   const api: E2EDiagnosticsApi = Object.freeze({
+    setApproachProgress: (progress: number | null): boolean => {
+      if (progress !== null && (!Number.isFinite(progress) || progress < 0 || progress > 1)) return false
+      return state.details.setApproachProgress?.(progress) ?? false
+    },
     snapshot: (): RenderSnapshot => {
       const frameTimes = new Array<number>(state.length)
       const frameTimestampsMs = new Array<number>(state.length)

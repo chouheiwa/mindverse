@@ -189,6 +189,49 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
 }
 
 describe('Babylon camera recovery behavior', () => {
+  test('E2E approach control freezes an exact deterministic camera frame until released', () => {
+    vi.stubEnv('VITE_E2E_DIAGNOSTICS', '1')
+    try {
+      const datum = makeDatum(makeStar())
+      const renderer = recoveryHarness(datum, vi.fn())
+      renderer.reducedMotion = false
+      renderer.focusedStar = datum
+      renderer.overviewRadius = 30
+      renderer.diagnosticApproachProgressOverride = null
+      const started = renderer.cameraFlightController.start({
+        starKey: 'alpha',
+        start: { target: Vector3.Zero(), radius: 30 },
+        targetStar: new Vector3(...datum.p),
+        bodyR: datum.bodyR,
+        systemExtent: 6,
+        overviewRadius: 30,
+        distance: 4,
+        requestedMs: 1_100,
+        reducedMotion: false,
+      })
+      if (started.kind !== 'started') throw new Error('expected camera flight')
+      renderer.activeFlight = { flight: started.flight, elapsedMs: 100 }
+      renderer.elapsedMs = 999
+
+      expect(renderer.setDiagnosticApproachProgress(0.65)).toBe(true)
+      expect(renderer.elapsedMs).toBe(0)
+      expect(renderer.activeFlight.elapsedMs).toBeCloseTo(started.flight.durationMs * 0.65, 8)
+      expect(renderer.presentation.systemReveal).toBeGreaterThan(0)
+      const frozen = { radius: renderer.camera.radius, target: renderer.camera.target.clone() }
+      renderer.updateCameraFlight(250)
+      expect(renderer.activeFlight.elapsedMs).toBeCloseTo(started.flight.durationMs * 0.65, 8)
+      expect(renderer.camera.radius).toBeCloseTo(frozen.radius, 8)
+      expect(renderer.camera.target.equalsWithEpsilon(frozen.target, 1e-8)).toBe(true)
+      expect(renderer.motionTime()).toBe(0)
+
+      expect(renderer.setDiagnosticApproachProgress(null)).toBe(true)
+      renderer.updateCameraFlight(100)
+      expect(renderer.activeFlight.elapsedMs).toBeGreaterThan(started.flight.durationMs * 0.65)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   test('public focus reports success only when the requested focus remains established', () => {
     const datum = makeDatum(makeStar(), { bodyR: Number.NaN })
     const onPick = vi.fn()

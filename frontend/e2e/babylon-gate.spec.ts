@@ -193,32 +193,42 @@ test('dragging more than six pixels rotates without selecting a star', async ({ 
   expect((await snapshot(page))!.stellar.focusedStarKey).toBeNull()
 })
 
-test('blank click, outward wheel and Escape share the star-to-panorama return', async ({ page }) => {
-  await openBabylonUniverse(page)
-  await expectReady(page)
-  const star = await firstProjectedStar(page)
-  const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
-  const focus = async () => {
+type HierarchyExitInput = 'blank-click' | 'outward-wheel' | 'escape'
+
+async function applyHierarchyExit(page: Page, input: HierarchyExitInput, exited: () => Promise<boolean>) {
+  if (input === 'blank-click') {
+    await canvas(page).click({ position: { x: 3, y: 3 }, force: true })
+  } else if (input === 'escape') {
+    await page.keyboard.press('Escape')
+  } else {
+    await canvas(page).hover({ position: { x: 3, y: 3 } })
+    for (let attempt = 0; attempt < 16 && !await exited(); attempt += 1) await page.mouse.wheel(0, 2_000)
+  }
+  await expect.poll(exited).toBe(true)
+}
+
+for (const input of ['blank-click', 'outward-wheel', 'escape'] as const) {
+  test(`${input} exits planet focus to its star, then exits the star to panorama`, async ({ page }) => {
+    await openBabylonUniverse(page)
+    await expectReady(page)
+    const star = await firstProjectedStar(page)
+    const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
     await canvas(page).click({ position: center, force: true })
     await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBe(star.starKey)
-  }
-  const panorama = async () => {
-    await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBeNull()
-  }
+    await page.getByRole('button', { name: /固定地层问题/ }).click()
+    await expect.poll(async () => (await snapshot(page))!.projectedBounds.selectedPlanet).not.toBeNull()
 
-  await focus()
-  await canvas(page).click({ position: { x: 3, y: 3 }, force: true })
-  await panorama()
-  await focus()
-  await page.keyboard.press('Escape')
-  await panorama()
-  await focus()
-  for (let attempt = 0; attempt < 12 && (await snapshot(page))!.stellar.focusedStarKey; attempt += 1) {
-    await canvas(page).hover({ position: { x: 3, y: 3 } })
-    await page.mouse.wheel(0, 2_000)
-  }
-  await panorama()
-})
+    await applyHierarchyExit(page, input, async () => (await snapshot(page))!.projectedBounds.selectedPlanet === null)
+    const starFocus = (await snapshot(page))!
+    expect(starFocus.stellar.focusedStarKey).toBe(star.starKey)
+    expect(starFocus.stellar.approachProgress).toBe(1)
+
+    await applyHierarchyExit(page, input, async () => (await snapshot(page))!.stellar.focusedStarKey === null)
+    const panorama = (await snapshot(page))!
+    expect(panorama.projectedBounds.selectedPlanet).toBeNull()
+    expect(panorama.stellar.focusedStarKey).toBeNull()
+  })
+}
 
 for (const cancellation of ['pointercancel', 'lostpointercapture', 'second-touch'] as const) {
   test(`${cancellation} clears click eligibility without selecting`, async ({ page }) => {

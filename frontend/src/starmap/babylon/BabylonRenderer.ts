@@ -24,7 +24,7 @@ import { starColor } from '../gl/blackbody'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
 import { starIdentity } from '../starIdentity'
-import { renderDim, starInteractionEligible } from '../starVisibility'
+import { renderDim, resolveInteractiveStar, starInteractionEligible } from '../starVisibility'
 import { detectQuality } from '../quality'
 import { clusterAxis, orbitRing } from '../projection'
 import type { PlanetDatum } from '../gl/bodies'
@@ -56,11 +56,12 @@ import {
   questionPlanetPresentation,
   selectDominantClusterIds,
   selectMacroOrbitRadius,
+  StellarPointerPresentationController,
   type OrbitPresentationState,
 } from './orbitPresentation'
 import { StarLayer } from './starLayer'
 import { describeStarPresentation, HOVER_INTERPOLATION_MS, type StarPresentation } from './starPresentation'
-import { PointerGestureController, ProjectedStarCandidateBuffer, pickProjectedStar, type PointerInputKind } from './starPicker'
+import { ProjectedStarCandidateBuffer, pickProjectedStar, type PointerInputKind } from './starPicker'
 import { CameraFlightController, computeSystemExtent, exitTarget, shouldExitOnWheel, type CameraFlight } from './cameraFlight'
 
 const ORBIT_BASE = 2.1
@@ -93,10 +94,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly universeRoot: TransformNode
   private readonly universe: Universe
   private readonly stars: readonly StarDatum[]
-  private readonly starByKey: ReadonlyMap<string, StarDatum>
   private readonly starLayer: StarLayer
   private readonly candidateBuffer: ProjectedStarCandidateBuffer
-  private readonly pointerGesture = new PointerGestureController()
+  private readonly pointerPresentation = new StellarPointerPresentationController()
   private readonly cameraFlightController = new CameraFlightController()
   private caveRoot: TransformNode | null = null
   private readonly planets: readonly PlanetDatum[]
@@ -118,7 +118,6 @@ export class BabylonRenderer implements MindverseRenderer {
   private pressedProgress = 0
   private activeFlight: Readonly<{ flight: CameraFlight; elapsedMs: number }> | null = null
   private presentation: StarPresentation = describeStarPresentation({ phase: 'panorama' })
-  private cameraFailureReported = false
   private elapsedMs = 0
   private lastStrataMoveAt: number | null = null
   private overviewTarget = Vector3.Zero()
@@ -143,7 +142,6 @@ export class BabylonRenderer implements MindverseRenderer {
     this.callbacks = callbacks
     this.universe = index.universe
     this.stars = starData(index.universe)
-    this.starByKey = new Map(this.stars.map((datum) => [starIdentity(datum.s), datum]))
     this.candidateBuffer = new ProjectedStarCandidateBuffer(this.stars)
     this.reducedMotion = reducedMotion
     this.planets = buildPlanetBookkeeping(index)
@@ -297,8 +295,8 @@ export class BabylonRenderer implements MindverseRenderer {
 
   focusStar(starKey: string): Star | null {
     if (this.destroyed || !this.universeVisible || this.strataTransition.phase !== null) return null
-    const star = this.starByKey.get(starKey) ?? null
-    if (!star || !this.isInteractive(star)) return null
+    const star = resolveInteractiveStar(this.stars, starKey, this.mode, this.universe, this.wormIdx)
+    if (!star) return null
     this.applyStarFocus(star)
     this.callbacks.onPick?.(star.s)
     return star.s
@@ -473,11 +471,21 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private configureOverview(stars: readonly StarDatum[]): void {
     if (stars.length === 0) return
-    const center = stars.reduce((sum, star) => sum.addInPlace(Vector3.FromArray(star.p)), Vector3.Zero())
-      .scaleInPlace(1 / stars.length)
-    const extent = Math.max(8, ...stars.map((star) => Vector3.Distance(center, Vector3.FromArray(star.p))))
+    const positions = stars
+      .map((star) => Vector3.FromArray(star.p))
+      .filter(finiteVector3)
+    if (positions.length === 0) {
+      this.overviewTarget = Vector3.Zero()
+      this.overviewRadius = 30
+      this.camera.setTarget(this.overviewTarget)
+      this.camera.radius = this.overviewRadius
+      return
+    }
+    const center = positions.reduce((sum, position) => sum.addInPlace(position), Vector3.Zero())
+      .scaleInPlace(1 / positions.length)
+    const extent = Math.max(8, ...positions.map((position) => Vector3.Distance(center, position)))
     this.overviewTarget = center
-    this.overviewRadius = extent * 2.4
+    this.overviewRadius = finitePositive(extent * 2.4) ? extent * 2.4 : 30
     this.camera.setTarget(center)
     this.camera.radius = this.overviewRadius
   }
@@ -1078,25 +1086,43 @@ export class BabylonRenderer implements MindverseRenderer {
       .filter((planet) => planet.star === star)
       .map(({ orbitR, radius }) => ({ orbitR, radius }))
     const extent = computeSystemExtent(star.bodyR, extents)
-    const result = extent.ok ? this.cameraFlightController.start({
+    const distance = Vector3.Distance(this.camera.target, target)
+    if (!extent.ok) {
+      this.recoverCamera(new Error('Invalid camera flight input'))
+      return
+    }
+    const invalidInput = !finiteVector3(target)
+      || !finiteVector3(this.camera.target)
+      || !finitePositive(this.camera.radius)
+      || !finitePositive(star.bodyR)
+      || !finitePositive(this.overviewRadius)
+      || !Number.isFinite(distance)
+    if (invalidInput) {
+      this.recoverCamera(new Error('Invalid camera flight input'))
+      return
+    }
+    const result = this.cameraFlightController.start({
       starKey,
       start: { target: this.camera.target, radius: this.camera.radius },
       targetStar: target,
       bodyR: star.bodyR,
       systemExtent: extent.value,
       overviewRadius: this.overviewRadius,
-      distance: Vector3.Distance(this.camera.target, target),
+      distance,
       requestedMs: 1100,
       reducedMotion: this.reducedMotion,
-    }) : { kind: 'error' as const, error: extent.error }
+    })
     if (result.kind === 'started') {
       this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
       this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
-    } else {
+    } else if (result.kind === 'noop') {
       this.activeFlight = null
       this.camera.setTarget(target)
       this.camera.radius = Math.max(8, star.bodyR * 14)
       this.presentation = describeStarPresentation({ phase: 'star-focus' })
+    } else {
+      this.recoverCamera(new Error('Invalid camera flight input'))
+      return
     }
     this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
     this.syncOrbitPresentation()
@@ -1116,8 +1142,7 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private isKeyInteractive(starKey: string): boolean {
-    const datum = this.starByKey.get(starKey)
-    return Boolean(datum && this.isInteractive(datum))
+    return resolveInteractiveStar(this.stars, starKey, this.mode, this.universe, this.wormIdx) !== null
   }
 
   private currentStarPosition(star: StarDatum): Vector3 {
@@ -1157,26 +1182,37 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private recoverCamera(cause: unknown): void {
-    this.cameraFlightController.cancel('reset')
+    const original = cause instanceof Error ? cause : new Error(String(cause))
+    attemptRecovery(() => this.cameraFlightController.cancel('reset'))
     this.activeFlight = null
-    const validFocus = this.focusedStar && this.isInteractive(this.focusedStar) ? this.focusedStar : null
-    if (validFocus) {
-      try { this.camera.setTarget(this.currentStarPosition(validFocus)) } catch { /* best-effort legal pose */ }
-      try { this.camera.radius = Math.max(8, validFocus.bodyR * 14) } catch { /* best-effort legal pose */ }
+    let focusedPosition: Vector3 | null = null
+    if (this.focusedStar) {
+      attemptRecovery(() => { focusedPosition = this.currentStarPosition(this.focusedStar as StarDatum) })
+    }
+    const validFocus = this.focusedStar
+      && this.isInteractive(this.focusedStar)
+      && finitePositive(this.focusedStar.bodyR)
+      && focusedPosition
+      && finiteVector3(focusedPosition)
+      ? this.focusedStar : null
+    attemptRecovery(() => this.pointerPresentation.clear())
+    attemptRecovery(() => this.applyPointerPresentationFeedback(false))
+    if (validFocus && focusedPosition) {
+      attemptRecovery(() => this.camera.setTarget(focusedPosition as Vector3))
+      attemptRecovery(() => { this.camera.radius = Math.max(8, validFocus.bodyR * 14) })
       this.presentation = describeStarPresentation({ phase: 'star-focus' })
     } else {
       this.focusedStar = null
-      try { this.starLayer.setFocus(null, null) } catch { /* best-effort visual recovery */ }
-      try { this.camera.setTarget(this.overviewTarget) } catch { /* best-effort legal pose */ }
-      try { this.camera.radius = this.overviewRadius } catch { /* best-effort legal pose */ }
+      attemptRecovery(() => this.starLayer.setFocus(null, null))
+      this.overviewTarget = finiteVector3(this.overviewTarget) ? this.overviewTarget : Vector3.Zero()
+      this.overviewRadius = finitePositive(this.overviewRadius) ? this.overviewRadius : 30
+      attemptRecovery(() => this.camera.setTarget(this.overviewTarget))
+      attemptRecovery(() => { this.camera.radius = this.overviewRadius })
       this.presentation = describeStarPresentation({ phase: 'panorama' })
     }
-    try { this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey) } catch { /* best-effort visual recovery */ }
-    try { this.syncOrbitPresentation() } catch { /* preserve the original camera cause */ }
-    if (!this.cameraFailureReported) {
-      this.cameraFailureReported = true
-      this.callbacks.onRenderError?.(cause instanceof Error ? cause : new Error(String(cause)))
-    }
+    attemptRecovery(() => this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey))
+    attemptRecovery(() => this.syncOrbitPresentation())
+    this.callbacks.onRenderError?.(original)
   }
 
   private updateStellarPresentation(deltaTime: number): void {
@@ -1225,42 +1261,44 @@ export class BabylonRenderer implements MindverseRenderer {
     this.canvas.focus({ preventScroll: true })
     this.cancelFlight('user')
     const target = this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
-    this.pointerGesture.pointerDown({
+    this.pointerPresentation.pointerDown({
       pointerId: event.pointerId,
       inputKind: pointerKind(event.pointerType),
       x: event.clientX,
       y: event.clientY,
       starKey: target,
     })
-    this.pressedKey = target?.startsWith('star:') ? target.slice(5) : null
+    this.applyPointerPresentationFeedback()
     try { this.canvas.setPointerCapture(event.pointerId) } catch { /* detached canvas */ }
   }
 
   private readonly onPointerMove = (event: PointerEvent): void => {
     if (this.destroyed || this.workspaceOpen) return
-    const active = this.pointerGesture.snapshot().activePointerId
-    this.pointerGesture.pointerMove({ pointerId: event.pointerId, x: event.clientX, y: event.clientY })
-    if (active !== null) {
-      this.pressedKey = this.pointerGesture.snapshot().pressedStarKey?.replace(/^star:/, '') ?? null
-      return
-    }
-    const target = this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
-    this.hoverKey = target?.startsWith('star:') ? target.slice(5) : null
-    this.canvas.style.cursor = target ? 'pointer' : ''
+    const gesture = this.pointerPresentation.gestureSnapshot()
+    const target = gesture.activePointerId === null && !gesture.multiPointerInvalidated
+      ? this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
+      : null
+    this.pointerPresentation.pointerMove({
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      starKey: target,
+    })
+    this.applyPointerPresentationFeedback()
   }
 
   private readonly onPointerUp = (event: PointerEvent): void => {
     if (this.destroyed) return
-    const before = this.pointerGesture.snapshot()
+    const before = this.pointerPresentation.gestureSnapshot()
     const target = this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
-    const chosen = this.pointerGesture.pointerUp({
+    const chosen = this.pointerPresentation.pointerUp({
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
       starKey: target,
     })
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId)
-    this.pressedKey = null
+    this.applyPointerPresentationFeedback()
     if (chosen) {
       if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
         this.diagnosticClickEvents += 1
@@ -1279,13 +1317,13 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private readonly onPointerCancel = (event: PointerEvent): void => {
-    this.pointerGesture.pointerCancel(event.pointerId)
-    this.clearPressedFeedback()
+    this.pointerPresentation.pointerCancel(event.pointerId)
+    this.applyPointerPresentationFeedback()
   }
 
   private readonly onLostPointerCapture = (event: PointerEvent): void => {
-    this.pointerGesture.lostPointerCapture(event.pointerId)
-    this.clearPressedFeedback()
+    this.pointerPresentation.lostPointerCapture(event.pointerId)
+    this.applyPointerPresentationFeedback()
   }
 
   private readonly onWheel = (event: WheelEvent): void => {
@@ -1367,16 +1405,19 @@ export class BabylonRenderer implements MindverseRenderer {
     }
   }
 
-  private clearPressedFeedback(): void {
-    this.pressedKey = null
-  }
-
   private clearPointerFeedback(): void {
-    this.hoverKey = null
-    this.pressedKey = null
+    this.pointerPresentation.clear()
+    this.applyPointerPresentationFeedback()
     this.hoverProgress = 0
     this.pressedProgress = 0
-    this.canvas.style.cursor = ''
+  }
+
+  private applyPointerPresentationFeedback(syncLayer = true): void {
+    const feedback = this.pointerPresentation.snapshot()
+    this.hoverKey = feedback.hoverStarKey
+    this.pressedKey = feedback.pressedStarKey
+    this.canvas.style.cursor = feedback.cursor
+    if (syncLayer) this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
   }
 
   private resizeLabels(): void {
@@ -1405,6 +1446,18 @@ function unsupported(message: string): Error {
 
 function pointerKind(value: string): PointerInputKind {
   return value === 'touch' || value === 'pen' ? value : 'mouse'
+}
+
+function finiteVector3(value: { readonly x: number; readonly y: number; readonly z: number }): boolean {
+  return [value.x, value.y, value.z].every(Number.isFinite)
+}
+
+function finitePositive(value: number): boolean {
+  return Number.isFinite(value) && value > 0
+}
+
+function attemptRecovery(operation: () => void): void {
+  try { operation() } catch { /* preserve and report the original camera failure */ }
 }
 
 function releaseCanvasWebGLContext(canvas: HTMLCanvasElement): void {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { Star, Universe } from '../types'
-import { modeDim, renderDim, starInteractionEligible } from './starVisibility'
+import { modeDim, renderDim, resolveInteractiveStar, starInteractionEligible } from './starVisibility'
 
 const star = (overrides: Partial<Star> = {}): Star => ({
   c: 'alpha', g: 1, p: [0, 0, 0], n: 3, o: 0, f: 0,
@@ -32,5 +32,27 @@ describe('pure star mode visibility', () => {
   test('excludes mode-hidden stars from screen-space picker eligibility', () => {
     expect(starInteractionEligible(star(), 'me', universe(), 0)).toBe(false)
     expect(starInteractionEligible(star({ o: 1 }), 'me', universe(), 0)).toBe(true)
+  })
+
+  test('resolves modern stars by their scope-aware identity without concept fallback', () => {
+    const privateStar = star({
+      id: 'private:alpha', scope: 'private', externalQueryAllowed: false, questionIds: [], probeIds: [],
+    })
+    const publicStar = star({
+      id: 'public:alpha', scope: 'public', externalQueryAllowed: true, questionIds: [], probeIds: [],
+    })
+    const stars = [{ s: privateStar }, { s: publicStar }]
+
+    expect(resolveInteractiveStar(stars, 'public:alpha', 'all', universe(), 0)?.s).toBe(publicStar)
+    expect(resolveInteractiveStar(stars, 'alpha', 'all', universe(), 0)).toBeNull()
+  })
+
+  test('uses concept identity only for legacy stars and rejects unknown or mode-hidden keys', () => {
+    const legacy = star()
+    const stars = [{ s: legacy }]
+
+    expect(resolveInteractiveStar(stars, 'alpha', 'all', universe(), 0)?.s).toBe(legacy)
+    expect(resolveInteractiveStar(stars, 'missing', 'all', universe(), 0)).toBeNull()
+    expect(resolveInteractiveStar(stars, 'alpha', 'me', universe(), 0)).toBeNull()
   })
 })

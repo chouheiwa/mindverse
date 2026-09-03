@@ -3,7 +3,7 @@ import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, Ton
 import type { Mode, Star, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
-import { makeStars, modeDim, renderDim, type StarLayer } from './gl/stars'
+import { makeStars, renderDim, type StarLayer } from './gl/stars'
 import { makeBodies, type BodyLayer, type PlanetDatum } from './gl/bodies'
 import { starData, starWorldPosition, type StarDatum } from './gl/starData'
 import { makeDust, type DustLayer } from './gl/dust'
@@ -31,6 +31,7 @@ import {
   type InspectionPose,
 } from './probeInspection'
 import { starIdentity } from './starIdentity'
+import { modeDim, resolveInteractiveStar } from './starVisibility'
 import type {
   MindverseRenderer,
   RendererCallbacks,
@@ -437,8 +438,8 @@ export class Renderer implements MindverseRenderer {
 
   focusStar(starKey: string): Star | null {
     if (this.destroyed || this.unsupportedStrataRequest) return null
-    const datum = this.allStarData.find(({ s }) => starIdentity(s) === starKey) ?? null
-    if (!datum || modeDim(datum.s, this.mode, this.u, this.wormIdx) < 0.4) return null
+    const datum = resolveInteractiveStar(this.allStarData, starKey, this.mode, this.u, this.wormIdx)
+    if (!datum) return null
     this.clearPlanet()
     this.focusedStar = datum
     this.applyFocus()

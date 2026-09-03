@@ -1,3 +1,11 @@
+import {
+  PointerGestureController,
+  type PointerDownTransition,
+  type PointerGestureSnapshot,
+  type PointerMoveTransition,
+  type PointerUpTransition,
+} from './starPicker'
+
 export type OrbitPhase = 'panorama' | 'approach' | 'star-focus' | 'planet-focus' | 'strata'
 
 export interface OrbitPresentationState {
@@ -73,4 +81,79 @@ export function questionPlanetVisible(state: OwnedOrbit): boolean {
 
 function reveal(value: number | undefined): number {
   return Number.isFinite(value) ? Math.min(1, Math.max(0, value as number)) : 0
+}
+
+export interface StellarPointerPresentationSnapshot {
+  readonly hoverStarKey: string | null
+  readonly pressedStarKey: string | null
+  readonly cursor: '' | 'pointer'
+}
+
+type PointerMovePresentation = PointerMoveTransition & { readonly starKey: string | null }
+
+const EMPTY_POINTER_PRESENTATION: StellarPointerPresentationSnapshot = Object.freeze({
+  hoverStarKey: null,
+  pressedStarKey: null,
+  cursor: '',
+})
+
+/** Keeps visual feedback derived from the gesture's validated state. */
+export class StellarPointerPresentationController {
+  private gesture = new PointerGestureController()
+  private feedback: StellarPointerPresentationSnapshot = EMPTY_POINTER_PRESENTATION
+
+  snapshot(): StellarPointerPresentationSnapshot { return this.feedback }
+  gestureSnapshot(): PointerGestureSnapshot { return this.gesture.snapshot() }
+
+  pointerDown(event: PointerDownTransition): void {
+    this.gesture.pointerDown(event)
+    this.feedback = Object.freeze({
+      hoverStarKey: null,
+      pressedStarKey: visualStarKey(this.gesture.snapshot().pressedStarKey),
+      cursor: '',
+    })
+  }
+
+  pointerMove(event: PointerMovePresentation): void {
+    this.gesture.pointerMove(event)
+    const gesture = this.gesture.snapshot()
+    if (gesture.activePointerId !== null || gesture.multiPointerInvalidated) {
+      this.feedback = Object.freeze({
+        hoverStarKey: null,
+        pressedStarKey: visualStarKey(gesture.pressedStarKey),
+        cursor: '',
+      })
+      return
+    }
+    this.feedback = Object.freeze({
+      hoverStarKey: visualStarKey(event.starKey),
+      pressedStarKey: null,
+      cursor: event.starKey ? 'pointer' : '',
+    })
+  }
+
+  pointerUp(event: PointerUpTransition): string | null {
+    const chosen = this.gesture.pointerUp(event)
+    this.feedback = EMPTY_POINTER_PRESENTATION
+    return chosen
+  }
+
+  pointerCancel(pointerId: number): void {
+    this.gesture.pointerCancel(pointerId)
+    this.feedback = EMPTY_POINTER_PRESENTATION
+  }
+
+  lostPointerCapture(pointerId: number): void {
+    this.gesture.lostPointerCapture(pointerId)
+    this.feedback = EMPTY_POINTER_PRESENTATION
+  }
+
+  clear(): void {
+    this.gesture = new PointerGestureController()
+    this.feedback = EMPTY_POINTER_PRESENTATION
+  }
+}
+
+function visualStarKey(target: string | null): string | null {
+  return target?.startsWith('star:') ? target.slice(5) : null
 }

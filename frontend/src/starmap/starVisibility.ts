@@ -1,4 +1,5 @@
 import type { Mode, Star, Universe } from '../types'
+import { starIdentity } from './starIdentity'
 
 /** Mode emphasis stays pure so both renderer chunks share rules without sharing engines. */
 export function modeDim(s: Star, mode: Mode, u: Universe, wormIdx: number): number {
@@ -22,4 +23,16 @@ export function renderDim(s: Star, mode: Mode, u: Universe, wormIdx: number): nu
 
 export function starInteractionEligible(s: Star, mode: Mode, u: Universe, wormIdx: number): boolean {
   return modeDim(s, mode, u, wormIdx) >= 0.4
+}
+
+/** Resolve the canonical domain object and apply the shared interaction guard. */
+export function resolveInteractiveStar<T extends { readonly s: Star }>(
+  stars: readonly T[],
+  starKey: string,
+  mode: Mode,
+  universe: Universe,
+  wormIdx: number,
+): T | null {
+  const datum = stars.find(({ s }) => starIdentity(s) === starKey) ?? null
+  return datum && starInteractionEligible(datum.s, mode, universe, wormIdx) ? datum : null
 }

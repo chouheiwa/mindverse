@@ -7,6 +7,7 @@ import {
   questionPlanetVisible,
   selectDominantClusterIds,
   selectMacroOrbitRadius,
+  StellarPointerPresentationController,
 } from './orbitPresentation'
 
 describe('Babylon orbit presentation states', () => {
@@ -80,4 +81,32 @@ describe('Babylon orbit presentation states', () => {
     expect(questionOrbitAlpha({ ...state, ownerKey: 'star:a', questionId: 'question:1' })).toBe(0)
     expect(questionPlanetVisible({ ...state, ownerKey: 'star:a' })).toBe(false)
   })
+
+  test('a second pointer invalidates pressed feedback until every pointer ends', () => {
+    const pointer = new StellarPointerPresentationController()
+    pointer.pointerDown({ pointerId: 1, inputKind: 'touch', x: 10, y: 10, starKey: 'star:a' })
+    expect(pointer.snapshot().pressedStarKey).toBe('a')
+
+    pointer.pointerDown({ pointerId: 2, inputKind: 'touch', x: 12, y: 12, starKey: 'star:b' })
+    expect(pointer.snapshot()).toMatchObject({ pressedStarKey: null, hoverStarKey: null, cursor: '' })
+    pointer.pointerMove({ pointerId: 1, x: 11, y: 11, starKey: 'star:a' })
+    pointer.pointerUp({ pointerId: 1, x: 11, y: 11, starKey: 'star:a' })
+    expect(pointer.snapshot().pressedStarKey).toBeNull()
+    pointer.pointerUp({ pointerId: 2, x: 12, y: 12, starKey: 'star:b' })
+    expect(pointer.snapshot().pressedStarKey).toBeNull()
+  })
+
+  test.each(['pointerCancel', 'lostPointerCapture'] as const)(
+    '%s forwards cancellation and clears hover, cursor, and pressed presentation feedback',
+    (method) => {
+      const pointer = new StellarPointerPresentationController()
+      pointer.pointerMove({ pointerId: 9, x: 4, y: 5, starKey: 'star:hover' })
+      pointer.pointerDown({ pointerId: 1, inputKind: 'mouse', x: 10, y: 10, starKey: 'star:pressed' })
+
+      pointer[method](1)
+
+      expect(pointer.snapshot()).toMatchObject({ pressedStarKey: null, hoverStarKey: null, cursor: '' })
+      expect(pointer.gestureSnapshot()).toMatchObject({ activePointerId: null, pressedStarKey: null })
+    },
+  )
 })

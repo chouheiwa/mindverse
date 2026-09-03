@@ -45,17 +45,23 @@ async function settleFrame(page: Page) {
   })))
 }
 
-async function readPixelMetrics(page: Page) {
-  return canvas(page).evaluate(async (node: HTMLCanvasElement) => await new Promise<{
+async function readPngPixelMetrics(page: Page, png: Buffer) {
+  return page.evaluate(async (base64): Promise<{
     nonBackgroundRatio: number
     luminanceVariance: number
     clippedWhiteRatio: number
-  }>((complete, reject) => requestAnimationFrame(() => {
-    const gl = node.getContext('webgl2') ?? node.getContext('webgl')
-    if (!gl) return reject(new Error('WebGL context unavailable'))
-    const pixels = new Uint8Array(node.width * node.height * 4)
-    gl.finish()
-    gl.readPixels(0, 0, node.width, node.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+  }> => {
+    const binary = atob(base64)
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+    const decoded = document.createElement('canvas')
+    decoded.width = bitmap.width
+    decoded.height = bitmap.height
+    const context = decoded.getContext('2d', { willReadFrequently: true })
+    if (!context) throw new Error('PNG metric decoder unavailable')
+    context.drawImage(bitmap, 0, 0)
+    bitmap.close()
+    const pixels = context.getImageData(0, 0, decoded.width, decoded.height).data
     let nonBackground = 0
     let clippedWhite = 0
     let luminanceSum = 0
@@ -72,12 +78,12 @@ async function readPixelMetrics(page: Page) {
       luminanceSquaredSum += luminance * luminance
     }
     const mean = luminanceSum / pixelCount
-    complete({
+    return {
       nonBackgroundRatio: nonBackground / pixelCount,
       luminanceVariance: Math.max(0, luminanceSquaredSum / pixelCount - mean * mean),
       clippedWhiteRatio: clippedWhite / pixelCount,
-    })
-  })))
+    }
+  }, png.toString('base64'))
 }
 
 async function captureState(page: Page, name: StateName) {
@@ -86,11 +92,12 @@ async function captureState(page: Page, name: StateName) {
   const projected = state.stellar.projectedStars.find(({ starKey }) => starKey === state.stellar.focusedStarKey)
     ?? state.stellar.projectedStars[0]
   if (!projected) throw new Error(`${name}: no projected stellar bounds`)
+  const png = await canvas(page).screenshot()
   return {
     metrics: {
       corePixelDiameter: Math.max(projected.core.width, projected.core.height),
       haloPixelDiameter: Math.max(projected.halo.width, projected.halo.height),
-      ...await readPixelMetrics(page),
+      ...await readPngPixelMetrics(page, png),
       camera: {
         distance: state.scene.cameraDistance,
         alpha: state.scene.cameraAlpha,
@@ -106,7 +113,7 @@ async function captureState(page: Page, name: StateName) {
         shaderFallback: state.stellar.shaderFallback,
       },
     },
-    png: await canvas(page).screenshot(),
+    png,
   }
 }
 
@@ -126,7 +133,7 @@ async function hardwareMetadata(page: Page) {
   })
 }
 
-async function measureDensePerformance(page: Page, quality: 'medium' | 'low') {
+async function measureDensePerformance(page: Page, quality: 'medium' | 'low', enforceAbsoluteBudgets: boolean) {
   await page.unroute('**/api/universe')
   const fixture = await installStrataFixture(page, { denseStars: true })
   await page.emulateMedia({ reducedMotion: 'no-preference' })
@@ -143,7 +150,7 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low') {
   const p95FrameTime = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? Number.POSITIVE_INFINITY
   const absoluteBudgetMs = quality === 'medium' ? 20 : 33.3
   expect(samples.length).toBeGreaterThan(0)
-  expect(p95FrameTime).toBeLessThanOrEqual(absoluteBudgetMs)
+  if (enforceAbsoluteBudgets) expect(p95FrameTime).toBeLessThanOrEqual(absoluteBudgetMs)
   return {
     fixtureVersion: fixture.fixtureVersion,
     starCount: final.stellar.starCount,
@@ -157,6 +164,17 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low') {
 }
 
 test('captures four deterministic stellar states and gates dense performance @metal-performance', async ({ page }, testInfo) => {
+  const referenceDevice = {
+    enforceAbsoluteBudgets: process.env.MINDVERSE_REFERENCE_DEVICE === '1'
+      && process.platform === 'darwin'
+      && testInfo.project.name === 'metal-performance',
+    platform: process.platform,
+    graphicsBackend: process.platform === 'darwin' && testInfo.project.name === 'metal-performance'
+      ? 'metal' : 'swiftshader',
+  }
+  if (process.env.MINDVERSE_REFERENCE_DEVICE === '1' && !referenceDevice.enforceAbsoluteBudgets) {
+    throw new Error('MINDVERSE_REFERENCE_DEVICE=1 requires the macOS metal-performance project')
+  }
   await installStrataFixture(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/universe.html?e2eQuality=medium')
@@ -190,8 +208,8 @@ test('captures four deterministic stellar states and gates dense performance @me
   states['planet-focus'] = await captureState(page, 'planet-focus')
 
   const performance = {
-    medium: await measureDensePerformance(page, 'medium'),
-    low: await measureDensePerformance(page, 'low'),
+    medium: await measureDensePerformance(page, 'medium', referenceDevice.enforceAbsoluteBudgets),
+    low: await measureDensePerformance(page, 'low', referenceDevice.enforceAbsoluteBudgets),
   }
   expect(performance.medium.starCount).toBe(500)
   expect(performance.low.starCount).toBe(500)
@@ -201,6 +219,7 @@ test('captures four deterministic stellar states and gates dense performance @me
     fixtureVersion: strataUniverseFixture.fixtureVersion,
     rendererKind: 'babylon',
     viewport: VIEWPORT,
+    referenceDevice,
     states: Object.fromEntries(STATE_NAMES.map((name) => [name, states[name].metrics])),
     performance,
     commitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),

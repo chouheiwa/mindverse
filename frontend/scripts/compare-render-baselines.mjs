@@ -9,44 +9,160 @@ export const STELLAR_STATE_NAMES = Object.freeze([
 
 const PERFORMANCE_QUALITIES = Object.freeze(['medium', 'low'])
 const ABSOLUTE_BUDGETS = Object.freeze({ medium: 20, low: 33.3 })
+const STELLAR_FIXTURE_VERSION = 'strata-universe.v1'
+const STELLAR_VIEWPORT = Object.freeze({ width: 1440, height: 900, deviceScaleFactor: 1 })
 
 function finite(value, label) {
   if (!Number.isFinite(value)) throw new Error(`render baseline: invalid ${label}`)
   return value
 }
 
+function positive(value, label) {
+  const result = finite(value, label)
+  if (result <= 0) throw new Error(`render baseline: invalid ${label}`)
+  return result
+}
+
+function ratio(value, label) {
+  const result = finite(value, label)
+  if (result < 0 || result > 1) throw new Error(`render baseline: invalid ${label}`)
+  return result
+}
+
+function validateViewport(viewport) {
+  if (!viewport
+    || !Number.isInteger(viewport.width) || viewport.width <= 0
+    || !Number.isInteger(viewport.height) || viewport.height <= 0
+    || !Number.isFinite(viewport.deviceScaleFactor) || viewport.deviceScaleFactor <= 0) {
+    throw new Error('render baseline: invalid viewport')
+  }
+  if (viewport.width !== STELLAR_VIEWPORT.width
+    || viewport.height !== STELLAR_VIEWPORT.height
+    || viewport.deviceScaleFactor !== STELLAR_VIEWPORT.deviceScaleFactor) {
+    throw new Error('render baseline: stellar viewport must be 1440x900 at DPR 1')
+  }
+}
+
+function validateCamera(name, camera) {
+  if (!camera
+    || positive(camera.distance, `${name} camera distance`) <= 0
+    || !Number.isFinite(camera.alpha)
+    || !Number.isFinite(camera.beta) || camera.beta <= 0 || camera.beta >= Math.PI
+    || !Array.isArray(camera.target)
+    || camera.target.length !== 3
+    || !camera.target.every(Number.isFinite)) {
+    throw new Error(`render baseline: invalid ${name} camera`)
+  }
+}
+
+function validatePresentation(name, presentation) {
+  const validFocus = presentation?.focusedStarKey === null
+    || (typeof presentation?.focusedStarKey === 'string' && presentation.focusedStarKey.length > 0)
+  if (!presentation
+    || !validFocus
+    || !Number.isFinite(presentation.approachProgress)
+    || presentation.approachProgress < 0 || presentation.approachProgress > 1
+    || !Number.isFinite(presentation.systemReveal)
+    || presentation.systemReveal < 0 || presentation.systemReveal > 1
+    || !Number.isInteger(presentation.visibleQuestionOrbits) || presentation.visibleQuestionOrbits < 0
+    || !Number.isInteger(presentation.visibleQuestionPlanets) || presentation.visibleQuestionPlanets < 0
+    || typeof presentation.shaderFallback !== 'boolean') {
+    throw new Error(`render baseline: invalid ${name} presentation`)
+  }
+  if (name === 'panorama') {
+    if (presentation.focusedStarKey !== null) throw new Error('render baseline: panorama must not have focus')
+    if (presentation.approachProgress !== 0 || presentation.systemReveal !== 0
+      || presentation.visibleQuestionOrbits !== 0 || presentation.visibleQuestionPlanets !== 0) {
+      throw new Error('render baseline: invalid panorama presentation')
+    }
+  } else if (presentation.focusedStarKey === null) {
+    throw new Error(`render baseline: ${name} must have focus`)
+  }
+  if (name === 'approach-midpoint' && Math.abs(presentation.approachProgress - 0.65) > 1e-6) {
+    throw new Error('render baseline: invalid approach-midpoint presentation')
+  }
+  if (name === 'approach-midpoint' && Math.abs(presentation.systemReveal - 0.216) > 1e-6) {
+    throw new Error('render baseline: invalid approach-midpoint presentation')
+  }
+  if ((name === 'focused-star' || name === 'planet-focus')
+    && (presentation.approachProgress !== 1 || presentation.systemReveal !== 1)) {
+    throw new Error(`render baseline: invalid ${name} presentation`)
+  }
+  if (name !== 'panorama'
+    && (presentation.visibleQuestionOrbits <= 0 || presentation.visibleQuestionPlanets <= 0)) {
+    throw new Error(`render baseline: invalid ${name} presentation`)
+  }
+}
+
 function validateState(name, state) {
   if (!state) throw new Error(`render baseline: missing state ${name}`)
   const core = finite(state.corePixelDiameter, `${name} core diameter`)
   const halo = finite(state.haloPixelDiameter, `${name} halo diameter`)
-  const nonBackground = finite(state.nonBackgroundRatio, `${name} non-background ratio`)
+  const nonBackground = ratio(state.nonBackgroundRatio, `${name} non-background ratio`)
   const variance = finite(state.luminanceVariance, `${name} luminance variance`)
-  const clippedWhite = finite(state.clippedWhiteRatio, `${name} clipped-white ratio`)
-  if (core <= 0 || halo < Math.max(6, core * 1.2)) {
-    throw new Error(`render baseline: point-only radius in ${name}`)
-  }
-  if (nonBackground < 0.001 && variance < 0.00001) {
-    throw new Error(`render baseline: black frame in ${name}`)
-  }
+  const clippedWhite = ratio(state.clippedWhiteRatio, `${name} clipped-white ratio`)
+  if (variance < 0) throw new Error(`render baseline: invalid ${name} luminance variance`)
+  if (core < 2 || halo < Math.max(6, core * 1.2)) throw new Error(`render baseline: point-only radius in ${name}`)
+  if (nonBackground < 0.001 && variance < 0.00001) throw new Error(`render baseline: black frame in ${name}`)
   if (clippedWhite > 0.08) throw new Error(`render baseline: blown-white frame in ${name}`)
-  if (!state.camera || !state.presentation) throw new Error(`render baseline: missing camera/presentation state in ${name}`)
+  validateCamera(name, state.camera)
+  validatePresentation(name, state.presentation)
+}
+
+function validateReferenceDevice(referenceDevice) {
+  if (!referenceDevice
+    || typeof referenceDevice.enforceAbsoluteBudgets !== 'boolean'
+    || typeof referenceDevice.platform !== 'string' || referenceDevice.platform.length === 0
+    || !['metal', 'swiftshader'].includes(referenceDevice.graphicsBackend)) {
+    throw new Error('render baseline: invalid reference device metadata')
+  }
+  if (referenceDevice.enforceAbsoluteBudgets
+    && (referenceDevice.platform !== 'darwin' || referenceDevice.graphicsBackend !== 'metal')) {
+    throw new Error('render baseline: reference device enforcement requires macOS Metal')
+  }
+}
+
+function validatePerformanceState(quality, state) {
+  if (!state) throw new Error(`render baseline: missing ${quality} performance state`)
+  positive(state.p95FrameTime, `${quality} p95`)
+  positive(state.absoluteBudgetMs, `${quality} absolute performance budget`)
+  if (Math.abs(state.absoluteBudgetMs - ABSOLUTE_BUDGETS[quality]) > 1e-6) {
+    throw new Error(`render baseline: invalid ${quality} absolute performance budget`)
+  }
+  if (!Number.isInteger(state.sampleCount) || state.sampleCount <= 0) {
+    throw new Error(`render baseline: invalid ${quality} sample count`)
+  }
+  if (state.fixtureVersion !== 'strata-universe.dense-500.v1') {
+    throw new Error(`render baseline: invalid ${quality} performance fixture`)
+  }
+  if (state.starCount !== 500) throw new Error(`render baseline: invalid ${quality} star count`)
+  if (state.warmupMs !== 3_000 || state.sampleWindowMs !== 10_000) {
+    throw new Error(`render baseline: invalid ${quality} performance sample window`)
+  }
+  if (!state.hardware || typeof state.hardware.platform !== 'string'
+    || state.hardware.platform.length === 0
+    || typeof state.hardware.userAgent !== 'string' || state.hardware.userAgent.length === 0
+    || !Number.isInteger(state.hardware.hardwareConcurrency) || state.hardware.hardwareConcurrency <= 0
+    || !(state.hardware.deviceMemory === null
+      || (Number.isFinite(state.hardware.deviceMemory) && state.hardware.deviceMemory > 0))
+    || !(state.hardware.gpuVendor === null || typeof state.hardware.gpuVendor === 'string')
+    || !(state.hardware.gpuRenderer === null || typeof state.hardware.gpuRenderer === 'string')) {
+    throw new Error(`render baseline: invalid ${quality} hardware metadata`)
+  }
 }
 
 function validatePerformance(baseline, candidate) {
   for (const quality of PERFORMANCE_QUALITIES) {
     const reference = baseline.performance?.[quality]
     const measured = candidate.performance?.[quality]
-    if (!reference || !measured) throw new Error(`render baseline: missing ${quality} performance state`)
-    const referenceP95 = finite(reference.p95FrameTime, `${quality} baseline p95`)
-    const candidateP95 = finite(measured.p95FrameTime, `${quality} candidate p95`)
-    if (!Number.isInteger(measured.sampleCount) || measured.sampleCount <= 0) {
-      throw new Error(`render baseline: invalid ${quality} sample count`)
-    }
-    if (candidateP95 > ABSOLUTE_BUDGETS[quality]) {
-      throw new Error(`render baseline: absolute ${quality} p95 budget exceeded`)
-    }
-    if (candidateP95 > referenceP95 * 1.2) {
+    validatePerformanceState(quality, reference)
+    validatePerformanceState(quality, measured)
+    if (measured.p95FrameTime > reference.p95FrameTime * 1.2) {
       throw new Error(`render baseline: ${quality} p95 regressed over 20%`)
+    }
+    if (candidate.referenceDevice.enforceAbsoluteBudgets
+      && measured.p95FrameTime > ABSOLUTE_BUDGETS[quality]) {
+      throw new Error(`render baseline: absolute ${quality} p95 budget exceeded`)
     }
   }
 }
@@ -59,13 +175,23 @@ export function compareRenderBaselines(baseline, candidate) {
     || candidate.schemaVersion !== STELLAR_BASELINE_SCHEMA) {
     throw new Error(`render baseline: schema must be ${STELLAR_BASELINE_SCHEMA}`)
   }
-  if (candidate.rendererKind !== 'babylon') throw new Error('render baseline: expected Babylon candidate')
-  if (baseline.fixtureVersion !== candidate.fixtureVersion) throw new Error('render baseline: fixture mismatch')
-  if (baseline.viewport?.width !== candidate.viewport?.width
-    || baseline.viewport?.height !== candidate.viewport?.height
-    || baseline.viewport?.deviceScaleFactor !== candidate.viewport?.deviceScaleFactor) {
+  if (baseline.rendererKind !== 'babylon' || candidate.rendererKind !== 'babylon') {
+    throw new Error('render baseline: renderer kind must be Babylon')
+  }
+  if (baseline.fixtureVersion !== STELLAR_FIXTURE_VERSION
+    || candidate.fixtureVersion !== STELLAR_FIXTURE_VERSION
+    || baseline.fixtureVersion !== candidate.fixtureVersion) {
+    throw new Error('render baseline: fixture mismatch')
+  }
+  validateViewport(baseline.viewport)
+  validateViewport(candidate.viewport)
+  if (baseline.viewport.width !== candidate.viewport.width
+    || baseline.viewport.height !== candidate.viewport.height
+    || baseline.viewport.deviceScaleFactor !== candidate.viewport.deviceScaleFactor) {
     throw new Error('render baseline: viewport mismatch')
   }
+  validateReferenceDevice(baseline.referenceDevice)
+  validateReferenceDevice(candidate.referenceDevice)
   for (const name of STELLAR_STATE_NAMES) {
     validateState(name, baseline.states?.[name])
     validateState(name, candidate.states?.[name])

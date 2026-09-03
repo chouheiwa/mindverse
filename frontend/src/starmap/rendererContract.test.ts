@@ -189,6 +189,19 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
 }
 
 describe('Babylon camera recovery behavior', () => {
+  test('destroy clears a diagnostic freeze before fallible cleanup begins', () => {
+    const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.destroyed = false
+    renderer.diagnosticApproachProgressOverride = 0.65
+    renderer.selected = null
+    renderer.selectedVisual = null
+    renderer.cancelFlight = vi.fn(() => { throw new Error('cleanup failed') })
+
+    expect(() => renderer.destroy()).toThrow('cleanup failed')
+    expect(renderer.destroyed).toBe(true)
+    expect(renderer.diagnosticApproachProgressOverride).toBeNull()
+  })
+
   test('E2E approach control freezes an exact deterministic camera frame until released', () => {
     vi.stubEnv('VITE_E2E_DIAGNOSTICS', '1')
     try {
@@ -227,6 +240,74 @@ describe('Babylon camera recovery behavior', () => {
       expect(renderer.setDiagnosticApproachProgress(null)).toBe(true)
       renderer.updateCameraFlight(100)
       expect(renderer.activeFlight.elapsedMs).toBeGreaterThan(started.flight.durationMs * 0.65)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  test.each(['invalid-frame', 'camera-pose'] as const)(
+    'a frozen %s recovery clears the diagnostic clock override',
+    (failure) => {
+      const datum = makeDatum(makeStar())
+      const renderer = recoveryHarness(datum, vi.fn())
+      renderer.reducedMotion = false
+      renderer.elapsedMs = 42
+      renderer.diagnosticApproachProgressOverride = 0.65
+      renderer.overviewTarget = Vector3.Zero()
+      renderer.overviewRadius = 30
+      renderer.focusedStar = null
+      renderer.activeFlight = {
+        flight: {
+          token: 1,
+          starKey: 'alpha',
+          from: { target: { x: 0, y: 0, z: 0 }, radius: 30 },
+          to: { target: { x: 1, y: 2, z: 3 }, radius: 8 },
+          durationMs: 1_000,
+        },
+        elapsedMs: 650,
+      }
+      const cancel = vi.fn()
+      renderer.cameraFlightController = {
+        cancel,
+        frame: failure === 'invalid-frame'
+          ? vi.fn(() => ({ ok: false, error: 'invalid-frame' }))
+          : vi.fn(() => ({
+              ok: true,
+              frame: { token: 1, target: { x: 1, y: 2, z: 3 }, radius: 8, progress: 0.65, complete: false },
+            })),
+      }
+      if (failure === 'camera-pose') {
+        renderer.camera.setTarget = vi.fn()
+          .mockImplementationOnce(() => { throw new Error('camera pose failed') })
+          .mockImplementation((target: Vector3) => { renderer.camera.target = target.clone() })
+      }
+
+      renderer.updateCameraFlight(16)
+
+      expect(renderer.diagnosticApproachProgressOverride).toBeNull()
+      expect(renderer.activeFlight).toBeNull()
+      expect(cancel).toHaveBeenCalledWith('reset')
+      expect(renderer.motionTime()).toBe(42)
+      renderer.elapsedMs += 16
+      expect(renderer.motionTime()).toBe(58)
+    },
+  )
+
+  test('camera diagnostic sequence stays monotonic after the 180-sample window shifts', () => {
+    vi.stubEnv('VITE_E2E_DIAGNOSTICS', '1')
+    try {
+      const renderer = recoveryHarness(makeDatum(makeStar()), vi.fn())
+      renderer.diagnosticCameraSamples = []
+      renderer.diagnosticCameraSequence = 0
+      for (let index = 0; index < 185; index += 1) {
+        renderer.camera.radius = 30 - index / 100
+        renderer.recordDiagnosticCameraSample()
+      }
+      expect(renderer.diagnosticCameraSamples).toHaveLength(180)
+      expect(renderer.diagnosticCameraSamples[0].sequence).toBe(5)
+      expect(renderer.diagnosticCameraSamples.at(-1).sequence).toBe(184)
+      expect(new Set(renderer.diagnosticCameraSamples.map(({ sequence }: { sequence: number }) => sequence)).size)
+        .toBe(180)
     } finally {
       vi.unstubAllEnvs()
     }

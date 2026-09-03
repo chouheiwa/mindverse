@@ -141,6 +141,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private diagnosticClickEvents = 0
   private diagnosticLastPick: NonNullable<RenderSnapshot['lifecycle']['lastPick']> = 'none'
   private readonly diagnosticCameraSamples: StellarDiagnosticsSnapshot['cameraSamples'] = []
+  private diagnosticCameraSequence = 0
   private diagnosticApproachProgressOverride: number | null = null
   private readonly starPositionScratch = new Vector3()
   private readonly flightTargetScratch = new Vector3()
@@ -302,6 +303,7 @@ export class BabylonRenderer implements MindverseRenderer {
 
   destroy(): void {
     if (this.destroyed) return
+    this.diagnosticApproachProgressOverride = null
     this.destroyed = true
     activeBabylonRenderers.delete(this)
     this.selected = null
@@ -1366,14 +1368,16 @@ export class BabylonRenderer implements MindverseRenderer {
   private recordDiagnosticCameraSample(): void {
     if (import.meta.env.VITE_E2E_DIAGNOSTICS !== '1' || !this.diagnosticCameraSamples) return
     this.diagnosticCameraSamples.push({
-      sequence: this.diagnosticCameraSamples.length,
+      sequence: this.diagnosticCameraSequence,
       timestampMs: performance.now(),
       distance: this.camera.radius,
     })
+    this.diagnosticCameraSequence += 1
     if (this.diagnosticCameraSamples.length > 180) this.diagnosticCameraSamples.shift()
   }
 
   private recoverCamera(cause: unknown): void {
+    this.diagnosticApproachProgressOverride = null
     const original = cause instanceof Error ? cause : new Error(String(cause))
     attemptRecovery(() => this.cameraFlightController.cancel('reset'))
     this.activeFlight = null

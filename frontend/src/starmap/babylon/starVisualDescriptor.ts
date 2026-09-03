@@ -1,13 +1,13 @@
 import type { StarDatum } from '../gl/starData'
 
 export interface StarVisualDescriptor {
-  color: readonly [number, number, number]
-  luminance: number
-  panoramaCorePx: number
-  panoramaHaloPx: number
-  coronaScale: number
-  surfaceActivity: number
-  seed: number
+  readonly color: readonly [number, number, number]
+  readonly luminance: number
+  readonly panoramaCorePx: number
+  readonly panoramaHaloPx: number
+  readonly coronaScale: number
+  readonly surfaceActivity: number
+  readonly seed: number
 }
 
 export function describeStarVisual(star: StarDatum): StarVisualDescriptor {
@@ -26,12 +26,12 @@ export function describeStarVisual(star: StarDatum): StarVisualDescriptor {
   })
 }
 
-function sanitizeColor(color: StarDatum['color']): [number, number, number] {
-  return [
+function sanitizeColor(color: StarDatum['color']): readonly [number, number, number] {
+  return Object.freeze([
     clamp(finite(color[0], 1), 0, 1),
     clamp(finite(color[1], 1), 0, 1),
     clamp(finite(color[2], 1), 0, 1),
-  ]
+  ] as const)
 }
 
 function finite(value: number, fallback: number): number {

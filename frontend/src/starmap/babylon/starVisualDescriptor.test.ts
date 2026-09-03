@@ -48,6 +48,12 @@ describe('describeStarVisual', () => {
     expect(first).toEqual(second)
     expect(first.seed).toBe(42)
     expect(Object.isFrozen(first)).toBe(true)
+    expect(Object.isFrozen(first.color)).toBe(true)
+    const mutableColor = first.color as unknown as number[]
+    expect(() => {
+      mutableColor[0] = 0
+    }).toThrow(TypeError)
+    expect(first.color).toEqual([1, 1, 1])
     expect(star.seed).toBe(-42.9)
   })
 

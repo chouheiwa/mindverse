@@ -128,6 +128,15 @@ let active: ActiveDiagnostics | null = null
 // including high-refresh-rate (240Hz) displays.
 export const E2E_FRAME_CAPACITY = 35 * 240 + 1
 
+export type WebGlBackend = 'metal' | 'swiftshader' | 'unknown'
+
+export function classifyWebGlBackend(renderer: string | null, vendor: string | null): WebGlBackend {
+  const evidence = `${renderer ?? ''} ${vendor ?? ''}`
+  if (/swiftshader|subzero/i.test(evidence)) return 'swiftshader'
+  if (/\bmetal\b/i.test(evidence)) return 'metal'
+  return 'unknown'
+}
+
 export function forcedE2EQuality(search: string): Quality | null {
   const quality = new URLSearchParams(search).get('e2eQuality')
   return quality === 'high' || quality === 'medium' || quality === 'low' ? quality : null

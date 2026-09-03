@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compareRenderBaselines } from './compare-render-baselines.mjs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  compareRenderBaselines,
+  deriveStellarPngPaths,
+  validateStellarPngArtifacts,
+} from './compare-render-baselines.mjs'
 
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus']
 
@@ -46,7 +53,7 @@ function performanceState(p95FrameTime, absoluteBudgetMs) {
     p95FrameTime, absoluteBudgetMs, sampleCount: 600, warmupMs: 3_000, sampleWindowMs: 10_000,
     hardware: {
       platform: 'MacIntel', userAgent: 'Playwright Chromium', hardwareConcurrency: 8,
-      deviceMemory: 8, gpuVendor: 'Apple', gpuRenderer: 'Apple M-series',
+      deviceMemory: 8, gpuVendor: 'Apple', gpuRenderer: 'ANGLE Metal Renderer', graphicsBackend: 'metal',
     },
   }
 }
@@ -92,6 +99,24 @@ test('rejects black, blown-white and out-of-domain image metrics', () => {
   const white = candidate()
   white.states['focused-star'] = state('focused-star', { clippedWhiteRatio: 0.12 })
   assert.throws(() => compareRenderBaselines(baseline(), white), /blown-white/i)
+})
+
+test('rejects material per-state visual, camera and presentation drift', () => {
+  for (const [mutate, message] of [
+    [(value) => { value.states.panorama.corePixelDiameter = 13 }, /core.*drift/i],
+    [(value) => { value.states.panorama.haloPixelDiameter = 44 }, /halo.*drift/i],
+    [(value) => { value.states.panorama.nonBackgroundRatio = 0.30 }, /non-background.*drift/i],
+    [(value) => { value.states.panorama.luminanceVariance = 0.05 }, /luminance.*drift/i],
+    [(value) => { value.states.panorama.clippedWhiteRatio = 0.04 }, /clipped-white.*drift/i],
+    [(value) => { value.states.panorama.camera.distance = 30 }, /camera.*distance.*drift/i],
+    [(value) => { value.states.panorama.camera.target = [8, 0, 0] }, /camera.*target.*drift/i],
+    [(value) => { value.states['focused-star'].presentation.focusedStarKey = 'star:v1:public:other' }, /focus.*drift/i],
+    [(value) => { value.states['focused-star'].presentation.visibleQuestionPlanets = 8 }, /planet.*drift/i],
+  ]) {
+    const value = candidate()
+    mutate(value)
+    assert.throws(() => compareRenderBaselines(baseline(), value), message)
+  }
 })
 
 test('rejects renderer, schema, fixture and viewport contract violations', () => {
@@ -195,4 +220,22 @@ test('keeps the checked-in legacy migration comparison executable', () => {
   const migrated = { ...legacy, rendererKind: 'babylon' }
   assert.equal(compareRenderBaselines(legacy, migrated).rendererKind, 'babylon')
   assert.throws(() => compareRenderBaselines(legacy, { ...migrated, p95FrameTime: 12.01 }), /p95.*20%/i)
+})
+
+test('validates every derived stellar PNG artifact as present, non-empty PNG data', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mindverse-baseline-'))
+  const json = join(directory, 'babylon-stellar-v1.json')
+  const paths = deriveStellarPngPaths(json)
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  try {
+    await assert.rejects(validateStellarPngArtifacts(json), /missing.*PNG.*panorama/i)
+    await Promise.all(Object.values(paths).map((path) => writeFile(path, signature)))
+    await validateStellarPngArtifacts(json)
+    await writeFile(paths.panorama, Buffer.alloc(0))
+    await assert.rejects(validateStellarPngArtifacts(json), /empty.*PNG.*panorama/i)
+    await writeFile(paths.panorama, Buffer.from('not a png file'))
+    await assert.rejects(validateStellarPngArtifacts(json), /signature.*panorama/i)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })

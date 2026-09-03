@@ -1,12 +1,23 @@
 import { afterEach, expect, test } from 'vitest'
 import {
   E2E_FRAME_CAPACITY,
+  classifyWebGlBackend,
   forcedE2EQuality,
   installE2EDiagnostics,
   p95FrameTime,
   recordE2EFrame,
   removeE2EDiagnostics,
 } from './e2eDiagnostics'
+
+test.each([
+  ['ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)', 'Apple', 'metal'],
+  ['ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)', 'Google', 'swiftshader'],
+  ['Google SwiftShader', null, 'swiftshader'],
+  ['Mesa Intel(R) Graphics', 'Intel', 'unknown'],
+  [null, null, 'unknown'],
+] as const)('classifies WebGL evidence %s / %s as %s', (renderer, vendor, expected) => {
+  expect(classifyWebGlBackend(renderer, vendor)).toBe(expected)
+})
 
 afterEach(() => {
   delete window.__MINDVERSE_E2E__

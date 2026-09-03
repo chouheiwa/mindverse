@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, relative, resolve } from 'node:path'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
 import { createStrataUniverseFixture, installStrataFixture, strataUniverseFixture } from './helpers/strataFixtureRoute'
 
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1 } as const
@@ -134,7 +135,7 @@ async function captureState(page: Page, name: StateName) {
 }
 
 async function hardwareMetadata(page: Page) {
-  return page.evaluate(() => {
+  const raw = await page.evaluate(() => {
     const probe = document.createElement('canvas')
     const gl = probe.getContext('webgl2') ?? probe.getContext('webgl')
     const extension = gl?.getExtension('WEBGL_debug_renderer_info')
@@ -147,6 +148,7 @@ async function hardwareMetadata(page: Page) {
       gpuRenderer: gl && extension ? String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)) : null,
     }
   })
+  return { ...raw, graphicsBackend: classifyWebGlBackend(raw.gpuRenderer, raw.gpuVendor) }
 }
 
 async function measureDensePerformance(page: Page, quality: 'medium' | 'low', enforceAbsoluteBudgets: boolean) {
@@ -166,6 +168,10 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low', en
   const p95FrameTime = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? Number.POSITIVE_INFINITY
   const absoluteBudgetMs = quality === 'medium' ? 20 : 33.3
   expect(samples.length).toBeGreaterThan(0)
+  const hardware = await hardwareMetadata(page)
+  if (enforceAbsoluteBudgets && hardware.graphicsBackend !== 'metal') {
+    throw new Error(`reference device requires measured Metal; got ${hardware.graphicsBackend}`)
+  }
   if (enforceAbsoluteBudgets) expect(p95FrameTime).toBeLessThanOrEqual(absoluteBudgetMs)
   return {
     fixtureVersion: fixture.fixtureVersion,
@@ -175,26 +181,28 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low', en
     sampleCount: samples.length,
     warmupMs: 3_000,
     sampleWindowMs: 10_000,
-    hardware: await hardwareMetadata(page),
+    hardware,
   }
 }
 
 test('captures four deterministic stellar states and gates dense performance @metal-performance', async ({ page }, testInfo) => {
-  const referenceDevice = {
-    enforceAbsoluteBudgets: process.env.MINDVERSE_REFERENCE_DEVICE === '1'
-      && process.platform === 'darwin'
-      && testInfo.project.name === 'metal-performance',
-    platform: process.platform,
-    graphicsBackend: process.platform === 'darwin' && testInfo.project.name === 'metal-performance'
-      ? 'metal' : 'swiftshader',
-  }
-  if (process.env.MINDVERSE_REFERENCE_DEVICE === '1' && !referenceDevice.enforceAbsoluteBudgets) {
+  const referenceRequested = process.env.MINDVERSE_REFERENCE_DEVICE === '1'
+  if (referenceRequested && (process.platform !== 'darwin' || testInfo.project.name !== 'metal-performance')) {
     throw new Error('MINDVERSE_REFERENCE_DEVICE=1 requires the macOS metal-performance project')
   }
   await installStrataFixture(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/universe.html?e2eQuality=medium')
   await expectReady(page)
+  const measuredHardware = await hardwareMetadata(page)
+  if (referenceRequested && measuredHardware.graphicsBackend !== 'metal') {
+    throw new Error(`MINDVERSE_REFERENCE_DEVICE=1 requires measured Metal; got ${measuredHardware.graphicsBackend}`)
+  }
+  const referenceDevice = {
+    enforceAbsoluteBudgets: referenceRequested,
+    platform: process.platform,
+    graphicsBackend: measuredHardware.graphicsBackend,
+  }
 
   const states = {} as Record<StateName, Awaited<ReturnType<typeof captureState>>>
   states.panorama = await captureState(page, 'panorama')

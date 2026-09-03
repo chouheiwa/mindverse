@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
 import { installStrataFixture } from './helpers/strataFixtureRoute'
 
 test.describe.configure({ mode: 'serial' })
@@ -107,6 +108,22 @@ async function expectReady(page: Page) {
   await expect(page.getByTestId('universe-root')).toHaveAttribute('data-render-state', 'ready', { timeout: 60_000 })
   await expect.poll(async () => (await snapshot(page))?.renderReady).toBe(true)
 }
+
+test('functional project is backed by measured SwiftShader', async ({ page }) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  const evidence = await page.evaluate(() => {
+    const probe = document.createElement('canvas')
+    const gl = probe.getContext('webgl2') ?? probe.getContext('webgl')
+    const extension = gl?.getExtension('WEBGL_debug_renderer_info')
+    return {
+      vendor: gl && extension ? String(gl.getParameter(extension.UNMASKED_VENDOR_WEBGL)) : null,
+      renderer: gl && extension ? String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)) : null,
+    }
+  })
+  expect(evidence.renderer).toMatch(/swiftshader|subzero/i)
+  expect(classifyWebGlBackend(evidence.renderer, evidence.vendor)).toBe('swiftshader')
+})
 
 async function openStar(page: Page) {
   const target = await expect.poll(async () => {

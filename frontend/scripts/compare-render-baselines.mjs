@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const STELLAR_BASELINE_SCHEMA = 'babylon-stellar-baseline.v1'
@@ -109,11 +109,61 @@ function validateState(name, state) {
   validatePresentation(name, state.presentation)
 }
 
+function relativeSizeDrift(name, metric, reference, measured) {
+  const ratio = measured / reference
+  if (ratio < 0.65 || ratio > 1.5) throw new Error(`render baseline: ${name} ${metric} drift exceeded 35/50%`)
+}
+
+function angularDistance(left, right) {
+  const raw = Math.abs(left - right) % (Math.PI * 2)
+  return Math.min(raw, Math.PI * 2 - raw)
+}
+
+function compareState(name, reference, measured) {
+  relativeSizeDrift(name, 'core size', reference.corePixelDiameter, measured.corePixelDiameter)
+  relativeSizeDrift(name, 'halo size', reference.haloPixelDiameter, measured.haloPixelDiameter)
+  if (Math.abs(measured.nonBackgroundRatio - reference.nonBackgroundRatio) > 0.12) {
+    throw new Error(`render baseline: ${name} non-background drift exceeded 0.12`)
+  }
+  const varianceDifference = Math.abs(measured.luminanceVariance - reference.luminanceVariance)
+  const varianceRatio = measured.luminanceVariance / Math.max(reference.luminanceVariance, 1e-6)
+  if (varianceDifference > 0.012 && (varianceRatio < 0.5 || varianceRatio > 2)) {
+    throw new Error(`render baseline: ${name} luminance variance drift exceeded tolerance`)
+  }
+  if (Math.abs(measured.clippedWhiteRatio - reference.clippedWhiteRatio) > 0.02) {
+    throw new Error(`render baseline: ${name} clipped-white drift exceeded 0.02`)
+  }
+  const distanceRatio = measured.camera.distance / reference.camera.distance
+  if (distanceRatio < 0.7 || distanceRatio > 1.35) {
+    throw new Error(`render baseline: ${name} camera distance drift exceeded tolerance`)
+  }
+  if (angularDistance(measured.camera.alpha, reference.camera.alpha) > 0.5
+    || Math.abs(measured.camera.beta - reference.camera.beta) > 0.35) {
+    throw new Error(`render baseline: ${name} camera angle drift exceeded tolerance`)
+  }
+  const targetDrift = Math.hypot(...measured.camera.target.map((value, index) => value - reference.camera.target[index]))
+  if (targetDrift > Math.max(2, reference.camera.distance * 0.15)) {
+    throw new Error(`render baseline: ${name} camera target drift exceeded tolerance`)
+  }
+  if (measured.presentation.focusedStarKey !== reference.presentation.focusedStarKey) {
+    throw new Error(`render baseline: ${name} focus drift detected`)
+  }
+  for (const [label, key] of [['orbit', 'visibleQuestionOrbits'], ['planet', 'visibleQuestionPlanets']]) {
+    const allowed = Math.max(1, Math.ceil(reference.presentation[key] * 0.5))
+    if (Math.abs(measured.presentation[key] - reference.presentation[key]) > allowed) {
+      throw new Error(`render baseline: ${name} ${label} count drift exceeded tolerance`)
+    }
+  }
+  if (measured.presentation.shaderFallback !== reference.presentation.shaderFallback) {
+    throw new Error(`render baseline: ${name} shader fallback drift detected`)
+  }
+}
+
 function validateReferenceDevice(referenceDevice) {
   if (!referenceDevice
     || typeof referenceDevice.enforceAbsoluteBudgets !== 'boolean'
     || typeof referenceDevice.platform !== 'string' || referenceDevice.platform.length === 0
-    || !['metal', 'swiftshader'].includes(referenceDevice.graphicsBackend)) {
+    || !['metal', 'swiftshader', 'unknown'].includes(referenceDevice.graphicsBackend)) {
     throw new Error('render baseline: invalid reference device metadata')
   }
   if (referenceDevice.enforceAbsoluteBudgets
@@ -146,7 +196,8 @@ function validatePerformanceState(quality, state) {
     || !(state.hardware.deviceMemory === null
       || (Number.isFinite(state.hardware.deviceMemory) && state.hardware.deviceMemory > 0))
     || !(state.hardware.gpuVendor === null || typeof state.hardware.gpuVendor === 'string')
-    || !(state.hardware.gpuRenderer === null || typeof state.hardware.gpuRenderer === 'string')) {
+    || !(state.hardware.gpuRenderer === null || typeof state.hardware.gpuRenderer === 'string')
+    || !['metal', 'swiftshader', 'unknown'].includes(state.hardware.graphicsBackend)) {
     throw new Error(`render baseline: invalid ${quality} hardware metadata`)
   }
 }
@@ -195,9 +246,34 @@ export function compareRenderBaselines(baseline, candidate) {
   for (const name of STELLAR_STATE_NAMES) {
     validateState(name, baseline.states?.[name])
     validateState(name, candidate.states?.[name])
+    compareState(name, baseline.states[name], candidate.states[name])
   }
   validatePerformance(baseline, candidate)
   return { rendererKind: candidate.rendererKind, states: [...STELLAR_STATE_NAMES] }
+}
+
+export function deriveStellarPngPaths(jsonPath) {
+  const stem = basename(jsonPath, '.json')
+  const directory = dirname(jsonPath)
+  return Object.fromEntries(STELLAR_STATE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]))
+}
+
+export async function validateStellarPngArtifacts(jsonPath) {
+  const paths = deriveStellarPngPaths(jsonPath)
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  for (const name of STELLAR_STATE_NAMES) {
+    let png
+    try {
+      png = await readFile(paths[name])
+    } catch {
+      throw new Error(`render baseline: missing PNG artifact ${name}`)
+    }
+    if (png.length === 0) throw new Error(`render baseline: empty PNG artifact ${name}`)
+    if (png.length < signature.length || !png.subarray(0, signature.length).equals(signature)) {
+      throw new Error(`render baseline: invalid PNG signature for ${name}`)
+    }
+  }
+  return paths
 }
 
 function compareLegacyMigrationPair(baseline, candidate) {
@@ -238,6 +314,12 @@ async function main() {
     readFile(resolve(baselinePath), 'utf8').then(JSON.parse),
     readFile(resolve(candidatePath), 'utf8').then(JSON.parse),
   ])
+  if (baseline.schemaVersion !== undefined || candidate.schemaVersion !== undefined) {
+    await Promise.all([
+      validateStellarPngArtifacts(resolve(baselinePath)),
+      validateStellarPngArtifacts(resolve(candidatePath)),
+    ])
+  }
   const result = compareRenderBaselines(baseline, candidate)
   process.stdout.write(`render baselines verified: ${result.rendererKind}; states ${result.states.join(', ')}\n`)
 }

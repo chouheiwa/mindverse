@@ -148,6 +148,12 @@ export class StellarPointerPresentationController {
     this.feedback = EMPTY_POINTER_PRESENTATION
   }
 
+  pointerLeave(): void {
+    const gesture = this.gesture.snapshot()
+    if (gesture.activePointerId !== null || gesture.multiPointerInvalidated) return
+    this.feedback = EMPTY_POINTER_PRESENTATION
+  }
+
   clear(): void {
     this.gesture = new PointerGestureController()
     this.feedback = EMPTY_POINTER_PRESENTATION

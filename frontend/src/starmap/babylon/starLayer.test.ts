@@ -1,5 +1,6 @@
 import { Constants } from '@babylonjs/core/Engines/constants.js'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js'
+import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
 import { Material } from '@babylonjs/core/Materials/material.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
 import { Scene } from '@babylonjs/core/scene.js'
@@ -204,6 +205,46 @@ describe('StarLayer', () => {
     expect(setFloat.mock.calls.filter((_call, index) => setFloat.mock.contexts[index] === surface))
       .toEqual(expect.arrayContaining([['uTime', 0]]))
     layer.dispose(); scene.dispose(); engine.dispose()
+  })
+
+  it('applies live Reduced Motion changes immediately in both directions', () => {
+    const setFloat = vi.spyOn(ShaderMaterial.prototype, 'setFloat')
+    const { layer, scene, stars } = setup(1)
+    const sphere = scene.getMeshByName('stellar:focus:surface')!
+    layer.setFocus('s-0', stars[0]!)
+    layer.setPresentation(describeStarPresentation({ phase: 'star-focus' }), null, null)
+    layer.update({ elapsedMs: 2400, renderHeight: 500, devicePixelRatio: 1, projectionScale: 400 })
+    const animated = sphere.position.clone()
+    const activity = layer.diagnostics().focusUniforms.activity
+    setFloat.mockClear()
+
+    layer.setReducedMotion(true)
+    expect(layer.diagnostics().focusUniforms).toMatchObject({ time: 0, activity })
+    expect(sphere.position.asArray()).not.toEqual(animated.asArray())
+    expect(setFloat.mock.calls).toContainEqual(['uBobAmplitude', 0])
+
+    setFloat.mockClear()
+    layer.setReducedMotion(false)
+    expect(layer.diagnostics().focusUniforms).toMatchObject({ time: 2400, activity })
+    expect(sphere.position.asArray()).toEqual(animated.asArray())
+    expect(setFloat.mock.calls).toContainEqual(['uBobAmplitude', 1.35])
+    layer.dispose()
+  })
+
+  it('skips stable presentation, interaction, and focus buffer uploads', () => {
+    const updateVerticesData = vi.spyOn(Geometry.prototype, 'updateVerticesData')
+    const { layer, stars } = setup(2)
+    const presentation = describeStarPresentation({ phase: 'star-focus' })
+    layer.setFocus('s-0', stars[0]!)
+    layer.setPresentation(presentation, null, null)
+    updateVerticesData.mockClear()
+
+    layer.setFocus('s-0', stars[0]!)
+    layer.setPresentation(describeStarPresentation({ phase: 'star-focus' }), null, null)
+
+    expect(updateVerticesData.mock.calls.filter(([kind]) =>
+      kind === 'aCoreDim' || kind === 'aHaloDim' || kind === 'aInteraction')).toEqual([])
+    layer.dispose()
   })
 
   it('retains sanitized static activity in Reduced Motion panorama buffers', () => {

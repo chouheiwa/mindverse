@@ -109,4 +109,16 @@ describe('Babylon orbit presentation states', () => {
       expect(pointer.gestureSnapshot()).toMatchObject({ activePointerId: null, pressedStarKey: null })
     },
   )
+
+  test('pointer leave clears noncaptured hover but preserves an active captured drag', () => {
+    const pointer = new StellarPointerPresentationController()
+    pointer.pointerMove({ pointerId: 9, x: 4, y: 5, starKey: 'star:hover' })
+    pointer.pointerLeave()
+    expect(pointer.snapshot()).toMatchObject({ hoverStarKey: null, cursor: '' })
+
+    pointer.pointerDown({ pointerId: 1, inputKind: 'mouse', x: 10, y: 10, starKey: 'star:pressed' })
+    pointer.pointerLeave()
+    expect(pointer.snapshot().pressedStarKey).toBe('pressed')
+    expect(pointer.gestureSnapshot().activePointerId).toBe(1)
+  })
 })

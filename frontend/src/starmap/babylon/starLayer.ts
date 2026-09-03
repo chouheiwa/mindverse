@@ -146,7 +146,8 @@ export class StarLayer {
   private readonly stars: readonly StarDatum[]
   private readonly descriptors: readonly StarVisualDescriptor[]
   private readonly descriptorByDatum: ReadonlyMap<StarDatum, StarVisualDescriptor>
-  private readonly reducedMotion: boolean
+  private reducedMotion: boolean
+  private lastElapsedMs = 0
   private readonly options: StarLayerOptions
   private readonly qualityConfig: StarLayerDiagnostics['quality']
   private readonly geometry: Geometry
@@ -220,17 +221,22 @@ export class StarLayer {
     if (values.length !== this.stars.length) {
       throw new RangeError(`Expected ${this.stars.length} star dimensions, received ${values.length}`)
     }
+    let changed = false
     for (let index = 0; index < this.dimensionsBuffer.length; index += 1) {
       const value = values[index]
-      this.baseDimensions[index] = Number.isFinite(value) ? Math.min(1, Math.max(0, value as number)) : 1
+      const dimension = Number.isFinite(value) ? Math.min(1, Math.max(0, value as number)) : 1
+      changed ||= this.baseDimensions[index] !== dimension
+      this.baseDimensions[index] = dimension
       this.dimensionsBuffer[index] = this.baseDimensions[index]!
     }
+    if (!changed) return
     this.geometry.updateVerticesData('aDim', this.dimensionsBuffer, false)
     this.applyPresentationDimensions()
   }
 
   setFocus(starKey: string | null, datum: StarDatum | null): void {
     if (this.disposed) return
+    if (this.focusedKey === starKey && this.focusedDatum === datum) return
     this.focusedKey = starKey
     this.focusedDatum = datum
     if (datum) this.applyFocusDatum(datum)
@@ -240,6 +246,25 @@ export class StarLayer {
 
   setPresentation(presentation: StarPresentation, hoverKey: string | null, pressedKey: string | null): void {
     if (this.disposed) return
+    const previous = this.presentation
+    const dimensionsChanged = !previous
+      || previous.coreAlpha !== presentation.coreAlpha
+      || previous.haloAlpha !== presentation.haloAlpha
+      || previous.focusedOpacity !== presentation.focusedOpacity
+      || previous.effectiveNonFocusedOpacity !== presentation.effectiveNonFocusedOpacity
+      || previous.lodIntent !== presentation.lodIntent
+    const interactionsChanged = this.hoverKey !== hoverKey
+      || this.pressedKey !== pressedKey
+      || !previous
+      || previous.coreScale !== presentation.coreScale
+      || previous.coreBrightness !== presentation.coreBrightness
+      || previous.haloIntensity !== presentation.haloIntensity
+    const focusedPresentationChanged = !previous
+      || previous.surfaceAlpha !== presentation.surfaceAlpha
+      || previous.coronaAlpha !== presentation.coronaAlpha
+      || previous.coronaIntensity !== presentation.coronaIntensity
+      || previous.lodIntent !== presentation.lodIntent
+    if (!dimensionsChanged && !interactionsChanged && !focusedPresentationChanged) return
     this.presentation = presentation
     this.hoverKey = hoverKey
     this.pressedKey = pressedKey
@@ -250,15 +275,24 @@ export class StarLayer {
     this.panorama[1]?.material.setFloat('uPanoramaAlpha', wholeLayerAlpha)
     this.panorama[1]?.material.setFloat('uHaloIntensity', 1)
     this.panorama[2]?.material.setFloat('uPanoramaAlpha', wholeLayerAlpha)
-    this.applyFocusedPresentationUniforms()
+    if (focusedPresentationChanged) this.applyFocusedPresentationUniforms()
     this.applyVisibility()
-    this.applyInteractions()
-    this.applyPresentationDimensions()
+    if (interactionsChanged) this.applyInteractions()
+    if (dimensionsChanged) this.applyPresentationDimensions()
+  }
+
+  setReducedMotion(reduced: boolean): void {
+    if (this.disposed || this.reducedMotion === reduced) return
+    this.reducedMotion = reduced
+    const bobAmplitude = reduced ? 0 : 1.35
+    for (const { material } of this.panorama) material.setFloat('uBobAmplitude', bobAmplitude)
+    this.applyAnimationTime(reduced ? 0 : this.lastElapsedMs)
   }
 
   update(input: StarLayerFrameInput): void {
     if (this.disposed) return
-    const time = this.reducedMotion ? 0 : finiteNonNegative(input.elapsedMs)
+    this.lastElapsedMs = finiteNonNegative(input.elapsedMs)
+    const time = this.reducedMotion ? 0 : this.lastElapsedMs
     const renderHeight = Math.max(1, finiteNonNegative(input.renderHeight))
     const dpr = Math.max(1, finiteNonNegative(input.devicePixelRatio))
     const projectionScale = Math.max(1, finiteNonNegative(input.projectionScale))
@@ -268,6 +302,15 @@ export class StarLayer {
       material.setFloat('uDevicePixelRatio', dpr)
       material.setFloat('uProjectionScale', projectionScale)
     }
+    this.applyFocusedAnimationTime(time)
+  }
+
+  private applyAnimationTime(time: number): void {
+    for (const { material } of this.panorama) material.setFloat('uTime', time)
+    this.applyFocusedAnimationTime(time)
+  }
+
+  private applyFocusedAnimationTime(time: number): void {
     if (!this.focusedDatum) return
     const datum = this.focusedDatum
     safeStarWorldPosition(datum, time, this.reducedMotion ? 0 : 1.35, this.focusSphere.position)

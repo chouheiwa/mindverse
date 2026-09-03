@@ -1,4 +1,5 @@
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { readFileSync } from 'node:fs'
 import { describe, expect, test, vi } from 'vitest'
 import type { Star, Universe } from '../types'
 import type { StarDatum } from './gl/starData'
@@ -50,7 +51,10 @@ function babylonHarness(stars: StarDatum[], callbacks: { onPick?: (star: Star | 
   renderer.mode = 'all'
   renderer.wormIdx = 0
   renderer.universe = makeUniverse(stars.map(({ s }) => s))
-  renderer.applyStarFocus = vi.fn((datum: StarDatum) => { renderer.focusedStar = datum })
+  renderer.applyStarFocus = vi.fn((datum: StarDatum) => {
+    renderer.focusedStar = datum
+    return true
+  })
   renderer.callbacks = callbacks
   return renderer
 }
@@ -127,6 +131,7 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
   renderer.selectedVisual = null
   renderer.focusedStar = null
   renderer.planets = []
+  renderer.visualByQuestion = new Map()
   renderer.elapsedMs = 0
   renderer.reducedMotion = true
   renderer.overviewTarget = new Vector3(Number.NaN, 4, 5)
@@ -137,6 +142,10 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
     setTarget(target: Vector3) { this.target = target.clone() },
   }
   renderer.cameraFlightController = new CameraFlightController()
+  renderer.starPositionScratch = new Vector3()
+  renderer.flightTargetScratch = new Vector3()
+  renderer.planetStarPositionScratch = new Vector3()
+  renderer.candidateWorldScratch = new Vector3()
   renderer.pointerPresentation = new StellarPointerPresentationController()
   renderer.canvas = { style: { cursor: '' } }
   renderer.starLayer = { setFocus: vi.fn(), setPresentation: vi.fn() }
@@ -153,6 +162,48 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
 }
 
 describe('Babylon camera recovery behavior', () => {
+  test('public focus reports success only when the requested focus remains established', () => {
+    const datum = makeDatum(makeStar(), { bodyR: Number.NaN })
+    const onPick = vi.fn()
+    const onRenderError = vi.fn()
+    const renderer = recoveryHarness(datum, onRenderError)
+    renderer.stars = [datum]
+    renderer.universe = makeUniverse([datum.s])
+    renderer.mode = 'all'
+    renderer.wormIdx = 0
+    renderer.universeVisible = true
+    renderer.strataTransition = { phase: null }
+    renderer.callbacks = { onPick, onRenderError }
+
+    expect(renderer.focusStar('alpha')).toBeNull()
+    expect(onPick).not.toHaveBeenCalled()
+    expect(onRenderError).toHaveBeenCalledOnce()
+    expect(renderer.focusedStar).toBeNull()
+  })
+
+  test('public focus reports failure when recovery cannot restore the focused camera pose', () => {
+    const datum = makeDatum(makeStar())
+    const onPick = vi.fn()
+    const onRenderError = vi.fn()
+    const renderer = recoveryHarness(datum, onRenderError)
+    renderer.stars = [datum]
+    renderer.universe = makeUniverse([datum.s])
+    renderer.mode = 'all'
+    renderer.wormIdx = 0
+    renderer.universeVisible = true
+    renderer.strataTransition = { phase: null }
+    renderer.callbacks = { onPick, onRenderError }
+    renderer.overviewTarget = Vector3.Zero()
+    renderer.overviewRadius = 30
+    renderer.starLayer.setFocus = vi.fn()
+      .mockImplementationOnce(() => { throw new Error('initial focus failed') })
+    renderer.camera.setTarget = vi.fn(() => { throw new Error('camera recovery failed') })
+
+    expect(renderer.focusStar('alpha')).toBeNull()
+    expect(onPick).not.toHaveBeenCalled()
+    expect(renderer.focusedStar).toBeNull()
+  })
+
   test('a thrown current-star-position cause uses one recovery path and restores a finite panorama', () => {
     const datum = makeDatum(makeStar())
     const original = new Error('position preflight failed')
@@ -175,6 +226,8 @@ describe('Babylon camera recovery behavior', () => {
     const original = new Error('star-layer preflight failed')
     const onRenderError = vi.fn()
     const renderer = recoveryHarness(datum, onRenderError)
+    renderer.overviewTarget = Vector3.Zero()
+    renderer.overviewRadius = 30
     renderer.starLayer.setFocus = vi.fn()
       .mockImplementationOnce(() => { throw original })
 
@@ -272,5 +325,151 @@ describe('Babylon camera recovery behavior', () => {
     expect(() => renderer.recoverCamera(original)).not.toThrow()
     expect(onRenderError).toHaveBeenCalledOnce()
     expect(onRenderError).toHaveBeenCalledWith(original)
+  })
+})
+
+describe('Babylon stellar motion runtime', () => {
+  test('rebases approach frames onto the live star without changing progress or logarithmic radius', () => {
+    const datum = makeDatum(makeStar())
+    const renderer = recoveryHarness(datum, vi.fn())
+    const flight = {
+      token: 1,
+      starKey: 'alpha',
+      from: { target: { x: 0, y: 0, z: 0 }, radius: 100 },
+      to: { target: { x: 10, y: 0, z: 0 }, radius: 25 },
+      durationMs: 100,
+    }
+    renderer.focusedStar = datum
+    renderer.activeFlight = { flight, elapsedMs: 0 }
+    renderer.cameraFlightController = {
+      frame: vi.fn((_flight: unknown, elapsedMs: number) => {
+        const progress = Math.min(1, elapsedMs / 100)
+        const eased = progress * progress * (3 - 2 * progress)
+        return { ok: true, frame: {
+          token: 1, progress, complete: progress === 1,
+          target: { x: 10 * eased, y: 0, z: 0 },
+          radius: Math.exp(Math.log(100) + (Math.log(25) - Math.log(100)) * eased),
+        } }
+      }),
+    }
+    renderer.currentStarPosition = vi.fn(() => new Vector3(30, 6, -3))
+
+    renderer.updateCameraFlight(50)
+    expect(renderer.camera.target.asArray()).toEqual([15, 3, -1.5])
+    expect(renderer.camera.radius).toBeCloseTo(50)
+    expect(renderer.activeFlight.elapsedMs).toBe(50)
+
+    renderer.updateCameraFlight(50)
+    expect(renderer.camera.target.asArray()).toEqual([30, 6, -3])
+    expect(renderer.camera.radius).toBeCloseTo(25)
+    expect(renderer.activeFlight).toBeNull()
+  })
+
+  test('live Reduced Motion propagates to StarLayer and settles an active flight at the live target', () => {
+    const datum = makeDatum(makeStar())
+    const renderer = recoveryHarness(datum, vi.fn())
+    const cancel = vi.fn()
+    renderer.reducedMotion = false
+    renderer.elapsedMs = 2500
+    renderer.focusedStar = datum
+    renderer.activeFlight = {
+      flight: { token: 2, starKey: 'alpha', from: { target: { x: 0, y: 0, z: 0 }, radius: 40 },
+        to: { target: { x: 10, y: 0, z: 0 }, radius: 18 }, durationMs: 1000 },
+      elapsedMs: 400,
+    }
+    renderer.cameraFlightController = { cancel }
+    renderer.starLayer.setReducedMotion = vi.fn()
+    renderer.currentStarPosition = (BabylonRenderer.prototype as any).currentStarPosition
+
+    renderer.setReducedMotion(true)
+    expect(renderer.starLayer.setReducedMotion).toHaveBeenCalledWith(true)
+    expect(cancel).toHaveBeenCalledWith('user')
+    expect(renderer.activeFlight).toBeNull()
+    expect(renderer.camera.target.asArray()).toEqual(datum.p)
+    expect(renderer.camera.radius).toBe(18)
+
+    renderer.setReducedMotion(false)
+    expect(renderer.starLayer.setReducedMotion).toHaveBeenLastCalledWith(false)
+    expect(renderer.currentStarPosition(datum).asArray()).not.toEqual(datum.p)
+  })
+
+  test('live Reduced Motion immediately keeps an idle focused camera on the same CPU motion formula', () => {
+    const datum = makeDatum(makeStar())
+    const renderer = recoveryHarness(datum, vi.fn())
+    renderer.reducedMotion = false
+    renderer.elapsedMs = 2500
+    renderer.focusedStar = datum
+    renderer.activeFlight = null
+    renderer.universeVisible = true
+    renderer.starLayer.setReducedMotion = vi.fn()
+    renderer.currentStarPosition = (BabylonRenderer.prototype as any).currentStarPosition
+    renderer.camera.setTarget(renderer.currentStarPosition(datum))
+    const animated = renderer.camera.target.clone()
+
+    renderer.setReducedMotion(true)
+    expect(renderer.camera.target.asArray()).toEqual(datum.p)
+
+    renderer.setReducedMotion(false)
+    expect(renderer.camera.target.asArray()).toEqual(animated.asArray())
+  })
+
+  test('stable star-focus frames reuse presentation state and avoid StarLayer presentation calls', () => {
+    const datum = makeDatum(makeStar())
+    const renderer = recoveryHarness(datum, vi.fn())
+    renderer.focusedStar = datum
+    renderer.presentation = { ...renderer.presentation }
+    renderer.hoverKey = null
+    renderer.pressedKey = null
+    renderer.hoverProgress = 0
+    renderer.pressedProgress = 0
+    renderer.universeVisible = true
+    renderer.starLayer.setPresentation.mockClear()
+
+    renderer.updateStellarPresentation(16)
+    const first = renderer.presentation
+    renderer.updateStellarPresentation(16)
+
+    expect(renderer.presentation).toBe(first)
+    expect(renderer.starLayer.setPresentation).toHaveBeenCalledOnce()
+  })
+
+  test('large-system focus and planet return share one system-aware radius while duplicate focus preserves pose', () => {
+    const datum = makeDatum(makeStar(), { bodyR: 1 })
+    const onPick = vi.fn()
+    const renderer = recoveryHarness(datum, vi.fn())
+    renderer.callbacks = { onPick }
+    renderer.stars = [datum]
+    renderer.universe = makeUniverse([datum.s])
+    renderer.mode = 'all'; renderer.wormIdx = 0; renderer.universeVisible = true
+    renderer.strataTransition = { phase: null }
+    renderer.overviewTarget = Vector3.Zero(); renderer.overviewRadius = 300
+    renderer.planets = [{ star: datum, orbitR: 100, radius: 4 }]
+    renderer.clearPlanet = (BabylonRenderer.prototype as any).clearPlanet
+
+    expect(renderer.focusStar('alpha')).toBe(datum.s)
+    const systemRadius = renderer.activeFlight.flight.to.radius
+    expect(systemRadius).toBeCloseTo(140.4)
+    renderer.camera.target = new Vector3(7, 8, 9)
+    renderer.camera.radius = 77
+    expect(renderer.focusStar('alpha')).toBe(datum.s)
+    expect(renderer.camera.target.asArray()).toEqual([7, 8, 9])
+    expect(renderer.camera.radius).toBe(77)
+    expect(onPick).toHaveBeenCalledOnce()
+
+    renderer.selected = { question: { id: 'q' } }
+    renderer.clearPlanet()
+    expect(renderer.camera.radius).toBeCloseTo(systemRadius)
+  })
+
+  test('constructor failure cleanup tracks and removes installed pointer listeners', () => {
+    const source = readFileSync('src/starmap/babylon/BabylonRenderer.ts', 'utf8')
+    expect(source).toMatch(/let pointerListenersInstalled = false/)
+    expect(source).toMatch(/let runtime: BabylonRuntime \| null = null/)
+    expect(source).toMatch(/pointerListenersInstalled = true/)
+    expect(source).toMatch(/catch \(cause\)[\s\S]+if \(pointerListenersInstalled\) this\.removePointerListeners\(\)/)
+    expect(source).toMatch(/catch \(cause\)[\s\S]+if \(runtime\) runtime\.destroy\(\)/)
+    expect(source.indexOf('pointerListenersInstalled = true')).toBeLessThan(source.indexOf('this.installPointerListeners()'))
+    expect(source).toContain("addEventListener('pointerleave'")
+    expect(source).toContain("removeEventListener('pointerleave'")
   })
 })

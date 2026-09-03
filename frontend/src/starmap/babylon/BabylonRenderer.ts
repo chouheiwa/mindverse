@@ -118,6 +118,15 @@ export class BabylonRenderer implements MindverseRenderer {
   private pressedProgress = 0
   private activeFlight: Readonly<{ flight: CameraFlight; elapsedMs: number }> | null = null
   private presentation: StarPresentation = describeStarPresentation({ phase: 'panorama' })
+  private lastLayerPresentation: StarPresentation | null = null
+  private lastLayerHoverKey: string | null = null
+  private lastLayerPressedKey: string | null = null
+  private lastPresentationInput: Readonly<{
+    phase: OrbitPresentationState['phase']
+    approachProgress: number | undefined
+    hoverProgress: number
+    pressedProgress: number
+  }> | null = null
   private elapsedMs = 0
   private lastStrataMoveAt: number | null = null
   private overviewTarget = Vector3.Zero()
@@ -129,6 +138,13 @@ export class BabylonRenderer implements MindverseRenderer {
   private reducedMotion: boolean
   private diagnosticClickEvents = 0
   private diagnosticLastPick: NonNullable<RenderSnapshot['lifecycle']['lastPick']> = 'none'
+  private readonly starPositionScratch = new Vector3()
+  private readonly flightTargetScratch = new Vector3()
+  private readonly planetStarPositionScratch = new Vector3()
+  private readonly candidateWorldScratch = new Vector3()
+  private readonly projectionIdentity = Matrix.Identity()
+  private readonly projectionViewport = new Viewport(0, 0, 1, 1)
+  private readonly projectedPositionScratch = new Vector3()
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -167,7 +183,9 @@ export class BabylonRenderer implements MindverseRenderer {
     this.engine = engine
 
     let scene: Scene | null = null
+    let runtime: BabylonRuntime | null = null
     let runtimeConstructionStarted = false
+    let pointerListenersInstalled = false
     try {
       scene = new Scene(engine)
       this.scene = scene
@@ -191,6 +209,7 @@ export class BabylonRenderer implements MindverseRenderer {
       })
       this.applyModeDimensions()
       this.starLayer.setPresentation(this.presentation, null, null)
+      this.lastLayerPresentation = this.presentation
       this.strataTransition = new StrataTransitionController({
         capturePose: () => this.captureStrataEntryPose(),
         applyPose: (pose) => this.applyStrataPose(pose),
@@ -198,9 +217,10 @@ export class BabylonRenderer implements MindverseRenderer {
         animate: (phase, token, complete, fail) => this.animateStrata(phase, token, complete, fail),
       }, callbacks)
       this.createScene(index)
+      pointerListenersInstalled = true
       this.installPointerListeners()
       runtimeConstructionStarted = true
-      this.runtime = new BabylonRuntime({
+      runtime = new BabylonRuntime({
         engine,
         scene,
         releaseContext: () => releaseCanvasWebGLContext(canvas),
@@ -212,6 +232,7 @@ export class BabylonRenderer implements MindverseRenderer {
         onReady: callbacks.onRenderReady,
         onError: callbacks.onRenderError,
       })
+      this.runtime = runtime
       this.resizeLabels()
       if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
         installE2EDiagnostics(
@@ -236,7 +257,7 @@ export class BabylonRenderer implements MindverseRenderer {
               const runtime = this.runtime.diagnostics()
               return {
                 rafLoops: runtime.renderLoops,
-                listeners: runtime.listeners + (this.destroyed ? 0 : 7),
+                listeners: runtime.listeners + (this.destroyed ? 0 : 8),
                 clickEvents: this.diagnosticClickEvents,
                 lastPick: this.diagnosticLastPick,
               }
@@ -246,7 +267,9 @@ export class BabylonRenderer implements MindverseRenderer {
       }
       activeBabylonRenderers.add(this)
     } catch (cause) {
-      if (!runtimeConstructionStarted) {
+      if (pointerListenersInstalled) this.removePointerListeners()
+      if (runtime) runtime.destroy()
+      else if (!runtimeConstructionStarted) {
         if (scene) scene.dispose()
         engine.dispose()
         releaseCanvasWebGLContext(canvas)
@@ -285,6 +308,7 @@ export class BabylonRenderer implements MindverseRenderer {
 
   setMode(mode: Mode, wormIdx = 0): void {
     if (this.destroyed) return
+    if (this.mode === mode && this.wormIdx === wormIdx) return
     this.mode = mode
     this.wormIdx = wormIdx
     this.applyModeDimensions()
@@ -297,7 +321,8 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.destroyed || !this.universeVisible || this.strataTransition.phase !== null) return null
     const star = resolveInteractiveStar(this.stars, starKey, this.mode, this.universe, this.wormIdx)
     if (!star) return null
-    this.applyStarFocus(star)
+    if (this.focusedStar === star && !this.selected) return star.s
+    if (!this.applyStarFocus(star)) return null
     this.callbacks.onPick?.(star.s)
     return star.s
   }
@@ -322,7 +347,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.callbacks.onPickPlanet?.(null)
     if (this.focusedStar) {
       this.camera.setTarget(this.currentStarPosition(this.focusedStar))
-      this.camera.radius = Math.max(8, this.focusedStar.bodyR * 14)
+      this.camera.radius = this.systemFraming(this.focusedStar).radius
     }
     this.syncOrbitPresentation()
   }
@@ -385,6 +410,26 @@ export class BabylonRenderer implements MindverseRenderer {
   setReducedMotion(reduced: boolean): void {
     if (this.destroyed || this.reducedMotion === reduced) return
     this.reducedMotion = reduced
+    this.starLayer.setReducedMotion(reduced)
+    const active = this.activeFlight
+    if (reduced && active && this.focusedStar) {
+      const target = this.currentStarPosition(this.focusedStar)
+      const radius = active.flight.to.radius
+      this.cancelFlight('user')
+      this.camera.setTarget(target)
+      this.camera.radius = radius
+      this.syncStarLayerPresentation()
+      this.syncOrbitPresentation()
+    }
+    for (const visual of this.visualByQuestion.values()) {
+      this.updatePlanetPosition(visual, this.elapsedMs)
+      visual.material.setFloat('uTime', this.motionTime())
+    }
+    if (this.selectedVisual && this.universeVisible) {
+      this.camera.target.copyFrom(this.selectedVisual.mesh.position)
+    } else if (this.focusedStar && !this.activeFlight && this.universeVisible) {
+      this.camera.target.copyFrom(this.currentStarPosition(this.focusedStar))
+    }
   }
 
   skipGenesis(): void {
@@ -648,7 +693,7 @@ export class BabylonRenderer implements MindverseRenderer {
     })
     for (const visual of this.visualByQuestion.values()) {
       this.updatePlanetPosition(visual, this.elapsedMs)
-      visual.material.setFloat('uTime', this.elapsedMs)
+      visual.material.setFloat('uTime', this.motionTime())
     }
     if (this.selectedVisual && this.universeVisible) {
       this.camera.target.copyFrom(this.selectedVisual.mesh.position)
@@ -748,25 +793,34 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private projectToCss(point: Vector3): { x: number; y: number; z: number } {
-    const viewport = this.camera.viewport.toGlobal(this.engine.getRenderWidth(), this.engine.getRenderHeight())
-    const projected = Vector3.Project(point, Matrix.Identity(), this.scene.getTransformMatrix(), viewport)
+    const renderWidth = this.engine.getRenderWidth()
+    const renderHeight = this.engine.getRenderHeight()
+    const cameraViewport = this.camera.viewport
+    const viewport = this.projectionViewport
+    viewport.x = cameraViewport.x * renderWidth
+    viewport.y = cameraViewport.y * renderHeight
+    viewport.width = cameraViewport.width * renderWidth
+    viewport.height = cameraViewport.height * renderHeight
+    const projected = this.projectedPositionScratch
+    Vector3.ProjectToRef(point, this.projectionIdentity, this.scene.getTransformMatrix(), viewport, projected)
     const rect = this.canvas.getBoundingClientRect()
     return {
-      x: projected.x * rect.width / Math.max(1, this.engine.getRenderWidth()),
-      y: projected.y * rect.height / Math.max(1, this.engine.getRenderHeight()),
+      x: projected.x * rect.width / Math.max(1, renderWidth),
+      y: projected.y * rect.height / Math.max(1, renderHeight),
       z: projected.z,
     }
   }
 
   private updatePlanetPosition(visual: PlanetVisual, elapsedMs: number): void {
     const datum = visual.datum
+    const motionTime = this.reducedMotion ? 0 : elapsedMs
     const starPosition = starWorldPosition(
       datum.star,
-      elapsedMs,
+      motionTime,
       this.reducedMotion ? 0 : 1.35,
-      new Vector3(),
+      this.planetStarPositionScratch,
     )
-    const angle = datum.phase + Math.PI * 2 / datum.period * (elapsedMs / 1000)
+    const angle = datum.phase + Math.PI * 2 / datum.period * (motionTime / 1000)
     const cosine = Math.cos(angle)
     const sine = Math.sin(angle)
     visual.mesh.position.set(
@@ -784,8 +838,18 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updateAnchor(mesh: Mesh): void {
     if (!this.callbacks.onAnchor) return
-    const viewport = this.camera.viewport.toGlobal(this.engine.getRenderWidth(), this.engine.getRenderHeight())
-    const projected = Vector3.Project(mesh.getAbsolutePosition(), Matrix.Identity(), this.scene.getTransformMatrix(), viewport)
+    const renderWidth = this.engine.getRenderWidth()
+    const renderHeight = this.engine.getRenderHeight()
+    const cameraViewport = this.camera.viewport
+    const viewport = this.projectionViewport
+    viewport.x = cameraViewport.x * renderWidth
+    viewport.y = cameraViewport.y * renderHeight
+    viewport.width = cameraViewport.width * renderWidth
+    viewport.height = cameraViewport.height * renderHeight
+    const projected = this.projectedPositionScratch
+    Vector3.ProjectToRef(
+      mesh.getAbsolutePosition(), this.projectionIdentity, this.scene.getTransformMatrix(), viewport, projected,
+    )
     const visible = projected.z >= 0 && projected.z <= 1
     this.callbacks.onAnchor(projected.x, projected.y, visible)
   }
@@ -1076,20 +1140,16 @@ export class BabylonRenderer implements MindverseRenderer {
     }
   }
 
-  private applyStarFocus(star: StarDatum): void {
+  private applyStarFocus(star: StarDatum): boolean {
     try {
       this.clearPlanet()
       this.focusedStar = star
       const starKey = starIdentity(star.s)
       const target = this.currentStarPosition(star)
       this.starLayer.setFocus(starKey, star)
-      const extents = this.planets
-        .filter((planet) => planet.star === star)
-        .map(({ orbitR, radius }) => ({ orbitR, radius }))
-      const extent = computeSystemExtent(star.bodyR, extents)
+      const framing = this.systemFraming(star)
       const distance = Vector3.Distance(this.camera.target, target)
-      if (!extent.ok
-        || !finiteVector3(target)
+      if (!finiteVector3(target)
         || !finiteVector3(this.camera.target)
         || !finitePositive(this.camera.radius)
         || !finitePositive(star.bodyR)
@@ -1102,7 +1162,7 @@ export class BabylonRenderer implements MindverseRenderer {
         start: { target: this.camera.target, radius: this.camera.radius },
         targetStar: target,
         bodyR: star.bodyR,
-        systemExtent: extent.value,
+        systemExtent: framing.extent,
         overviewRadius: this.overviewRadius,
         distance,
         requestedMs: 1100,
@@ -1114,16 +1174,33 @@ export class BabylonRenderer implements MindverseRenderer {
       } else if (result.kind === 'noop') {
         this.activeFlight = null
         this.camera.setTarget(target)
-        this.camera.radius = Math.max(8, star.bodyR * 14)
+        this.camera.radius = framing.radius
         this.presentation = describeStarPresentation({ phase: 'star-focus' })
       } else {
         throw new Error('Invalid camera flight input')
       }
-      this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+      this.syncStarLayerPresentation()
       this.syncOrbitPresentation()
+      return true
     } catch (cause) {
       this.recoverCamera(cause)
+      return this.focusedStar === star
     }
+  }
+
+  private systemFraming(star: StarDatum): Readonly<{ extent: number; radius: number }> {
+    const extents = this.planets
+      .filter((planet) => planet.star === star)
+      .map(({ orbitR, radius }) => ({ orbitR, radius }))
+    const extent = computeSystemExtent(star.bodyR, extents)
+    const minimum = star.bodyR * 8
+    const maximum = this.overviewRadius * 0.72
+    if (!extent.ok || !finitePositive(minimum) || !finitePositive(maximum) || minimum > maximum) {
+      throw new Error('Invalid camera flight input')
+    }
+    const radius = Math.min(maximum, Math.max(minimum, star.bodyR * 14, extent.value * 1.35))
+    if (!finitePositive(radius)) throw new Error('Invalid camera flight input')
+    return Object.freeze({ extent: extent.value, radius })
   }
 
   private applyModeDimensions(): void {
@@ -1144,7 +1221,11 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private currentStarPosition(star: StarDatum): Vector3 {
-    return starWorldPosition(star, this.elapsedMs, this.reducedMotion ? 0 : 1.35, new Vector3())
+    return starWorldPosition(star, this.motionTime(), this.reducedMotion ? 0 : 1.35, this.starPositionScratch)
+  }
+
+  private motionTime(): number {
+    return this.reducedMotion ? 0 : this.elapsedMs
   }
 
   private cancelFlight(reason: Parameters<CameraFlightController['cancel']>[0]): void {
@@ -1153,6 +1234,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.presentation = describeStarPresentation({
       phase: this.selected ? 'planet-focus' : this.focusedStar ? 'star-focus' : 'panorama',
     })
+    this.lastPresentationInput = null
   }
 
   private updateCameraFlight(deltaTime: number): void {
@@ -1168,11 +1250,21 @@ export class BabylonRenderer implements MindverseRenderer {
       const { frame } = result
       if (![frame.target.x, frame.target.y, frame.target.z, frame.radius].every(Number.isFinite)
         || frame.radius <= 0) throw new Error('Invalid camera flight pose')
-      this.camera.setTarget(new Vector3(frame.target.x, frame.target.y, frame.target.z))
+      const progress = frame.progress * frame.progress * (3 - 2 * frame.progress)
+      const liveTarget = this.focusedStar ? this.currentStarPosition(this.focusedStar) : null
+      const target = this.flightTargetScratch.set(frame.target.x, frame.target.y, frame.target.z)
+      if (liveTarget) {
+        target.x += (liveTarget.x - active.flight.to.target.x) * progress
+        target.y += (liveTarget.y - active.flight.to.target.y) * progress
+        target.z += (liveTarget.z - active.flight.to.target.z) * progress
+      }
+      if (!finiteVector3(target)) throw new Error('Invalid camera flight target')
+      this.camera.setTarget(target)
       this.camera.radius = frame.radius
       this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: frame.progress })
       this.activeFlight = frame.complete ? null : Object.freeze({ flight: active.flight, elapsedMs })
       if (frame.complete) this.presentation = describeStarPresentation({ phase: 'star-focus' })
+      this.lastPresentationInput = null
       this.syncOrbitPresentation()
     } catch (cause) {
       this.recoverCamera(cause)
@@ -1187,11 +1279,16 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.focusedStar) {
       attemptRecovery(() => { focusedPosition = this.currentStarPosition(this.focusedStar as StarDatum) })
     }
+    let recoveryRadius: number | null = null
+    if (this.focusedStar) {
+      attemptRecovery(() => { recoveryRadius = this.systemFraming(this.focusedStar as StarDatum).radius })
+    }
     let validFocus = this.focusedStar
       && this.isInteractive(this.focusedStar)
       && finitePositive(this.focusedStar.bodyR)
       && focusedPosition
       && finiteVector3(focusedPosition)
+      && recoveryRadius !== null
       ? this.focusedStar : null
     if (validFocus) {
       const recoveryFocus = validFocus
@@ -1204,9 +1301,16 @@ export class BabylonRenderer implements MindverseRenderer {
     }
     attemptRecovery(() => this.pointerPresentation.clear())
     attemptRecovery(() => this.applyPointerPresentationFeedback(false))
-    if (validFocus && focusedPosition) {
-      attemptRecovery(() => this.camera.setTarget(focusedPosition as Vector3))
-      attemptRecovery(() => { this.camera.radius = Math.max(8, validFocus.bodyR * 14) })
+    if (validFocus && focusedPosition && recoveryRadius !== null) {
+      let poseSynchronized = false
+      attemptRecovery(() => {
+        this.camera.setTarget(focusedPosition as Vector3)
+        this.camera.radius = recoveryRadius as number
+        poseSynchronized = true
+      })
+      if (!poseSynchronized) validFocus = null
+    }
+    if (validFocus) {
       this.presentation = describeStarPresentation({ phase: 'star-focus' })
     } else {
       this.focusedStar = null
@@ -1217,7 +1321,8 @@ export class BabylonRenderer implements MindverseRenderer {
       attemptRecovery(() => { this.camera.radius = this.overviewRadius })
       this.presentation = describeStarPresentation({ phase: 'panorama' })
     }
-    attemptRecovery(() => this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey))
+    attemptRecovery(() => this.syncStarLayerPresentation())
+    this.lastPresentationInput = null
     attemptRecovery(() => this.syncOrbitPresentation())
     this.callbacks.onRenderError?.(original)
   }
@@ -1234,13 +1339,21 @@ export class BabylonRenderer implements MindverseRenderer {
     const approachProgress = this.activeFlight && this.activeFlight.flight.durationMs > 0
       ? this.activeFlight.elapsedMs / this.activeFlight.flight.durationMs
       : undefined
-    this.presentation = describeStarPresentation({
+    const input: NonNullable<typeof this.lastPresentationInput> = {
       phase,
       approachProgress,
       hoverProgress: this.hoverProgress,
       pressedProgress: this.pressedProgress,
-    })
-    this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+    }
+    const previous = this.lastPresentationInput
+    if (previous
+      && previous.phase === input.phase
+      && previous.approachProgress === input.approachProgress
+      && previous.hoverProgress === input.hoverProgress
+      && previous.pressedProgress === input.pressedProgress) return
+    this.presentation = describeStarPresentation(input)
+    this.lastPresentationInput = Object.freeze(input)
+    this.syncStarLayerPresentation()
   }
 
   private installPointerListeners(): void {
@@ -1249,6 +1362,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.canvas.addEventListener('pointerup', this.onPointerUp)
     this.canvas.addEventListener('pointercancel', this.onPointerCancel)
     this.canvas.addEventListener('lostpointercapture', this.onLostPointerCapture)
+    this.canvas.addEventListener('pointerleave', this.onPointerLeave)
     this.canvas.addEventListener('wheel', this.onWheel)
     window.addEventListener('keydown', this.onKeyDown)
   }
@@ -1259,6 +1373,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
     this.canvas.removeEventListener('pointercancel', this.onPointerCancel)
     this.canvas.removeEventListener('lostpointercapture', this.onLostPointerCapture)
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave)
     this.canvas.removeEventListener('wheel', this.onWheel)
     window.removeEventListener('keydown', this.onKeyDown)
   }
@@ -1333,6 +1448,11 @@ export class BabylonRenderer implements MindverseRenderer {
     this.applyPointerPresentationFeedback()
   }
 
+  private readonly onPointerLeave = (): void => {
+    this.pointerPresentation.pointerLeave()
+    this.applyPointerPresentationFeedback()
+  }
+
   private readonly onWheel = (event: WheelEvent): void => {
     if (this.destroyed || this.workspaceOpen) return
     this.cancelFlight('user')
@@ -1352,10 +1472,10 @@ export class BabylonRenderer implements MindverseRenderer {
     if (higher) return higher
     const rect = this.canvas.getBoundingClientRect()
     const candidates = this.candidateBuffer.update(
-      this.elapsedMs,
+      this.motionTime(),
       this.reducedMotion ? 0 : 1.35,
       (world, datum) => {
-        const projected = this.projectToCss(new Vector3(world.x, world.y, world.z))
+        const projected = this.projectToCss(this.candidateWorldScratch.set(world.x, world.y, world.z))
         return {
           x: projected.x,
           y: projected.y,
@@ -1424,7 +1544,17 @@ export class BabylonRenderer implements MindverseRenderer {
     this.hoverKey = feedback.hoverStarKey
     this.pressedKey = feedback.pressedStarKey
     this.canvas.style.cursor = feedback.cursor
-    if (syncLayer) this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+    if (syncLayer) this.syncStarLayerPresentation()
+  }
+
+  private syncStarLayerPresentation(): void {
+    if (this.lastLayerPresentation === this.presentation
+      && this.lastLayerHoverKey === this.hoverKey
+      && this.lastLayerPressedKey === this.pressedKey) return
+    this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+    this.lastLayerPresentation = this.presentation
+    this.lastLayerHoverKey = this.hoverKey
+    this.lastLayerPressedKey = this.pressedKey
   }
 
   private resizeLabels(): void {

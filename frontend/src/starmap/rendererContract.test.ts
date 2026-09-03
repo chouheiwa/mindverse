@@ -91,6 +91,31 @@ describe.each([
     expect(onPick).toHaveBeenCalledWith(legacy)
   })
 
+  test('duplicate focus is a true no-op with no repeated callback or pose change', () => {
+    const star = makeStar()
+    const datum = makeDatum(star)
+    const onPick = vi.fn()
+    const renderer = harness([datum], { onPick })
+    renderer.selected = null
+
+    expect(renderer.focusStar('alpha')).toBe(star)
+    const applyFocus = renderer.applyStarFocus ?? renderer.applyFocus
+    const clearCount = _name === 'Three' ? renderer.clearPlanet.mock.calls.length : 0
+    if (_name === 'Three') {
+      renderer.targetDist = 73
+      renderer.retarget = false
+    }
+
+    expect(renderer.focusStar('alpha')).toBe(star)
+    expect(applyFocus).toHaveBeenCalledOnce()
+    expect(onPick).toHaveBeenCalledOnce()
+    if (_name === 'Three') {
+      expect(renderer.clearPlanet).toHaveBeenCalledTimes(clearCount)
+      expect(renderer.targetDist).toBe(73)
+      expect(renderer.retarget).toBe(false)
+    }
+  })
+
   test('unknown and modern concept-fallback keys leave state and callbacks untouched', () => {
     const modern = makeStar({
       id: 'private:alpha', scope: 'private', externalQueryAllowed: false, questionIds: [], probeIds: [],
@@ -231,7 +256,7 @@ describe('Babylon camera recovery behavior', () => {
     renderer.starLayer.setFocus = vi.fn()
       .mockImplementationOnce(() => { throw original })
 
-    expect(() => renderer.applyStarFocus(datum)).not.toThrow()
+    expect(renderer.applyStarFocus(datum)).toBe(false)
 
     expect(onRenderError).toHaveBeenCalledOnce()
     expect(onRenderError).toHaveBeenCalledWith(original)
@@ -241,6 +266,24 @@ describe('Babylon camera recovery behavior', () => {
     expect(renderer.syncOrbitPresentation).toHaveBeenCalledOnce()
     expect([renderer.camera.target.x, renderer.camera.target.y, renderer.camera.target.z, renderer.camera.radius]
       .every(Number.isFinite)).toBe(true)
+  })
+
+  test('public focus reports failure when recovery retains the requested star', () => {
+    const datum = makeDatum(makeStar())
+    const onPick = vi.fn()
+    const renderer = recoveryHarness(datum, vi.fn())
+    renderer.stars = [datum]
+    renderer.universe = makeUniverse([datum.s])
+    renderer.mode = 'all'; renderer.wormIdx = 0; renderer.universeVisible = true
+    renderer.strataTransition = { phase: null }
+    renderer.callbacks = { onPick }
+    renderer.overviewTarget = Vector3.Zero(); renderer.overviewRadius = 30
+    renderer.starLayer.setFocus = vi.fn()
+      .mockImplementationOnce(() => { throw new Error('initial focus failed') })
+
+    expect(renderer.focusStar('alpha')).toBeNull()
+    expect(renderer.focusedStar).toBe(datum)
+    expect(onPick).not.toHaveBeenCalled()
   })
 
   test('a thrown flight-controller cause is reported once and invalidates the token', () => {
@@ -329,6 +372,36 @@ describe('Babylon camera recovery behavior', () => {
 })
 
 describe('Babylon stellar motion runtime', () => {
+  test('Escape during approach cancels the flight and exits to a safe panorama', () => {
+    const source = readFileSync('src/starmap/babylon/BabylonRenderer.ts', 'utf8')
+    expect(source).toMatch(/event\.key === 'Escape'[\s\S]*this\.exitHierarchy\(\)/)
+    const datum = makeDatum(makeStar())
+    const onPick = vi.fn()
+    const renderer = recoveryHarness(datum, vi.fn())
+    const cancel = vi.fn()
+    renderer.callbacks = { onPick }
+    renderer.workspaceOpen = false
+    renderer.universeVisible = true
+    renderer.focusedStar = datum
+    renderer.overviewTarget = new Vector3(4, 5, 6)
+    renderer.overviewRadius = 80
+    renderer.activeFlight = {
+      flight: { token: 3, starKey: 'alpha', from: { target: { x: 0, y: 0, z: 0 }, radius: 100 },
+        to: { target: { x: 1, y: 2, z: 3 }, radius: 20 }, durationMs: 1000 },
+      elapsedMs: 200,
+    }
+    renderer.cameraFlightController = { cancel }
+
+    renderer.exitHierarchy()
+
+    expect(cancel).toHaveBeenCalledWith('reset')
+    expect(renderer.activeFlight).toBeNull()
+    expect(renderer.focusedStar).toBeNull()
+    expect(renderer.camera.target.asArray()).toEqual([4, 5, 6])
+    expect(renderer.camera.radius).toBe(80)
+    expect(onPick).toHaveBeenCalledWith(null)
+  })
+
   test('rebases approach frames onto the live star without changing progress or logarithmic radius', () => {
     const datum = makeDatum(makeStar())
     const renderer = recoveryHarness(datum, vi.fn())

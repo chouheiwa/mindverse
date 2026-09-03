@@ -1184,7 +1184,7 @@ export class BabylonRenderer implements MindverseRenderer {
       return true
     } catch (cause) {
       this.recoverCamera(cause)
-      return this.focusedStar === star
+      return false
     }
   }
 
@@ -1523,7 +1523,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private exitHierarchy(): void {
     const target = exitTarget(!this.universeVisible ? 'strata'
       : this.selected ? 'planet-focus'
-        : this.activeFlight ? 'approach'
+        : this.activeFlight ? 'star-focus'
           : this.focusedStar ? 'star-focus' : 'panorama')
     if (target === 'star-focus') this.clearPlanet()
     else if (target === 'panorama') {

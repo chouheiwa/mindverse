@@ -440,6 +440,7 @@ export class Renderer implements MindverseRenderer {
     if (this.destroyed || this.unsupportedStrataRequest) return null
     const datum = resolveInteractiveStar(this.allStarData, starKey, this.mode, this.u, this.wormIdx)
     if (!datum) return null
+    if (this.focusedStar === datum && !this.selected) return datum.s
     this.clearPlanet()
     this.focusedStar = datum
     this.applyFocus()

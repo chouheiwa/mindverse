@@ -1,9 +1,11 @@
-import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { Viewport } from '@babylonjs/core/Maths/math.viewport.js'
 import { readFileSync } from 'node:fs'
 import { describe, expect, test, vi } from 'vitest'
 import type { Star, Universe } from '../types'
-import type { StarDatum } from './gl/starData'
+import { starData, type StarDatum } from './gl/starData'
 import { Renderer } from './Renderer'
+import * as babylonRendererModule from './babylon/BabylonRenderer'
 import { BabylonRenderer } from './babylon/BabylonRenderer'
 import { CameraFlightController } from './babylon/cameraFlight'
 import { StellarPointerPresentationController } from './babylon/orbitPresentation'
@@ -372,6 +374,70 @@ describe('Babylon camera recovery behavior', () => {
 })
 
 describe('Babylon stellar motion runtime', () => {
+  test('planet bookkeeping preserves canonical star identity through framing and mode changes', () => {
+    const privateStar = makeStar({
+      id: 'star:private', scope: 'private', externalQueryAllowed: false,
+      questionIds: ['question:private'], probeIds: [], c: 'shared', o: 1,
+    })
+    const publicStar = makeStar({
+      id: 'star:public', scope: 'public', externalQueryAllowed: true,
+      questionIds: ['question:public'], probeIds: [], c: 'shared', o: 0,
+    })
+    const questions = [
+      { id: 'question:private', questionId: 'private', title: 'Private', url: 'https://example.test/private', answerIds: [] },
+      { id: 'question:public', questionId: 'public', title: 'Public', url: 'https://example.test/public', answerIds: [] },
+    ]
+    const universe = {
+      ...makeUniverse([privateStar, publicStar]),
+      schemaVersion: 'universe.v1', analysisVersion: 'engine.v1', questions, answers: [], probes: [],
+    } as any
+    const index = {
+      universe,
+      starsById: new Map([['star:private', privateStar], ['star:public', publicStar]]),
+      questionsById: new Map(questions.map((question) => [question.id, question])),
+      answersById: new Map(), probesById: new Map(),
+    } as any
+    const canonicalStars = starData(universe)
+    const planets = babylonRendererModule.buildPlanetBookkeeping(index, canonicalStars)
+
+    expect(planets.map(({ star }) => star)).toEqual([canonicalStars[0], canonicalStars[1]])
+    expect(planets[0]?.star).toBe(canonicalStars[0])
+    expect(planets[1]?.star).toBe(canonicalStars[1])
+
+    const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.destroyed = false; renderer.planets = planets; renderer.stars = canonicalStars
+    renderer.universe = universe; renderer.mode = 'all'; renderer.wormIdx = 0
+    renderer.overviewRadius = 300; renderer.interactionByDatum = new Map()
+    renderer.visualByQuestion = new Map(); renderer.selected = null; renderer.selectedVisual = null
+    renderer.focusedStar = null; renderer.hoverKey = null
+    renderer.starLayer = { setFocus: vi.fn(), setDimensions: vi.fn() }
+    renderer.cameraFlightController = { cancel: vi.fn() }
+    renderer.callbacks = {}; renderer.syncOrbitPresentation = vi.fn()
+    renderer.resetView = vi.fn(() => { renderer.focusedStar = null })
+
+    const expectedExtent = planets[0]!.orbitR + planets[0]!.radius
+    expect(renderer.systemFraming(canonicalStars[0]).extent).toBeCloseTo(expectedExtent)
+    expect(renderer.selectQuestionPlanet('star:private', 'question:private')?.star).toBe(canonicalStars[0])
+    renderer.setMode('me', 0)
+    expect(renderer.resetView).not.toHaveBeenCalled()
+    expect(renderer.focusedStar).toBe(canonicalStars[0])
+  })
+
+  test('projects pointer candidates into retained caller-owned output', () => {
+    const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.engine = { getRenderWidth: () => 200, getRenderHeight: () => 100 }
+    renderer.camera = { viewport: new Viewport(0, 0, 1, 1) }
+    renderer.scene = { getTransformMatrix: () => Matrix.Identity() }
+    renderer.canvas = { getBoundingClientRect: () => ({ width: 400, height: 200 }) }
+    renderer.projectionIdentity = Matrix.Identity()
+    renderer.projectionViewport = new Viewport(0, 0, 1, 1)
+    renderer.projectedPositionScratch = new Vector3()
+    const output = { x: 0, y: 0, z: 0 }
+
+    expect(renderer.projectToCssToRef(Vector3.Zero(), output)).toBe(output)
+    expect([output.x, output.y, output.z].every(Number.isFinite)).toBe(true)
+  })
+
   test('Escape during approach cancels the flight and exits to a safe panorama', () => {
     const source = readFileSync('src/starmap/babylon/BabylonRenderer.ts', 'utf8')
     expect(source).toMatch(/event\.key === 'Escape'[\s\S]*this\.exitHierarchy\(\)/)

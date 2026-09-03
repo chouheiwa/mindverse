@@ -145,6 +145,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly projectionIdentity = Matrix.Identity()
   private readonly projectionViewport = new Viewport(0, 0, 1, 1)
   private readonly projectedPositionScratch = new Vector3()
+  private readonly pointerProjectionScratch = { x: 0, y: 0, z: 0 }
+  private readonly candidateProjectionScratch = { x: 0, y: 0, depth: 0, visible: false }
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -160,7 +162,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.stars = starData(index.universe)
     this.candidateBuffer = new ProjectedStarCandidateBuffer(this.stars)
     this.reducedMotion = reducedMotion
-    this.planets = buildPlanetBookkeeping(index)
+    this.planets = buildPlanetBookkeeping(index, this.stars)
     this.probes = new Set(index.probesById.keys())
 
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
@@ -793,6 +795,10 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private projectToCss(point: Vector3): { x: number; y: number; z: number } {
+    return this.projectToCssToRef(point, { x: 0, y: 0, z: 0 })
+  }
+
+  private projectToCssToRef<T extends { x: number; y: number; z: number }>(point: Vector3, result: T): T {
     const renderWidth = this.engine.getRenderWidth()
     const renderHeight = this.engine.getRenderHeight()
     const cameraViewport = this.camera.viewport
@@ -804,11 +810,10 @@ export class BabylonRenderer implements MindverseRenderer {
     const projected = this.projectedPositionScratch
     Vector3.ProjectToRef(point, this.projectionIdentity, this.scene.getTransformMatrix(), viewport, projected)
     const rect = this.canvas.getBoundingClientRect()
-    return {
-      x: projected.x * rect.width / Math.max(1, renderWidth),
-      y: projected.y * rect.height / Math.max(1, renderHeight),
-      z: projected.z,
-    }
+    result.x = projected.x * rect.width / Math.max(1, renderWidth)
+    result.y = projected.y * rect.height / Math.max(1, renderHeight)
+    result.z = projected.z
+    return result
   }
 
   private updatePlanetPosition(visual: PlanetVisual, elapsedMs: number): void {
@@ -1475,13 +1480,16 @@ export class BabylonRenderer implements MindverseRenderer {
       this.motionTime(),
       this.reducedMotion ? 0 : 1.35,
       (world, datum) => {
-        const projected = this.projectToCss(this.candidateWorldScratch.set(world.x, world.y, world.z))
-        return {
-          x: projected.x,
-          y: projected.y,
-          depth: projected.z,
-          visible: this.universeVisible && this.isInteractive(datum),
-        }
+        const projected = this.projectToCssToRef(
+          this.candidateWorldScratch.set(world.x, world.y, world.z),
+          this.pointerProjectionScratch,
+        )
+        const candidate = this.candidateProjectionScratch
+        candidate.x = projected.x
+        candidate.y = projected.y
+        candidate.depth = projected.z
+        candidate.visible = this.universeVisible && this.isInteractive(datum)
+        return candidate
       },
     )
     const picked = pickProjectedStar({
@@ -1602,10 +1610,13 @@ function releaseCanvasWebGLContext(canvas: HTMLCanvasElement): void {
   context?.getExtension('WEBGL_lose_context')?.loseContext()
 }
 
-function buildPlanetBookkeeping(index: UniverseIndex): readonly PlanetDatum[] {
+export function buildPlanetBookkeeping(
+  index: UniverseIndex,
+  stars: readonly StarDatum[],
+): readonly PlanetDatum[] {
   const timeline = buildMaterialTimeline([...index.answersById.values()])
   const planets: PlanetDatum[] = []
-  for (const star of starData(index.universe)) {
+  for (const star of stars) {
     if (!('id' in star.s)) continue
     for (const datum of selectPlanetData(index, star.s)) {
       const material = planetMaterialInput(datum, timeline)

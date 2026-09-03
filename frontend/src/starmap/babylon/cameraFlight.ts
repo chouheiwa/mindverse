@@ -148,8 +148,8 @@ function smoothstep(value: number): number {
   return value * value * (3 - 2 * value)
 }
 
-export function flightFrame(flight: CameraFlight, progress: number): CameraFrameResult {
-  if (!Number.isFinite(progress)
+export function cameraFlightFrame(flight: CameraFlight, elapsedMs: number): CameraFrameResult {
+  if (!Number.isFinite(elapsedMs)
     || !finiteVector(flight.from.target)
     || !finiteVector(flight.to.target)
     || !Number.isFinite(flight.from.radius)
@@ -159,7 +159,9 @@ export function flightFrame(flight: CameraFlight, progress: number): CameraFrame
     return Object.freeze({ ok: false, error: 'invalid-frame' })
   }
 
-  const clampedProgress = clamp(progress, 0, 1)
+  const clampedProgress = flight.durationMs === 0
+    ? 1
+    : clamp(elapsedMs / flight.durationMs, 0, 1)
   const eased = smoothstep(clampedProgress)
   const target = clampedProgress === 0
     ? freezeVector(flight.from.target)

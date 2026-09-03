@@ -26,12 +26,15 @@ describe('describeStarPresentation', () => {
     expect(quarter.coreAlpha + quarter.surfaceAlpha).toBe(1)
     expect(quarter.haloAlpha + quarter.coronaAlpha).toBe(1)
     expect(quarter.systemReveal).toBe(0)
+    expect(describeStarPresentation({ phase: 'approach', approachProgress: 0 }).nonFocusedOpacity)
+      .toBe(0.18)
     expect(halfway.coreAlpha).toBe(0.5)
     expect(halfway.surfaceAlpha).toBe(0.5)
     expect(halfway.systemReveal).toBe(0)
+    expect(halfway.nonFocusedOpacity).toBe(0.18)
     expect(arrival).toMatchObject({
       coreAlpha: 0, haloAlpha: 0, surfaceAlpha: 1, coronaAlpha: 1, systemReveal: 1,
-      lodIntent: 'surface',
+      nonFocusedOpacity: 0.18, lodIntent: 'surface',
     })
   })
 

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   CameraFlightController,
+  cameraFlightFrame,
   cameraFlightDuration,
   computeSystemExtent,
   createCameraFlight,
   exitTarget,
-  flightFrame,
   shouldExitOnWheel,
 } from './cameraFlight'
 
@@ -63,7 +63,7 @@ describe('camera flight geometry', () => {
   it('eases target vectors and logarithmically interpolates radius', () => {
     const result = flight({ start: { target: { x: 0, y: 0, z: 0 }, radius: 100 } })
     if (!result.ok) throw new Error('expected valid flight')
-    const frame = flightFrame(result.flight, 0.5)
+    const frame = cameraFlightFrame(result.flight, result.flight.durationMs / 2)
     expect(frame).toEqual(expect.objectContaining({ ok: true }))
     if (!frame.ok) return
     expect(frame.frame.target).toEqual({ x: 6, y: -2, z: 4 })
@@ -72,12 +72,14 @@ describe('camera flight geometry', () => {
     expect(frame.frame.complete).toBe(false)
   })
 
-  it('clamps sampling progress and reports completion at the destination', () => {
+  it('completes at the destination once elapsed milliseconds reach the duration', () => {
     const result = flight()
     if (!result.ok) throw new Error('expected valid flight')
-    const frame = flightFrame(result.flight, 2)
-    if (!frame.ok) throw new Error('expected valid frame')
-    expect(frame.frame).toMatchObject({ target, radius: 28, progress: 1, complete: true })
+    for (const elapsedMs of [result.flight.durationMs, result.flight.durationMs + 500]) {
+      const frame = cameraFlightFrame(result.flight, elapsedMs)
+      if (!frame.ok) throw new Error('expected valid frame')
+      expect(frame.frame).toMatchObject({ target, radius: 28, progress: 1, complete: true })
+    }
   })
 
   it('returns errors for invalid construction and sampling instead of emitting NaN', () => {
@@ -89,7 +91,16 @@ describe('camera flight geometry', () => {
     })
     const result = flight()
     if (!result.ok) throw new Error('expected valid flight')
-    expect(flightFrame(result.flight, Number.NaN)).toEqual({ ok: false, error: 'invalid-frame' })
+    expect(cameraFlightFrame(result.flight, Number.NaN))
+      .toEqual({ ok: false, error: 'invalid-frame' })
+  })
+
+  it('completes a zero-duration Reduced Motion flight at zero elapsed milliseconds', () => {
+    const result = flight({ reducedMotion: true, requestedMs: 0 })
+    if (!result.ok) throw new Error('expected valid flight')
+    const frame = cameraFlightFrame(result.flight, 0)
+    if (!frame.ok) throw new Error('expected valid frame')
+    expect(frame.frame).toMatchObject({ target, radius: 28, progress: 1, complete: true })
   })
 })
 

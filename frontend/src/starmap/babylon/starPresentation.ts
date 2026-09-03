@@ -64,7 +64,7 @@ function basePresentation(
       coronaIntensity: handoff,
       systemReveal,
       focusedOpacity: 1,
-      nonFocusedOpacity: 1 - handoff * 0.82,
+      nonFocusedOpacity: 0.18,
       lodIntent: progress === 0 ? 'point' : progress === 1 ? 'surface' : 'transition',
     }
   }

@@ -286,7 +286,7 @@ describe('PointerGestureController', () => {
   })
 
   it.each(['pointerCancel', 'lostPointerCapture'] as const)(
-    '%s fully resets a multitouch-invalidated gesture',
+    '%s clears primary state but waits for the remaining pointer',
     (transition) => {
       const gesture = new PointerGestureController()
       gesture.pointerDown({ pointerId: 1, inputKind: 'touch', x: 1, y: 2, starKey: 'star-a' })
@@ -297,6 +297,9 @@ describe('PointerGestureController', () => {
       expect(gesture.snapshot().activePointerId).toBeNull()
       expect(gesture.snapshot().pressedStarKey).toBeNull()
       expect(gesture.pointerUp({ pointerId: 1, x: 1, y: 2, starKey: 'star-a' })).toBeNull()
+      gesture[transition](2)
+      gesture.pointerDown({ pointerId: 3, inputKind: 'mouse', x: 5, y: 6, starKey: 'star-c' })
+      expect(gesture.pointerUp({ pointerId: 3, x: 5, y: 6, starKey: 'star-c' })).toBe('star-c')
     },
   )
 
@@ -314,5 +317,43 @@ describe('PointerGestureController', () => {
     expect(gesture.pointerUp({ pointerId: 1, x: 1, y: 1, starKey: 'star-a' })).toBeNull()
     expect(gesture.snapshot().activePointerId).toBeNull()
     expect(gesture.snapshot().pressedStarKey).toBeNull()
+  })
+
+  it.each([
+    { label: 'primary up first', firstUp: 1, finalOldUp: 2 },
+    { label: 'secondary up first', firstUp: 2, finalOldUp: 1 },
+  ])('$label blocks a third pointer until every old pointer ends', ({ firstUp, finalOldUp }) => {
+    const gesture = new PointerGestureController()
+    gesture.pointerDown({ pointerId: 1, inputKind: 'touch', x: 1, y: 1, starKey: 'star-a' })
+    gesture.pointerDown({ pointerId: 2, inputKind: 'touch', x: 2, y: 2, starKey: 'star-b' })
+    expect(gesture.pointerUp({ pointerId: firstUp, x: firstUp, y: firstUp, starKey: `star-${firstUp}` })).toBeNull()
+
+    gesture.pointerDown({ pointerId: 3, inputKind: 'touch', x: 3, y: 3, starKey: 'star-c' })
+    expect(gesture.pointerUp({ pointerId: 3, x: 3, y: 3, starKey: 'star-c' })).toBeNull()
+    expect(gesture.snapshot().pressedStarKey).toBeNull()
+    expect(gesture.pointerUp({
+      pointerId: finalOldUp, x: finalOldUp, y: finalOldUp, starKey: `star-${finalOldUp}`,
+    })).toBeNull()
+
+    gesture.pointerDown({ pointerId: 4, inputKind: 'mouse', x: 4, y: 4, starKey: 'star-d' })
+    expect(gesture.pointerUp({ pointerId: 4, x: 4, y: 4, starKey: 'star-d' })).toBe('star-d')
+  })
+
+  it.each([
+    { label: 'cancel primary then lose secondary', first: 'pointerCancel' as const, firstId: 1, last: 'lostPointerCapture' as const, lastId: 2 },
+    { label: 'lose secondary then cancel primary', first: 'lostPointerCapture' as const, firstId: 2, last: 'pointerCancel' as const, lastId: 1 },
+  ])('$label preserves invalidation in mixed cancellation order', ({ first, firstId, last, lastId }) => {
+    const gesture = new PointerGestureController()
+    gesture.pointerDown({ pointerId: 1, inputKind: 'touch', x: 1, y: 1, starKey: 'star-a' })
+    gesture.pointerDown({ pointerId: 2, inputKind: 'touch', x: 2, y: 2, starKey: 'star-b' })
+    gesture[first](firstId)
+
+    gesture.pointerDown({ pointerId: 3, inputKind: 'pen', x: 3, y: 3, starKey: 'star-c' })
+    expect(gesture.pointerUp({ pointerId: 3, x: 3, y: 3, starKey: 'star-c' })).toBeNull()
+    expect(gesture.snapshot().pressedStarKey).toBeNull()
+    gesture[last](lastId)
+
+    gesture.pointerDown({ pointerId: 4, inputKind: 'mouse', x: 4, y: 4, starKey: 'star-d' })
+    expect(gesture.pointerUp({ pointerId: 4, x: 4, y: 4, starKey: 'star-d' })).toBe('star-d')
   })
 })

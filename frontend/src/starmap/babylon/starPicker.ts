@@ -135,6 +135,11 @@ export class ProjectedStarCandidateBuffer {
     }))
   }
 
+  /**
+   * Updates retained storage in place. The returned array, its candidate objects,
+   * and the world-position object passed to `project` are reused and mutated by
+   * later updates; callers that retain a snapshot must copy the values they need.
+   */
   update(
     elapsedMs: number,
     bobAmplitude: number,
@@ -222,23 +227,20 @@ const EMPTY_GESTURE: PointerGestureSnapshot = {
 
 export class PointerGestureController {
   private state: PointerGestureSnapshot = EMPTY_GESTURE
+  private readonly downPointerIds = new Set<number>()
 
   snapshot(): PointerGestureSnapshot {
     return this.state
   }
 
   pointerDown(event: PointerDownTransition): void {
-    if (this.state.activePointerId !== null) {
-      if (event.pointerId !== this.state.activePointerId) {
-        this.state = {
-          ...this.state,
-          pressedStarKey: null,
-          cancelled: true,
-          multiPointerInvalidated: true,
-        }
-      }
+    if (this.downPointerIds.has(event.pointerId)) return
+    if (this.downPointerIds.size > 0) {
+      this.downPointerIds.add(event.pointerId)
+      this.invalidateForMultiplePointers()
       return
     }
+    this.downPointerIds.add(event.pointerId)
     const point = { x: event.x, y: event.y }
     this.state = {
       activePointerId: event.pointerId,
@@ -258,16 +260,20 @@ export class PointerGestureController {
   }
 
   pointerUp(event: PointerUpTransition): string | null {
-    if (event.pointerId !== this.state.activePointerId || !this.state.lastPoint) return null
-    this.addMovement(event)
-    const clickedStarKey = !this.state.cancelled
-      && !this.state.multiPointerInvalidated
-      && this.state.accumulatedMovement < 6
-      && this.state.pressedStarKey !== null
-      && event.starKey === this.state.pressedStarKey
-      ? this.state.pressedStarKey
-      : null
-    this.reset()
+    if (!this.downPointerIds.has(event.pointerId)) return null
+    let clickedStarKey: string | null = null
+    if (event.pointerId === this.state.activePointerId && this.state.lastPoint) {
+      this.addMovement(event)
+      clickedStarKey = this.downPointerIds.size === 1
+        && !this.state.cancelled
+        && !this.state.multiPointerInvalidated
+        && this.state.accumulatedMovement < 6
+        && this.state.pressedStarKey !== null
+        && event.starKey === this.state.pressedStarKey
+        ? this.state.pressedStarKey
+        : null
+    }
+    this.finishPointer(event.pointerId)
     return clickedStarKey
   }
 
@@ -292,7 +298,35 @@ export class PointerGestureController {
   }
 
   private cancel(pointerId: number): void {
-    if (pointerId === this.state.activePointerId) this.reset()
+    if (this.downPointerIds.has(pointerId)) this.finishPointer(pointerId)
+  }
+
+  private invalidateForMultiplePointers(): void {
+    this.state = {
+      ...this.state,
+      pressedStarKey: null,
+      cancelled: true,
+      multiPointerInvalidated: true,
+    }
+  }
+
+  private finishPointer(pointerId: number): void {
+    const primaryEnded = pointerId === this.state.activePointerId
+    this.downPointerIds.delete(pointerId)
+    if (this.downPointerIds.size === 0) {
+      this.reset()
+      return
+    }
+    this.state = {
+      ...this.state,
+      activePointerId: primaryEnded ? null : this.state.activePointerId,
+      inputKind: primaryEnded ? null : this.state.inputKind,
+      origin: primaryEnded ? null : this.state.origin,
+      lastPoint: primaryEnded ? null : this.state.lastPoint,
+      pressedStarKey: null,
+      cancelled: true,
+      multiPointerInvalidated: true,
+    }
   }
 
   private reset(): void {

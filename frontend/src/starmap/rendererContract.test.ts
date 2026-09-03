@@ -50,7 +50,7 @@ function babylonHarness(stars: StarDatum[], callbacks: { onPick?: (star: Star | 
   renderer.mode = 'all'
   renderer.wormIdx = 0
   renderer.universe = makeUniverse(stars.map(({ s }) => s))
-  renderer.applyStarFocus = vi.fn()
+  renderer.applyStarFocus = vi.fn((datum: StarDatum) => { renderer.focusedStar = datum })
   renderer.callbacks = callbacks
   return renderer
 }
@@ -69,8 +69,22 @@ describe.each([
 
     expect(renderer.focusStar('public:alpha')).toBe(modern)
     expect(renderer.applyStarFocus ?? renderer.applyFocus).toHaveBeenCalledOnce()
+    expect(renderer.focusedStar).toBe(datum)
     expect(onPick).toHaveBeenCalledOnce()
     expect(onPick).toHaveBeenCalledWith(modern)
+  })
+
+  test('focuses a legacy concept key with the exact domain star and one callback', () => {
+    const legacy = makeStar()
+    const datum = makeDatum(legacy)
+    const onPick = vi.fn()
+    const renderer = harness([datum], { onPick })
+
+    expect(renderer.focusStar('alpha')).toBe(legacy)
+    expect(renderer.focusedStar).toBe(datum)
+    expect(renderer.applyStarFocus ?? renderer.applyFocus).toHaveBeenCalledOnce()
+    expect(onPick).toHaveBeenCalledOnce()
+    expect(onPick).toHaveBeenCalledWith(legacy)
   })
 
   test('unknown and modern concept-fallback keys leave state and callbacks untouched', () => {
@@ -139,6 +153,66 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
 }
 
 describe('Babylon camera recovery behavior', () => {
+  test('a thrown current-star-position cause uses one recovery path and restores a finite panorama', () => {
+    const datum = makeDatum(makeStar())
+    const original = new Error('position preflight failed')
+    const onRenderError = vi.fn()
+    const renderer = recoveryHarness(datum, onRenderError)
+    renderer.currentStarPosition = vi.fn(() => { throw original })
+
+    expect(() => renderer.applyStarFocus(datum)).not.toThrow()
+
+    expect(onRenderError).toHaveBeenCalledOnce()
+    expect(onRenderError).toHaveBeenCalledWith(original)
+    expect(renderer.focusedStar).toBeNull()
+    expect(renderer.cameraFlightController.isActive(1)).toBe(false)
+    expect([renderer.camera.target.x, renderer.camera.target.y, renderer.camera.target.z, renderer.camera.radius]
+      .every(Number.isFinite)).toBe(true)
+  })
+
+  test('a thrown StarLayer focus cause is reported once and resynchronized to a legal focus', () => {
+    const datum = makeDatum(makeStar())
+    const original = new Error('star-layer preflight failed')
+    const onRenderError = vi.fn()
+    const renderer = recoveryHarness(datum, onRenderError)
+    renderer.starLayer.setFocus = vi.fn()
+      .mockImplementationOnce(() => { throw original })
+
+    expect(() => renderer.applyStarFocus(datum)).not.toThrow()
+
+    expect(onRenderError).toHaveBeenCalledOnce()
+    expect(onRenderError).toHaveBeenCalledWith(original)
+    expect(renderer.focusedStar).toBe(datum)
+    expect(renderer.starLayer.setFocus).toHaveBeenLastCalledWith('alpha', datum)
+    expect(renderer.starLayer.setPresentation).toHaveBeenCalledOnce()
+    expect(renderer.syncOrbitPresentation).toHaveBeenCalledOnce()
+    expect([renderer.camera.target.x, renderer.camera.target.y, renderer.camera.target.z, renderer.camera.radius]
+      .every(Number.isFinite)).toBe(true)
+  })
+
+  test('a thrown flight-controller cause is reported once and invalidates the token', () => {
+    const datum = makeDatum(makeStar())
+    const original = new Error('controller preflight failed')
+    const onRenderError = vi.fn()
+    const renderer = recoveryHarness(datum, onRenderError)
+    renderer.overviewTarget = Vector3.Zero()
+    renderer.overviewRadius = 30
+    const cancel = vi.fn()
+    renderer.cameraFlightController = {
+      start: vi.fn(() => { throw original }),
+      cancel,
+    }
+
+    expect(() => renderer.applyStarFocus(datum)).not.toThrow()
+
+    expect(onRenderError).toHaveBeenCalledOnce()
+    expect(onRenderError).toHaveBeenCalledWith(original)
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(renderer.activeFlight).toBeNull()
+    expect([renderer.camera.target.x, renderer.camera.target.y, renderer.camera.target.z, renderer.camera.radius]
+      .every(Number.isFinite)).toBe(true)
+  })
+
   test.each<[
     string,
     { cameraRadius?: number; bodyR?: number; orbitR?: number },

@@ -1077,55 +1077,53 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private applyStarFocus(star: StarDatum): void {
-    this.clearPlanet()
-    this.focusedStar = star
-    const starKey = starIdentity(star.s)
-    const target = this.currentStarPosition(star)
-    this.starLayer.setFocus(starKey, star)
-    const extents = this.planets
-      .filter((planet) => planet.star === star)
-      .map(({ orbitR, radius }) => ({ orbitR, radius }))
-    const extent = computeSystemExtent(star.bodyR, extents)
-    const distance = Vector3.Distance(this.camera.target, target)
-    if (!extent.ok) {
-      this.recoverCamera(new Error('Invalid camera flight input'))
-      return
+    try {
+      this.clearPlanet()
+      this.focusedStar = star
+      const starKey = starIdentity(star.s)
+      const target = this.currentStarPosition(star)
+      this.starLayer.setFocus(starKey, star)
+      const extents = this.planets
+        .filter((planet) => planet.star === star)
+        .map(({ orbitR, radius }) => ({ orbitR, radius }))
+      const extent = computeSystemExtent(star.bodyR, extents)
+      const distance = Vector3.Distance(this.camera.target, target)
+      if (!extent.ok
+        || !finiteVector3(target)
+        || !finiteVector3(this.camera.target)
+        || !finitePositive(this.camera.radius)
+        || !finitePositive(star.bodyR)
+        || !finitePositive(this.overviewRadius)
+        || !Number.isFinite(distance)) {
+        throw new Error('Invalid camera flight input')
+      }
+      const result = this.cameraFlightController.start({
+        starKey,
+        start: { target: this.camera.target, radius: this.camera.radius },
+        targetStar: target,
+        bodyR: star.bodyR,
+        systemExtent: extent.value,
+        overviewRadius: this.overviewRadius,
+        distance,
+        requestedMs: 1100,
+        reducedMotion: this.reducedMotion,
+      })
+      if (result.kind === 'started') {
+        this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
+        this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
+      } else if (result.kind === 'noop') {
+        this.activeFlight = null
+        this.camera.setTarget(target)
+        this.camera.radius = Math.max(8, star.bodyR * 14)
+        this.presentation = describeStarPresentation({ phase: 'star-focus' })
+      } else {
+        throw new Error('Invalid camera flight input')
+      }
+      this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+      this.syncOrbitPresentation()
+    } catch (cause) {
+      this.recoverCamera(cause)
     }
-    const invalidInput = !finiteVector3(target)
-      || !finiteVector3(this.camera.target)
-      || !finitePositive(this.camera.radius)
-      || !finitePositive(star.bodyR)
-      || !finitePositive(this.overviewRadius)
-      || !Number.isFinite(distance)
-    if (invalidInput) {
-      this.recoverCamera(new Error('Invalid camera flight input'))
-      return
-    }
-    const result = this.cameraFlightController.start({
-      starKey,
-      start: { target: this.camera.target, radius: this.camera.radius },
-      targetStar: target,
-      bodyR: star.bodyR,
-      systemExtent: extent.value,
-      overviewRadius: this.overviewRadius,
-      distance,
-      requestedMs: 1100,
-      reducedMotion: this.reducedMotion,
-    })
-    if (result.kind === 'started') {
-      this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
-      this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
-    } else if (result.kind === 'noop') {
-      this.activeFlight = null
-      this.camera.setTarget(target)
-      this.camera.radius = Math.max(8, star.bodyR * 14)
-      this.presentation = describeStarPresentation({ phase: 'star-focus' })
-    } else {
-      this.recoverCamera(new Error('Invalid camera flight input'))
-      return
-    }
-    this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
-    this.syncOrbitPresentation()
   }
 
   private applyModeDimensions(): void {
@@ -1189,12 +1187,21 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.focusedStar) {
       attemptRecovery(() => { focusedPosition = this.currentStarPosition(this.focusedStar as StarDatum) })
     }
-    const validFocus = this.focusedStar
+    let validFocus = this.focusedStar
       && this.isInteractive(this.focusedStar)
       && finitePositive(this.focusedStar.bodyR)
       && focusedPosition
       && finiteVector3(focusedPosition)
       ? this.focusedStar : null
+    if (validFocus) {
+      const recoveryFocus = validFocus
+      let focusSynchronized = false
+      attemptRecovery(() => {
+        this.starLayer.setFocus(starIdentity(recoveryFocus.s), recoveryFocus)
+        focusSynchronized = true
+      })
+      if (!focusSynchronized) validFocus = null
+    }
     attemptRecovery(() => this.pointerPresentation.clear())
     attemptRecovery(() => this.applyPointerPresentationFeedback(false))
     if (validFocus && focusedPosition) {

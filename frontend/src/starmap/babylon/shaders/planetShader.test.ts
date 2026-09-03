@@ -3,6 +3,11 @@ import { planetFragmentShader } from './planet.fragment.fx'
 import { planetVertexShader } from './planet.vertex.fx'
 
 describe('Babylon procedural planet shader contract', () => {
+  test('supports continuous reveal without making geometry pop', () => {
+    expect(planetFragmentShader).toContain('uniform float uReveal')
+    expect(planetFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^;]+uReveal/)
+  })
+
   test('declares Babylon attributes and a real near-surface displacement path', () => {
     expect(planetVertexShader).toMatch(/attribute\s+vec3\s+position\s*;/)
     expect(planetVertexShader).toMatch(/attribute\s+vec3\s+normal\s*;/)

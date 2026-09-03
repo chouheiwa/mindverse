@@ -213,7 +213,7 @@ function commandRenderer(reduceMotion: boolean, callbacks: Record<string, unknow
     ['probe:1', [owner]],
     ['probe:2', [owner]],
   ])
-  renderer.focusStar = owner
+  renderer.focusedStar = owner
   renderer.arrivedProbeId = 'probe:1'
   renderer.inspectionProbeId = 'probe:1'
   renderer.clearPlanet = vi.fn()
@@ -296,7 +296,7 @@ describe('Renderer probe inspection commands', () => {
 
     renderer.approachProbe('probe:1', 1)
 
-    expect(renderer.focusStar).toBe(ownerB)
+    expect(renderer.focusedStar).toBe(ownerB)
     expect(renderer.inspectionProbeId).toBe('probe:2')
     expect(renderer.probeTransition).toMatchObject({ probeId: 'probe:2', token: 2 })
     expect(renderer.probeTransitionRaf).toBe(201)
@@ -471,16 +471,16 @@ describe('Renderer probe inspection commands', () => {
     const focused = commandRenderer(true)
     focused.probeIds = new Set([sharedProbe.id])
     focused.probeOwnersById = owners
-    focused.focusStar = ownerB
+    focused.focusedStar = ownerB
     focused.approachProbe(sharedProbe.id, 21)
-    expect(focused.focusStar).toBe(ownerB)
+    expect(focused.focusedStar).toBe(ownerB)
 
     const panorama = commandRenderer(true)
     panorama.probeIds = new Set([sharedProbe.id])
     panorama.probeOwnersById = owners
-    panorama.focusStar = null
+    panorama.focusedStar = null
     panorama.approachProbe(sharedProbe.id, 22)
-    expect(panorama.focusStar).toBe(ownerA)
+    expect(panorama.focusedStar).toBe(ownerA)
   })
 
   test('a valid indexed probe with no remaining owner reports an error with the same token', () => {
@@ -499,7 +499,7 @@ describe('Renderer probe inspection commands', () => {
     const failed = vi.fn()
     const { renderer, layer } = realProbeRenderer(false, { onProbeError: failed })
     try {
-      renderer.focusStar = null
+      renderer.focusedStar = null
       renderer.startProbeScan(sharedProbe.id, 31)
       expect(failed).toHaveBeenCalledOnce()
       expect(failed.mock.calls[0][0]).toMatchObject({ probeId: sharedProbe.id, token: 31 })
@@ -524,7 +524,7 @@ describe('Renderer probe inspection commands', () => {
     })
     try {
       renderer.approachProbe(sharedProbe.id, 32)
-      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      const focusedId = currentDatumId(renderer.focusedStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
       const inspectionTarget = renderer.inspectionTarget as THREE.Vector3
       inspectionTarget.set(7, 8, 9)
@@ -571,12 +571,12 @@ describe('Renderer probe inspection commands', () => {
     })
     try {
       renderer.approachProbe(inspectedProbeId, 40)
-      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      const focusedId = currentDatumId(renderer.focusedStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
       renderer.focusProbePart('antenna')
       renderer.reduceMotion = false
       renderer.startProbeScan(inspectedProbeId, 41)
-      if (invalidateOwner) renderer.focusStar = stars[0]
+      if (invalidateOwner) renderer.focusedStar = stars[0]
 
       renderer.startProbeScan(invalidProbeId, 42)
 
@@ -610,7 +610,7 @@ describe('Renderer probe inspection commands', () => {
     })
     try {
       renderer.approachProbe(sharedProbe.id, 43)
-      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      const focusedId = currentDatumId(renderer.focusedStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
       const pose = new ProbeInspectionController().pan(24, -12)
       renderer.setProbeInspectionPose(pose)
@@ -665,7 +665,7 @@ describe('Renderer probe inspection commands', () => {
     const { renderer, layer, stars } = realProbeRenderer(true)
     try {
       renderer.approachProbe(sharedProbe.id, 46)
-      updateProbeNear(layer, stars, currentDatumId(renderer.focusStar as StarDatum))
+      updateProbeNear(layer, stars, currentDatumId(renderer.focusedStar as StarDatum))
       renderer.focusProbePart('antenna')
       let shouldFail = true
       renderer.probes = {
@@ -701,15 +701,15 @@ describe('Renderer probe inspection commands', () => {
   })
 
   test.each([
-    { name: 'panorama', approachProbeId: sharedProbe.id, mutate: (renderer: Record<string, unknown>) => { renderer.focusStar = null }, scanProbeId: sharedProbe.id },
-    { name: 'another owner', approachProbeId: 'article:22', mutate: (renderer: Record<string, unknown>, stars: readonly StarDatum[]) => { renderer.focusStar = stars[0] }, scanProbeId: 'article:22' },
+    { name: 'panorama', approachProbeId: sharedProbe.id, mutate: (renderer: Record<string, unknown>) => { renderer.focusedStar = null }, scanProbeId: sharedProbe.id },
+    { name: 'another owner', approachProbeId: 'article:22', mutate: (renderer: Record<string, unknown>, stars: readonly StarDatum[]) => { renderer.focusedStar = stars[0] }, scanProbeId: 'article:22' },
     { name: 'another probe', approachProbeId: sharedProbe.id, mutate: () => undefined, scanProbeId: 'article:22' },
   ])('real probe layer rejects $name after another inspection is ready', ({ approachProbeId, mutate, scanProbeId }) => {
     const failed = vi.fn()
     const { renderer, layer, stars } = realProbeRenderer(true, { onProbeError: failed })
     try {
       renderer.approachProbe(approachProbeId, 34)
-      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      const focusedId = currentDatumId(renderer.focusedStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
       mutate(renderer, stars)
       renderer.startProbeScan(scanProbeId, 35)
@@ -727,7 +727,7 @@ describe('Renderer probe inspection commands', () => {
     const { renderer, layer, stars } = realProbeRenderer(true, { onProbeScanComplete: complete })
     try {
       renderer.approachProbe(sharedProbe.id, 36)
-      const focusedId = currentDatumId(renderer.focusStar as StarDatum)
+      const focusedId = currentDatumId(renderer.focusedStar as StarDatum)
       updateProbeNear(layer, stars, focusedId)
       renderer.reduceMotion = false
       renderer.startProbeScan(sharedProbe.id, 37)

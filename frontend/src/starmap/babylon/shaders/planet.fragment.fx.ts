@@ -10,6 +10,7 @@ uniform float uSelected;
 uniform float uTime;
 uniform float uSeed;
 uniform float uCraterDensity;
+uniform float uReveal;
 
 varying vec3 vLocal;
 varying vec3 vNormal;
@@ -49,6 +50,6 @@ void main(void) {
   color += vec3(0.25, 0.74, 1.0) * scan * uSelected * 0.46;
   color += vec3(0.16, 0.31, 0.42) * uFreshness * pow(1.0 - abs(dot(vNormal, lightDirection)), 3.0) * 0.16;
 
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(color, uReveal);
 }
 `

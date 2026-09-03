@@ -3,6 +3,8 @@ import type { Mode, Star, Universe } from '../../types'
 import { DEPTH_FADE, ORBIT } from './chunks'
 import { IGNITE_MS, IGNITE_START, IGNITE_STEP, starData, type StarDatum } from './starData'
 import { ResourceScope } from '../resourceScope'
+import { renderDim } from '../starVisibility'
+export { modeDim, renderDim } from '../starVisibility'
 
 // 恒星：core / glow / flare 三层点云叠在同一批坐标上。
 //
@@ -299,45 +301,4 @@ function makeStarsScoped(u: Universe, reduceMotion: boolean, data: StarDatum[], 
     },
     dispose,
   }
-}
-
-/**
- * 模式压暗：这颗星在当前模式下是不是被强调的对象。
- *
- * 恒星拾取用这个，保留暗物质概念的可达性；问题行星必须用 renderDim，
- * 以便 CPU 拾取与行星 shader 的可见性完全一致。
- */
-export function modeDim(s: Star, mode: Mode, u: Universe, wormIdx: number): number {
-  switch (mode) {
-    case 'dark':
-      return u.dark.some((d) => d.c === s.c) ? 1 : 0.08
-    case 'nebula':
-      return u.nebula.some((x) => x.c === s.c) ? 1 : 0.1
-    case 'worm': {
-      const w = u.wormholes[wormIdx]
-      return w && (s.g === w.a || s.g === w.b) ? 1 : 0.11
-    }
-    case 'me':
-      // 一条创作都没有的足迹里，「哪些是我写的」不是信息 ——
-      // 按老规则每一颗都会被压到 0.1，整张图直接全灭。这时候不压。
-      return u.meta.own === 0 ? 1 : s.o > 0 ? 1 : 0.1
-    case 'solo':
-      // 边缘微光不在恒星列表里，这个模式下恒星整体退到背景
-      return 0.12
-    default:
-      return 1
-  }
-}
-
-/**
- * 渲染用的压暗，在 modeDim 之上再把熄灭的星压暗。
- *
- * 它们的语义从「反复收藏却一条没写 —— 不发光」换成了「曾经亮过，现在停了」，
- * 所以这里的下限也从 0.15（基本全黑）抬到 0.3：余烬该看得见。
- * 全黑对旧语义成立，对新语义就是白白从图上抹掉五颗真实存在的星。
- * 位置仍由引力透镜环标出（见 overlay3d.ts），环里现在是一点余光而不是空的。
- */
-export function renderDim(s: Star, mode: Mode, u: Universe, wormIdx: number): number {
-  const d = modeDim(s, mode, u, wormIdx)
-  return u.dark.some((x) => x.c === s.c) ? Math.min(d, 0.3) : d
 }

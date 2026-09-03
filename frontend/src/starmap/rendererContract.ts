@@ -101,6 +101,7 @@ export interface MindverseRenderer {
   resize(): void
   destroy(): void
   setMode(mode: Mode, wormIdx?: number): void
+  focusStar(starKey: string): Star | null
   resetView(): void
   clearPlanet(): void
   selectQuestionPlanet(starId: string, questionId: string): PlanetDatum | null

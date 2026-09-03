@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
-import type { Mode, Universe } from '../types'
+import type { Mode, Star, Universe } from '../types'
 import type { UniverseIndex } from '../domain/universe'
 import { makeNebula, type NebulaLayer } from './gl/nebula'
 import { makeStars, modeDim, renderDim, type StarLayer } from './gl/stars'
@@ -30,6 +30,7 @@ import {
   STANDARD_INSPECTION_POSE,
   type InspectionPose,
 } from './probeInspection'
+import { starIdentity } from './starIdentity'
 import type {
   MindverseRenderer,
   RendererCallbacks,
@@ -166,7 +167,7 @@ export class Renderer implements MindverseRenderer {
    * 行星和轨道依次浮现，不需要另开一个「恒星系模式」。
    */
   private focus = new THREE.Vector3()
-  private focusStar: StarDatum | null = null
+  private focusedStar: StarDatum | null = null
   private wantFocus = new THREE.Vector3()
   /**
    * 注视点相对目标的残余偏移，指数衰减到 0。
@@ -199,6 +200,7 @@ export class Renderer implements MindverseRenderer {
   private probeStarWorldPositions = new Map<string, THREE.Vector3>()
   private probeStarOpacities = new Map<string, number>()
   private probeStarData: StarDatum[] = []
+  private allStarData: StarDatum[] = []
   private probeIds = new Set<string>()
   private probeOwnersById: ReadonlyMap<string, readonly StarDatum[]> = new Map()
   private inspectionProbeId: string | null = null
@@ -272,6 +274,7 @@ export class Renderer implements MindverseRenderer {
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, this.R * 90)
 
     const data = starData(u)
+    this.allStarData = data
     this.probeStarData = data.filter(({ s }) => 'id' in s && s.probeIds.length > 0)
     for (const { s } of this.probeStarData) {
       if (!('id' in s)) continue
@@ -432,9 +435,22 @@ export class Renderer implements MindverseRenderer {
     this.applyMode()
   }
 
+  focusStar(starKey: string): Star | null {
+    if (this.destroyed || this.unsupportedStrataRequest) return null
+    const datum = this.allStarData.find(({ s }) => starIdentity(s) === starKey) ?? null
+    if (!datum || modeDim(datum.s, this.mode, this.u, this.wormIdx) < 0.4) return null
+    this.clearPlanet()
+    this.focusedStar = datum
+    this.applyFocus()
+    this.targetDist = SYSTEM_DIST
+    this.retarget = true
+    this.cb.onPick?.(datum.s)
+    return datum.s
+  }
+
   /** 退回星系全景。面板关闭、切模式时调用。 */
   resetView() {
-    this.focusStar = null
+    this.focusedStar = null
     this.applyFocus()
     this.targetDist = this.R * 1.62
     this.retarget = true
@@ -450,7 +466,7 @@ export class Renderer implements MindverseRenderer {
     this.cb.onPickPlanet?.(null)
     this.retarget = true
     // resetView 会先把 focusStar 清掉再调这里，所以那条路径不会被覆盖
-    if (this.focusStar) this.targetDist = SYSTEM_DIST
+    if (this.focusedStar) this.targetDist = SYSTEM_DIST
   }
 
   /** Semantic-list equivalent of pointer picking. */
@@ -493,12 +509,12 @@ export class Renderer implements MindverseRenderer {
     try {
       this.requireProbe(probeId)
       const owners = this.probeOwnersById.get(probeId) ?? []
-      const focusedStarId = this.focusStar ? currentStarId(this.focusStar) : null
+      const focusedStarId = this.focusedStar ? currentStarId(this.focusedStar) : null
       const owner = owners.find((candidate) => currentStarId(candidate) === focusedStarId) ?? owners[0]
       if (!owner) throw new Error(`Probe has no owner: ${probeId}`)
       this.clearPlanet()
       if (!this.isCurrentProbeTransition(transition)) return
-      this.focusStar = owner
+      this.focusedStar = owner
       this.applyFocus()
       this.targetDist = SYSTEM_DIST
       this.retarget = true
@@ -696,8 +712,8 @@ export class Renderer implements MindverseRenderer {
     // 而卡片是钉在行星上的，卡片也会跟着飘出去。
     if (this.selected) {
       this.planetWorld(this.selected, A, this.wantFocus)
-    } else if (this.focusStar) {
-      this.starWorld(this.focusStar, A, this.wantFocus)
+    } else if (this.focusedStar) {
+      this.starWorld(this.focusedStar, A, this.wantFocus)
     } else {
       this.wantFocus.set(0, 0, 0)
     }
@@ -707,7 +723,7 @@ export class Renderer implements MindverseRenderer {
     }
     // 全部按时间衰减，不按帧 —— 按帧的话掉到 30fps 滞后就翻倍，
     // 跟随行星时直接表现为它偏出画面
-    const rate = this.selected ? 9 : this.focusStar ? 6 : 4
+    const rate = this.selected ? 9 : this.focusedStar ? 6 : 4
     this.focusOff.multiplyScalar(Math.exp(-rate * dt))
     if (this.focusOff.lengthSq() < 1e-6) this.focusOff.set(0, 0, 0)
     this.focus.copy(this.wantFocus).add(this.focusOff)
@@ -749,7 +765,7 @@ export class Renderer implements MindverseRenderer {
     this.stars.setUniform('uLitFloor', litFloor)
     this.bodies.setUniform('uLitFloor', litFloor)
     this.bodies.updatePlanetLods(this.camera, A, projScale)
-    const focusedStarId = this.focusStar && 'id' in this.focusStar.s ? this.focusStar.s.id : null
+    const focusedStarId = this.focusedStar && 'id' in this.focusedStar.s ? this.focusedStar.s.id : null
     for (const datum of this.probeStarData) {
       if (!('id' in datum.s)) continue
       const world = this.probeStarWorldPositions.get(datum.s.id)
@@ -780,7 +796,7 @@ export class Renderer implements MindverseRenderer {
     // 星云按方向采样，亮度与距离无关 —— 飞进一个恒星系之后，画面上只剩
     // 几个天体，星云就成了压倒性的奶白底。它是背景，靠近时必须退场。
     const nearK = 0.22 + 0.78 * smooth(this.dist, this.R * 0.35, this.R * 1.1)
-    const focusRetreat = nebulaFocusGain(Boolean(this.focusStar || this.selected))
+    const focusRetreat = nebulaFocusGain(Boolean(this.focusedStar || this.selected))
     this.nebula.setDim((this.mode === 'all' ? 1 : 0.48) * nearK * focusRetreat)
     this.nebula.update(A * 0.001, this.camera)
 
@@ -838,8 +854,8 @@ export class Renderer implements MindverseRenderer {
   }
 
   private applyFocus() {
-    const star = this.focusStar?.s ?? null
-    this.labelStrategy.setFocus(this.focusStar)
+    const star = this.focusedStar?.s ?? null
+    this.labelStrategy.setFocus(this.focusedStar)
     this.bodies.setFocus(star === null ? null : 'id' in star && typeof star.id === 'string' ? star.id : star.c)
     this.rings?.setFocus(star?.g ?? null)
     this.overlay.setFocus(star)
@@ -935,11 +951,11 @@ export class Renderer implements MindverseRenderer {
     this.lastTouch = performance.now()
     const next = this.targetDist * (1 + Math.sign(e.deltaY) * 0.12)
     // 三层下限：跟着行星 / 待在恒星系里 / 全景
-    const lo = this.selected ? PLANET_NEAR : this.focusStar ? SYSTEM_NEAR : this.R * 0.62
+    const lo = this.selected ? PLANET_NEAR : this.focusedStar ? SYSTEM_NEAR : this.R * 0.62
     this.targetDist = clamp(next, lo, this.R * 4.6)
     // 一路拉远就逐级脱离，不用专门去点「返回」：行星 → 恒星系 → 全景
     if (this.selected && this.targetDist > SYSTEM_DIST * 0.85) this.clearPlanet()
-    else if (this.focusStar && this.targetDist > this.R * 0.9) this.resetView()
+    else if (this.focusedStar && this.targetDist > this.R * 0.9) this.resetView()
   }
 
   private onDoubleClickBound = (event: MouseEvent) => this.onDoubleClick(event)
@@ -986,7 +1002,7 @@ export class Renderer implements MindverseRenderer {
     if (this.arrivedProbeId !== probeId || this.inspectionProbeId !== probeId) {
       throw new Error(`Probe inspection is not ready: ${probeId}`)
     }
-    const focusedStarId = this.focusStar ? currentStarId(this.focusStar) : null
+    const focusedStarId = this.focusedStar ? currentStarId(this.focusedStar) : null
     const hasFocusedOwner = (this.probeOwnersById.get(probeId) ?? [])
       .some((owner) => currentStarId(owner) === focusedStarId)
     if (!hasFocusedOwner) throw new Error(`Probe owner is not focused: ${probeId}`)
@@ -1090,20 +1106,17 @@ export class Renderer implements MindverseRenderer {
     if (star) {
       // 飞过去。LOD 挂在屏幕尺寸上，所以「靠近」这个动作本身
       // 就会把球体、行星、轨道依次带出来
-      this.focusStar = star
-      this.applyFocus()
-      this.targetDist = SYSTEM_DIST
-      this.retarget = true
-    } else if (this.focusStar) {
+      this.focusStar(starIdentity(star.s))
+    } else if (this.focusedStar) {
       this.resetView()
     }
-    this.cb.onPick?.(star?.s ?? null)
+    if (!star) this.cb.onPick?.(null)
   }
 
   private selectPlanet(planet: PlanetDatum) {
     this.selected = planet
     this.bodies.setSelected(planet.index)
-    this.focusStar = planet.star
+    this.focusedStar = planet.star
     this.applyFocus()
     this.targetDist = planetDist(planet.orbitR)
     this.retarget = true
@@ -1112,14 +1125,14 @@ export class Renderer implements MindverseRenderer {
 
   /** 光标下最近的行星，没有就返回 null。 */
   private hitPlanet(x: number, y: number): PlanetDatum | null {
-    if (!this.focusStar) return null
+    if (!this.focusedStar) return null
     const A = this.reduceMotion ? 0 : this.lastNow - (this.t0 ?? this.lastNow)
     const projScale = (this.h * this.dpr * 0.5) / Math.tan((FOV * Math.PI) / 360)
 
     let best: PlanetDatum | null = null
     let bestD = Infinity
 
-    for (const p of this.bodies.planetsForStar(this.focusStar)) {
+    for (const p of this.bodies.planetsForStar(this.focusedStar)) {
       const dim = renderDim(p.star.s, this.mode, this.u, this.wormIdx)
       this.planetWorld(p, A, this.tmp)
       this.tmp2.copy(this.tmp).applyMatrix4(this.camera.matrixWorldInverse)

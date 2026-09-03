@@ -8,18 +8,25 @@ import { Viewport } from '@babylonjs/core/Maths/math.viewport.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { CreateIcoSphere } from '@babylonjs/core/Meshes/Builders/icoSphereBuilder.js'
+import { CreateLines } from '@babylonjs/core/Meshes/Builders/linesBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import type { LinesMesh } from '@babylonjs/core/Meshes/linesMesh.js'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration.js'
 import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/defaultRenderingPipeline.js'
 import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
-import type { Mode } from '../../types'
+import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput } from '../gl/planetMaterials'
-import { installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot } from '../e2eDiagnostics'
-import { starData, type StarDatum } from '../gl/starData'
+import { starColor } from '../gl/blackbody'
+import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot } from '../e2eDiagnostics'
+import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
+import { starIdentity } from '../starIdentity'
+import { renderDim, starInteractionEligible } from '../starVisibility'
+import { detectQuality } from '../quality'
+import { clusterAxis, orbitRing } from '../projection'
 import type { PlanetDatum } from '../gl/bodies'
 import type {
   InspectionPose,
@@ -42,6 +49,19 @@ import {
   type CaveSpecimenPlacement,
 } from './strataScene'
 import { StrataTransitionController, type StrataAnimationPhase } from './strataTransition'
+import {
+  applyOrbitLineAlpha,
+  macroOrbitAlpha,
+  questionOrbitAlpha,
+  questionPlanetPresentation,
+  selectDominantClusterIds,
+  selectMacroOrbitRadius,
+  type OrbitPresentationState,
+} from './orbitPresentation'
+import { StarLayer } from './starLayer'
+import { describeStarPresentation, HOVER_INTERPOLATION_MS, type StarPresentation } from './starPresentation'
+import { PointerGestureController, ProjectedStarCandidateBuffer, pickProjectedStar, type PointerInputKind } from './starPicker'
+import { CameraFlightController, computeSystemExtent, exitTarget, shouldExitOnWheel, type CameraFlight } from './cameraFlight'
 
 const ORBIT_BASE = 2.1
 const ORBIT_STEP = 1.15
@@ -54,6 +74,12 @@ interface PlanetVisual {
   readonly descriptor: PlanetSurfaceDescriptor
   readonly mesh: Mesh
   readonly material: ShaderMaterial
+  readonly orbit: LinesMesh
+}
+
+interface MacroOrbitVisual {
+  readonly ownerKey: string
+  readonly mesh: LinesMesh
 }
 
 export class BabylonRenderer implements MindverseRenderer {
@@ -65,17 +91,34 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly scene: Scene
   private readonly camera: ArcRotateCamera
   private readonly universeRoot: TransformNode
+  private readonly universe: Universe
+  private readonly stars: readonly StarDatum[]
+  private readonly starByKey: ReadonlyMap<string, StarDatum>
+  private readonly starLayer: StarLayer
+  private readonly candidateBuffer: ProjectedStarCandidateBuffer
+  private readonly pointerGesture = new PointerGestureController()
+  private readonly cameraFlightController = new CameraFlightController()
   private caveRoot: TransformNode | null = null
   private readonly planets: readonly PlanetDatum[]
   private readonly visualByQuestion = new Map<string, PlanetVisual>()
+  private readonly macroOrbits: MacroOrbitVisual[] = []
   private readonly visualByMeshId = new Map<number, PlanetVisual>()
-  private readonly starByMeshId = new Map<number, StarDatum>()
   private readonly specimenByMeshId = new Map<number, CaveSpecimenPlacement>()
   private readonly probes: ReadonlySet<string>
   private readonly strataTransition: StrataTransitionController
   private selected: PlanetDatum | null = null
   private selectedVisual: PlanetVisual | null = null
   private focusedStar: StarDatum | null = null
+  private mode: Mode = 'all'
+  private wormIdx = 0
+  private readonly interactionByDatum = new Map<StarDatum, boolean>()
+  private hoverKey: string | null = null
+  private pressedKey: string | null = null
+  private hoverProgress = 0
+  private pressedProgress = 0
+  private activeFlight: Readonly<{ flight: CameraFlight; elapsedMs: number }> | null = null
+  private presentation: StarPresentation = describeStarPresentation({ phase: 'panorama' })
+  private cameraFailureReported = false
   private elapsedMs = 0
   private lastStrataMoveAt: number | null = null
   private overviewTarget = Vector3.Zero()
@@ -98,6 +141,10 @@ export class BabylonRenderer implements MindverseRenderer {
     this.canvas = canvas
     this.labelCanvas = labelCanvas
     this.callbacks = callbacks
+    this.universe = index.universe
+    this.stars = starData(index.universe)
+    this.starByKey = new Map(this.stars.map((datum) => [starIdentity(datum.s), datum]))
+    this.candidateBuffer = new ProjectedStarCandidateBuffer(this.stars)
     this.reducedMotion = reducedMotion
     this.planets = buildPlanetBookkeeping(index)
     this.probes = new Set(index.probesById.keys())
@@ -137,6 +184,15 @@ export class BabylonRenderer implements MindverseRenderer {
       camera.pinchDeltaPercentage = 0.012
       camera.attachControl(canvas, true)
       scene.activeCamera = camera
+      const forcedQuality = import.meta.env.VITE_E2E_DIAGNOSTICS === '1'
+        ? forcedE2EQuality(location.search)
+        : null
+      this.starLayer = new StarLayer(scene, this.stars, forcedQuality ?? detectQuality(reducedMotion), reducedMotion, {
+        parent: this.universeRoot,
+        onError: callbacks.onRenderError,
+      })
+      this.applyModeDimensions()
+      this.starLayer.setPresentation(this.presentation, null, null)
       this.strataTransition = new StrataTransitionController({
         capturePose: () => this.captureStrataEntryPose(),
         applyPose: (pose) => this.applyStrataPose(pose),
@@ -144,7 +200,7 @@ export class BabylonRenderer implements MindverseRenderer {
         animate: (phase, token, complete, fail) => this.animateStrata(phase, token, complete, fail),
       }, callbacks)
       this.createScene(index)
-      canvas.addEventListener('click', this.onCanvasClick)
+      this.installPointerListeners()
       runtimeConstructionStarted = true
       this.runtime = new BabylonRuntime({
         engine,
@@ -182,7 +238,7 @@ export class BabylonRenderer implements MindverseRenderer {
               const runtime = this.runtime.diagnostics()
               return {
                 rafLoops: runtime.renderLoops,
-                listeners: runtime.listeners + (this.destroyed ? 0 : 1),
+                listeners: runtime.listeners + (this.destroyed ? 0 : 7),
                 clickEvents: this.diagnosticClickEvents,
                 lastPick: this.diagnosticLastPick,
               }
@@ -203,7 +259,11 @@ export class BabylonRenderer implements MindverseRenderer {
 
   start(): void { this.runtime.start() }
   stop(): void { this.runtime.stop() }
-  suspend(): void { this.runtime.suspend() }
+  suspend(): void {
+    this.cancelFlight('suspend')
+    this.clearPointerFeedback()
+    this.runtime.suspend()
+  }
   resume(): void { this.runtime.resume() }
   resize(): void {
     this.runtime.resize()
@@ -216,20 +276,43 @@ export class BabylonRenderer implements MindverseRenderer {
     activeBabylonRenderers.delete(this)
     this.selected = null
     this.selectedVisual = null
+    this.cancelFlight('destroy')
+    this.clearPointerFeedback()
     this.strataTransition.destroy()
-    this.canvas.removeEventListener('click', this.onCanvasClick)
+    this.removePointerListeners()
+    this.starLayer.dispose()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') removeE2EDiagnostics(this)
     this.runtime.destroy()
   }
 
-  setMode(_mode: Mode, _wormIdx = 0): void {}
+  setMode(mode: Mode, wormIdx = 0): void {
+    if (this.destroyed) return
+    this.mode = mode
+    this.wormIdx = wormIdx
+    this.applyModeDimensions()
+    if (this.focusedStar && !this.isInteractive(this.focusedStar)) this.resetView()
+    if (this.hoverKey && !this.isKeyInteractive(this.hoverKey)) this.clearPointerFeedback()
+    this.syncOrbitPresentation()
+  }
+
+  focusStar(starKey: string): Star | null {
+    if (this.destroyed || !this.universeVisible || this.strataTransition.phase !== null) return null
+    const star = this.starByKey.get(starKey) ?? null
+    if (!star || !this.isInteractive(star)) return null
+    this.applyStarFocus(star)
+    this.callbacks.onPick?.(star.s)
+    return star.s
+  }
 
   resetView(): void {
     if (this.destroyed) return
+    this.cancelFlight('reset')
     this.clearPlanet()
     this.focusedStar = null
+    this.starLayer.setFocus(null, null)
     this.camera.setTarget(this.overviewTarget)
     this.camera.radius = this.overviewRadius
+    this.syncOrbitPresentation()
   }
 
   clearPlanet(): void {
@@ -240,9 +323,10 @@ export class BabylonRenderer implements MindverseRenderer {
     this.callbacks.onAnchor?.(0, 0, false)
     this.callbacks.onPickPlanet?.(null)
     if (this.focusedStar) {
-      this.camera.setTarget(Vector3.FromArray(this.focusedStar.p))
+      this.camera.setTarget(this.currentStarPosition(this.focusedStar))
       this.camera.radius = Math.max(8, this.focusedStar.bodyR * 14)
     }
+    this.syncOrbitPresentation()
   }
 
   selectQuestionPlanet(starId: string, questionId: string): PlanetDatum | null {
@@ -250,15 +334,18 @@ export class BabylonRenderer implements MindverseRenderer {
     const planet = this.planets.find((candidate) =>
       'id' in candidate.star.s && candidate.star.s.id === starId && candidate.question.id === questionId) ?? null
     if (!planet) return null
+    this.cancelFlight('planet')
     this.selectedVisual?.material.setFloat('uSelected', 0)
     this.selected = planet
     this.selectedVisual = this.visualByQuestion.get(planet.question.id) ?? null
     this.focusedStar = planet.star
+    this.starLayer.setFocus(starIdentity(planet.star.s), planet.star)
     this.selectedVisual?.material.setFloat('uSelected', 1)
     if (this.selectedVisual) {
       this.camera.setTarget(this.selectedVisual.mesh.position)
       this.camera.radius = Math.max(2.8, this.selectedVisual.descriptor.radius * 4.2)
     }
+    this.syncOrbitPresentation()
     this.callbacks.onPickPlanet?.(planet)
     return planet
   }
@@ -276,6 +363,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.camera.viewport = open && this.engine.getRenderWidth() > 760
       ? new Viewport(0.18, 0, 0.82, 1)
       : open ? new Viewport(0, 0.16, 1, 0.84) : new Viewport(0, 0, 1, 1)
+    if (open) this.clearPointerFeedback()
   }
 
   orbitWorkspace(deltaX: number, deltaY: number): void {
@@ -317,6 +405,8 @@ export class BabylonRenderer implements MindverseRenderer {
       })
       return
     }
+    this.cancelFlight('strata')
+    this.clearPointerFeedback()
     this.strataTransition.enter(request)
     this.lastStrataMoveAt = null
     const layout = this.strataTransition.layout
@@ -343,16 +433,12 @@ export class BabylonRenderer implements MindverseRenderer {
     pipeline.bloomWeight = 0.14
     pipeline.bloomKernel = 48
 
-    const stars = starData(index.universe)
-    this.configureOverview(stars)
-    for (const star of stars) this.createStar(star)
+    this.configureOverview(this.stars)
+    this.createMacroOrbits(index)
     for (const planet of this.planets) this.createPlanet(planet)
+    this.syncOrbitPresentation()
 
     this.scene.onBeforeRenderObservable.add(() => this.updateScene())
-  }
-
-  private readonly onCanvasClick = (event: MouseEvent): void => {
-    this.pickAtClient(event.clientX, event.clientY)
   }
 
   pickStrataAt(clientX: number, clientY: number): void {
@@ -369,8 +455,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.diagnosticClickEvents += 1
       this.diagnosticLastPick = !mesh ? 'none'
         : this.specimenByMeshId.has(mesh.uniqueId) ? 'specimen'
-          : this.visualByMeshId.has(mesh.uniqueId) ? 'planet'
-            : this.starByMeshId.has(mesh.uniqueId) ? 'star' : 'other'
+            : this.visualByMeshId.has(mesh.uniqueId) ? 'planet' : 'other'
     }
     if (!mesh) return
     const specimen = this.specimenByMeshId.get(mesh.uniqueId)
@@ -384,8 +469,6 @@ export class BabylonRenderer implements MindverseRenderer {
       if (starId) this.selectQuestionPlanet(starId, visual.datum.question.id)
       return
     }
-    const star = this.starByMeshId.get(mesh.uniqueId)
-    if (star) this.focusStar(star)
   }
 
   private configureOverview(stars: readonly StarDatum[]): void {
@@ -397,23 +480,6 @@ export class BabylonRenderer implements MindverseRenderer {
     this.overviewRadius = extent * 2.4
     this.camera.setTarget(center)
     this.camera.radius = this.overviewRadius
-  }
-
-  private createStar(star: StarDatum): void {
-    const mesh = CreateSphere(`star:${'id' in star.s ? star.s.id : star.s.c}`, {
-      diameter: Math.max(0.6, star.bodyR * 2),
-      segments: 12,
-    }, this.scene)
-    mesh.position.set(star.p[0], star.p[1], star.p[2])
-    mesh.parent = this.universeRoot
-    mesh.isPickable = true
-    const material = new StandardMaterial(`${mesh.name}:material`, this.scene)
-    const color = new Color3(star.color[0], star.color[1], star.color[2])
-    material.diffuseColor = color.scale(0.18)
-    material.emissiveColor = color.scale(1.35)
-    material.specularColor = Color3.Black()
-    mesh.material = material
-    this.starByMeshId.set(mesh.uniqueId, star)
   }
 
   private createPlanet(datum: PlanetDatum): void {
@@ -442,8 +508,9 @@ export class BabylonRenderer implements MindverseRenderer {
       uniforms: [
         'worldViewProjection', 'uTime', 'uDisplacement', 'uDetailDensity', 'uFaultStrength',
         'uThermal', 'uThermalIce', 'uFreshness', 'uCreated', 'uCollected', 'uSelected', 'uSeed',
-        'uCraterDensity',
+        'uCraterDensity', 'uReveal',
       ],
+      needAlphaBlending: true,
     })
     material.backFaceCulling = true
     material.setFloat('uTime', 0)
@@ -463,17 +530,114 @@ export class BabylonRenderer implements MindverseRenderer {
     material.setFloat('uSelected', 0)
     material.setFloat('uSeed', datum.material.seed)
     material.setFloat('uCraterDensity', descriptor.craterCount / 48)
+    material.setFloat('uReveal', 0)
     mesh.material = material
-    const visual = Object.freeze({ datum, descriptor, mesh, material })
+    const orbit = this.createQuestionOrbit(datum)
+    const visual = Object.freeze({ datum, descriptor, mesh, material, orbit })
     this.visualByQuestion.set(datum.question.id, visual)
     this.visualByMeshId.set(mesh.uniqueId, visual)
     this.updatePlanetPosition(visual, 0)
+  }
+
+  private createMacroOrbits(index: UniverseIndex): void {
+    const dominantClusterIds = selectDominantClusterIds(index.universe.clusters)
+    for (const cluster of index.universe.clusters) {
+      if (!dominantClusterIds.has(cluster.g)) continue
+      const color = starColor(cluster.hue, cluster.sat)
+      const radii: number[] = []
+      for (const member of cluster.mem) {
+        const star = index.universe.stars.find((candidate) => candidate.c === member)
+        if (!star) continue
+        const radius = Math.hypot(
+          star.p[0] - cluster.c[0],
+          star.p[1] - cluster.c[1],
+          star.p[2] - cluster.c[2],
+        )
+        radii.push(radius)
+      }
+      const radius = selectMacroOrbitRadius(radii)
+      if (radius === null) continue
+      const points = orbitRing(cluster.c, clusterAxis(cluster.g), radius, 96)
+        .map((point) => Vector3.FromArray(point))
+      if (points.length > 0) points.push(points[0].clone())
+      const mesh = CreateLines(`cluster-orbit:${cluster.g}:${radius}`, { points, useVertexAlpha: true }, this.scene)
+      mesh.parent = this.universeRoot
+      mesh.color = new Color3(color[0], color[1], color[2]).scale(0.22)
+      mesh.alpha = 0
+      mesh.isPickable = false
+      this.macroOrbits.push({ ownerKey: String(cluster.g), mesh })
+    }
+  }
+
+  private createQuestionOrbit(datum: PlanetDatum): LinesMesh {
+    const points: Vector3[] = []
+    for (let index = 0; index <= 96; index += 1) {
+      const angle = Math.PI * 2 * index / 96
+      const cosine = Math.cos(angle)
+      const sine = Math.sin(angle)
+      points.push(new Vector3(
+        datum.star.p[0] + (datum.u[0] * cosine + datum.v[0] * sine) * datum.orbitR,
+        datum.star.p[1] + (datum.u[1] * cosine + datum.v[1] * sine) * datum.orbitR,
+        datum.star.p[2] + (datum.u[2] * cosine + datum.v[2] * sine) * datum.orbitR,
+      ))
+    }
+    const orbit = CreateLines(`question-orbit:${datum.question.id}`, { points, useVertexAlpha: true }, this.scene)
+    orbit.parent = this.universeRoot
+    orbit.color = new Color3(datum.star.color[0], datum.star.color[1], datum.star.color[2])
+    orbit.alpha = 0
+    orbit.isPickable = false
+    return orbit
+  }
+
+  private orbitPresentationState(): OrbitPresentationState {
+    if (!this.universeVisible) return { phase: 'strata' }
+    const focusedOwnerKey = this.focusedStar ? starOwnerKey(this.focusedStar) : undefined
+    if (this.selected) return {
+      phase: 'planet-focus',
+      focusedOwnerKey,
+      selectedQuestionId: this.selected.question.id,
+    }
+    if (focusedOwnerKey && this.activeFlight) return {
+      phase: 'approach',
+      focusedOwnerKey,
+      systemReveal: this.presentation.systemReveal,
+    }
+    return focusedOwnerKey ? { phase: 'star-focus', focusedOwnerKey } : { phase: 'panorama' }
+  }
+
+  private syncOrbitPresentation(): void {
+    const state = this.orbitPresentationState()
+    for (const orbit of this.macroOrbits) {
+      applyOrbitLineAlpha(orbit.mesh, macroOrbitAlpha({ ...state, ownerKey: orbit.ownerKey }))
+    }
+    for (const visual of this.visualByQuestion.values()) {
+      const ownerKey = starOwnerKey(visual.datum.star)
+      applyOrbitLineAlpha(visual.orbit, questionOrbitAlpha({
+        ...state,
+        ownerKey,
+        questionId: visual.datum.question.id,
+      }))
+      const planet = questionPlanetPresentation({ ...state, ownerKey })
+      visual.material.setFloat('uReveal', planet.reveal)
+      visual.mesh.setEnabled(planet.visible)
+      visual.mesh.isPickable = planet.pickable
+    }
   }
 
   private updateScene(): void {
     if (this.destroyed) return
     const deltaTime = Math.min(50, Math.max(0, this.engine.getDeltaTime()))
     this.elapsedMs += this.reducedMotion ? 0 : deltaTime
+    this.updateCameraFlight(deltaTime)
+    this.updateStellarPresentation(deltaTime)
+    const renderHeight = Math.max(1, this.engine.getRenderHeight())
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    this.starLayer.update({
+      elapsedMs: this.elapsedMs,
+      renderHeight,
+      devicePixelRatio: dpr,
+      projectionScale: renderHeight * 0.5 / Math.tan(this.camera.fov * 0.5),
+    })
     for (const visual of this.visualByQuestion.values()) {
       this.updatePlanetPosition(visual, this.elapsedMs)
       visual.material.setFloat('uTime', this.elapsedMs)
@@ -481,6 +645,8 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.selectedVisual && this.universeVisible) {
       this.camera.target.copyFrom(this.selectedVisual.mesh.position)
       this.updateAnchor(this.selectedVisual.mesh)
+    } else if (this.focusedStar && !this.activeFlight && this.universeVisible) {
+      this.camera.target.copyFrom(this.currentStarPosition(this.focusedStar))
     }
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, deltaTime)
   }
@@ -497,11 +663,7 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private diagnosticScene(): RenderSnapshot['scene'] {
-    const firstStarMeshId = this.starByMeshId.keys().next().value as number | undefined
-    const firstStarMesh = firstStarMeshId === undefined
-      ? null
-      : this.scene.meshes.find(({ uniqueId }) => uniqueId === firstStarMeshId) ?? null
-    const firstStar = firstStarMesh ? this.projectToCss(firstStarMesh.getAbsolutePosition()) : null
+    const firstStar = this.stars[0] ? this.projectToCss(this.currentStarPosition(this.stars[0])) : null
     return {
       planetCount: this.visualByQuestion.size,
       probeCount: this.probes.size,
@@ -590,13 +752,24 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updatePlanetPosition(visual: PlanetVisual, elapsedMs: number): void {
     const datum = visual.datum
+    const starPosition = starWorldPosition(
+      datum.star,
+      elapsedMs,
+      this.reducedMotion ? 0 : 1.35,
+      new Vector3(),
+    )
     const angle = datum.phase + Math.PI * 2 / datum.period * (elapsedMs / 1000)
     const cosine = Math.cos(angle)
     const sine = Math.sin(angle)
     visual.mesh.position.set(
-      datum.star.p[0] + (datum.u[0] * cosine + datum.v[0] * sine) * datum.orbitR,
-      datum.star.p[1] + (datum.u[1] * cosine + datum.v[1] * sine) * datum.orbitR,
-      datum.star.p[2] + (datum.u[2] * cosine + datum.v[2] * sine) * datum.orbitR,
+      starPosition.x + (datum.u[0] * cosine + datum.v[0] * sine) * datum.orbitR,
+      starPosition.y + (datum.u[1] * cosine + datum.v[1] * sine) * datum.orbitR,
+      starPosition.z + (datum.u[2] * cosine + datum.v[2] * sine) * datum.orbitR,
+    )
+    visual.orbit.position.set(
+      starPosition.x - datum.star.p[0],
+      starPosition.y - datum.star.p[1],
+      starPosition.z - datum.star.p[2],
     )
     visual.mesh.rotation.y = angle * 0.37 + datum.material.seed * Math.PI * 2
   }
@@ -653,6 +826,8 @@ export class BabylonRenderer implements MindverseRenderer {
     this.scene.fogEnabled = !visible
     if (visible && !this.workspaceOpen) this.camera.attachControl(this.canvas, true)
     else this.camera.detachControl()
+    if (!visible) this.clearPointerFeedback()
+    this.syncOrbitPresentation()
   }
 
   private animateStrata(
@@ -893,12 +1068,315 @@ export class BabylonRenderer implements MindverseRenderer {
     }
   }
 
-  private focusStar(star: StarDatum): void {
+  private applyStarFocus(star: StarDatum): void {
     this.clearPlanet()
     this.focusedStar = star
-    this.camera.setTarget(Vector3.FromArray(star.p))
-    this.camera.radius = Math.max(8, star.bodyR * 14)
-    this.callbacks.onPick?.(star.s)
+    const starKey = starIdentity(star.s)
+    const target = this.currentStarPosition(star)
+    this.starLayer.setFocus(starKey, star)
+    const extents = this.planets
+      .filter((planet) => planet.star === star)
+      .map(({ orbitR, radius }) => ({ orbitR, radius }))
+    const extent = computeSystemExtent(star.bodyR, extents)
+    const result = extent.ok ? this.cameraFlightController.start({
+      starKey,
+      start: { target: this.camera.target, radius: this.camera.radius },
+      targetStar: target,
+      bodyR: star.bodyR,
+      systemExtent: extent.value,
+      overviewRadius: this.overviewRadius,
+      distance: Vector3.Distance(this.camera.target, target),
+      requestedMs: 1100,
+      reducedMotion: this.reducedMotion,
+    }) : { kind: 'error' as const, error: extent.error }
+    if (result.kind === 'started') {
+      this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
+      this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
+    } else {
+      this.activeFlight = null
+      this.camera.setTarget(target)
+      this.camera.radius = Math.max(8, star.bodyR * 14)
+      this.presentation = describeStarPresentation({ phase: 'star-focus' })
+    }
+    this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+    this.syncOrbitPresentation()
+  }
+
+  private applyModeDimensions(): void {
+    const dimensions = this.stars.map(({ s }) => renderDim(s, this.mode, this.universe, this.wormIdx))
+    this.interactionByDatum.clear()
+    for (const datum of this.stars) {
+      this.interactionByDatum.set(datum, starInteractionEligible(datum.s, this.mode, this.universe, this.wormIdx))
+    }
+    this.starLayer.setDimensions(dimensions)
+  }
+
+  private isInteractive(star: StarDatum): boolean {
+    return this.interactionByDatum.get(star) === true
+  }
+
+  private isKeyInteractive(starKey: string): boolean {
+    const datum = this.starByKey.get(starKey)
+    return Boolean(datum && this.isInteractive(datum))
+  }
+
+  private currentStarPosition(star: StarDatum): Vector3 {
+    return starWorldPosition(star, this.elapsedMs, this.reducedMotion ? 0 : 1.35, new Vector3())
+  }
+
+  private cancelFlight(reason: Parameters<CameraFlightController['cancel']>[0]): void {
+    this.cameraFlightController.cancel(reason)
+    this.activeFlight = null
+    this.presentation = describeStarPresentation({
+      phase: this.selected ? 'planet-focus' : this.focusedStar ? 'star-focus' : 'panorama',
+    })
+  }
+
+  private updateCameraFlight(deltaTime: number): void {
+    const active = this.activeFlight
+    if (!active) return
+    const elapsedMs = active.elapsedMs + deltaTime
+    const result = this.cameraFlightController.frame(active.flight, elapsedMs)
+    if (!result.ok) {
+      if (result.error === 'invalid-frame') this.recoverCamera(new Error('Invalid camera flight frame'))
+      return
+    }
+    try {
+      const { frame } = result
+      if (![frame.target.x, frame.target.y, frame.target.z, frame.radius].every(Number.isFinite)
+        || frame.radius <= 0) throw new Error('Invalid camera flight pose')
+      this.camera.setTarget(new Vector3(frame.target.x, frame.target.y, frame.target.z))
+      this.camera.radius = frame.radius
+      this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: frame.progress })
+      this.activeFlight = frame.complete ? null : Object.freeze({ flight: active.flight, elapsedMs })
+      if (frame.complete) this.presentation = describeStarPresentation({ phase: 'star-focus' })
+      this.syncOrbitPresentation()
+    } catch (cause) {
+      this.recoverCamera(cause)
+    }
+  }
+
+  private recoverCamera(cause: unknown): void {
+    this.cameraFlightController.cancel('reset')
+    this.activeFlight = null
+    const validFocus = this.focusedStar && this.isInteractive(this.focusedStar) ? this.focusedStar : null
+    if (validFocus) {
+      try { this.camera.setTarget(this.currentStarPosition(validFocus)) } catch { /* best-effort legal pose */ }
+      try { this.camera.radius = Math.max(8, validFocus.bodyR * 14) } catch { /* best-effort legal pose */ }
+      this.presentation = describeStarPresentation({ phase: 'star-focus' })
+    } else {
+      this.focusedStar = null
+      try { this.starLayer.setFocus(null, null) } catch { /* best-effort visual recovery */ }
+      try { this.camera.setTarget(this.overviewTarget) } catch { /* best-effort legal pose */ }
+      try { this.camera.radius = this.overviewRadius } catch { /* best-effort legal pose */ }
+      this.presentation = describeStarPresentation({ phase: 'panorama' })
+    }
+    try { this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey) } catch { /* best-effort visual recovery */ }
+    try { this.syncOrbitPresentation() } catch { /* preserve the original camera cause */ }
+    if (!this.cameraFailureReported) {
+      this.cameraFailureReported = true
+      this.callbacks.onRenderError?.(cause instanceof Error ? cause : new Error(String(cause)))
+    }
+  }
+
+  private updateStellarPresentation(deltaTime: number): void {
+    const hoverTarget = this.hoverKey ? 1 : 0
+    const hoverStep = this.reducedMotion ? 1 : Math.min(1, deltaTime / HOVER_INTERPOLATION_MS)
+    this.hoverProgress += (hoverTarget - this.hoverProgress) * hoverStep
+    this.pressedProgress = this.pressedKey ? 1 : 0
+    const phase = !this.universeVisible ? 'strata'
+      : this.selected ? 'planet-focus'
+        : this.activeFlight ? 'approach'
+          : this.focusedStar ? 'star-focus' : 'panorama'
+    const approachProgress = this.activeFlight && this.activeFlight.flight.durationMs > 0
+      ? this.activeFlight.elapsedMs / this.activeFlight.flight.durationMs
+      : undefined
+    this.presentation = describeStarPresentation({
+      phase,
+      approachProgress,
+      hoverProgress: this.hoverProgress,
+      pressedProgress: this.pressedProgress,
+    })
+    this.starLayer.setPresentation(this.presentation, this.hoverKey, this.pressedKey)
+  }
+
+  private installPointerListeners(): void {
+    this.canvas.addEventListener('pointerdown', this.onPointerDown)
+    this.canvas.addEventListener('pointermove', this.onPointerMove)
+    this.canvas.addEventListener('pointerup', this.onPointerUp)
+    this.canvas.addEventListener('pointercancel', this.onPointerCancel)
+    this.canvas.addEventListener('lostpointercapture', this.onLostPointerCapture)
+    this.canvas.addEventListener('wheel', this.onWheel)
+    window.addEventListener('keydown', this.onKeyDown)
+  }
+
+  private removePointerListeners(): void {
+    this.canvas.removeEventListener('pointerdown', this.onPointerDown)
+    this.canvas.removeEventListener('pointermove', this.onPointerMove)
+    this.canvas.removeEventListener('pointerup', this.onPointerUp)
+    this.canvas.removeEventListener('pointercancel', this.onPointerCancel)
+    this.canvas.removeEventListener('lostpointercapture', this.onLostPointerCapture)
+    this.canvas.removeEventListener('wheel', this.onWheel)
+    window.removeEventListener('keydown', this.onKeyDown)
+  }
+
+  private readonly onPointerDown = (event: PointerEvent): void => {
+    if (this.destroyed || this.workspaceOpen) return
+    this.canvas.focus({ preventScroll: true })
+    this.cancelFlight('user')
+    const target = this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
+    this.pointerGesture.pointerDown({
+      pointerId: event.pointerId,
+      inputKind: pointerKind(event.pointerType),
+      x: event.clientX,
+      y: event.clientY,
+      starKey: target,
+    })
+    this.pressedKey = target?.startsWith('star:') ? target.slice(5) : null
+    try { this.canvas.setPointerCapture(event.pointerId) } catch { /* detached canvas */ }
+  }
+
+  private readonly onPointerMove = (event: PointerEvent): void => {
+    if (this.destroyed || this.workspaceOpen) return
+    const active = this.pointerGesture.snapshot().activePointerId
+    this.pointerGesture.pointerMove({ pointerId: event.pointerId, x: event.clientX, y: event.clientY })
+    if (active !== null) {
+      this.pressedKey = this.pointerGesture.snapshot().pressedStarKey?.replace(/^star:/, '') ?? null
+      return
+    }
+    const target = this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
+    this.hoverKey = target?.startsWith('star:') ? target.slice(5) : null
+    this.canvas.style.cursor = target ? 'pointer' : ''
+  }
+
+  private readonly onPointerUp = (event: PointerEvent): void => {
+    if (this.destroyed) return
+    const before = this.pointerGesture.snapshot()
+    const target = this.pointerTarget(event.clientX, event.clientY, pointerKind(event.pointerType))
+    const chosen = this.pointerGesture.pointerUp({
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      starKey: target,
+    })
+    if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId)
+    this.pressedKey = null
+    if (chosen) {
+      if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+        this.diagnosticClickEvents += 1
+        this.diagnosticLastPick = chosen.startsWith('star:') ? 'star'
+          : chosen.startsWith('planet:') ? 'planet'
+            : chosen.startsWith('specimen:') ? 'specimen' : 'other'
+      }
+      this.activatePointerTarget(chosen)
+    }
+    else if (before.activePointerId === event.pointerId
+      && !before.cancelled
+      && !before.multiPointerInvalidated
+      && before.accumulatedMovement < 6
+      && before.pressedStarKey === null
+      && target === null) this.exitHierarchy()
+  }
+
+  private readonly onPointerCancel = (event: PointerEvent): void => {
+    this.pointerGesture.pointerCancel(event.pointerId)
+    this.clearPressedFeedback()
+  }
+
+  private readonly onLostPointerCapture = (event: PointerEvent): void => {
+    this.pointerGesture.lostPointerCapture(event.pointerId)
+    this.clearPressedFeedback()
+  }
+
+  private readonly onWheel = (event: WheelEvent): void => {
+    if (this.destroyed || this.workspaceOpen) return
+    this.cancelFlight('user')
+    const threshold = this.selected
+      ? Math.max(8, this.focusedStar?.bodyR ?? 1) * 0.85
+      : this.overviewRadius * 0.9
+    if (shouldExitOnWheel(event.deltaY, this.camera.radius, threshold)) this.exitHierarchy()
+  }
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && !this.destroyed && !this.workspaceOpen) this.exitHierarchy()
+  }
+
+  private pointerTarget(clientX: number, clientY: number, inputKind: PointerInputKind): string | null {
+    if (!this.universeVisible) return this.sceneTarget(clientX, clientY)
+    const higher = this.sceneTarget(clientX, clientY)
+    if (higher) return higher
+    const rect = this.canvas.getBoundingClientRect()
+    const candidates = this.candidateBuffer.update(
+      this.elapsedMs,
+      this.reducedMotion ? 0 : 1.35,
+      (world, datum) => {
+        const projected = this.projectToCss(new Vector3(world.x, world.y, world.z))
+        return {
+          x: projected.x,
+          y: projected.y,
+          depth: projected.z,
+          visible: this.universeVisible && this.isInteractive(datum),
+        }
+      },
+    )
+    const picked = pickProjectedStar({
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+      inputKind,
+      viewport: { width: rect.width, height: rect.height },
+    }, candidates)
+    return picked ? `star:${picked.starKey}` : null
+  }
+
+  private sceneTarget(clientX: number, clientY: number): string | null {
+    const rect = this.canvas.getBoundingClientRect()
+    const x = (clientX - rect.left) * this.engine.getRenderWidth() / Math.max(1, rect.width)
+    const y = (clientY - rect.top) * this.engine.getRenderHeight() / Math.max(1, rect.height)
+    const mesh = this.scene.pick(x, y)?.pickedMesh
+    if (!mesh) return null
+    const specimen = this.specimenByMeshId.get(mesh.uniqueId)
+    if (specimen) return `specimen:${specimen.answerId}`
+    const visual = this.visualByMeshId.get(mesh.uniqueId)
+    return visual && visual.mesh.isEnabled() && visual.mesh.isPickable
+      ? `planet:${visual.datum.question.id}` : null
+  }
+
+  private activatePointerTarget(target: string): void {
+    if (target.startsWith('star:')) {
+      this.focusStar(target.slice(5))
+      return
+    }
+    if (target.startsWith('planet:')) {
+      const visual = this.visualByQuestion.get(target.slice(7))
+      const starId = visual && 'id' in visual.datum.star.s ? visual.datum.star.s.id : null
+      if (visual && starId) this.selectQuestionPlanet(starId, visual.datum.question.id)
+      return
+    }
+    if (target.startsWith('specimen:')) this.strataTransition.focusAnswer(target.slice(9))
+  }
+
+  private exitHierarchy(): void {
+    const target = exitTarget(!this.universeVisible ? 'strata'
+      : this.selected ? 'planet-focus'
+        : this.activeFlight ? 'approach'
+          : this.focusedStar ? 'star-focus' : 'panorama')
+    if (target === 'star-focus') this.clearPlanet()
+    else if (target === 'panorama') {
+      this.resetView()
+      this.callbacks.onPick?.(null)
+    }
+  }
+
+  private clearPressedFeedback(): void {
+    this.pressedKey = null
+  }
+
+  private clearPointerFeedback(): void {
+    this.hoverKey = null
+    this.pressedKey = null
+    this.hoverProgress = 0
+    this.pressedProgress = 0
+    this.canvas.style.cursor = ''
   }
 
   private resizeLabels(): void {
@@ -915,10 +1393,18 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 }
 
+function starOwnerKey(star: StarDatum): string {
+  return 'id' in star.s ? star.s.id : star.s.c
+}
+
 function unsupported(message: string): Error {
   const cause = new Error(message)
   cause.name = 'UnsupportedRendererFeatureError'
   return cause
+}
+
+function pointerKind(value: string): PointerInputKind {
+  return value === 'touch' || value === 'pen' ? value : 'mouse'
 }
 
 function releaseCanvasWebGLContext(canvas: HTMLCanvasElement): void {

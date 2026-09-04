@@ -3,9 +3,12 @@ import { basename, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const STELLAR_BASELINE_SCHEMA = 'babylon-stellar-baseline.v1'
+export const PLANET_BASELINE_SCHEMA = 'babylon-planets-baseline.v1'
 export const STELLAR_STATE_NAMES = Object.freeze([
   'panorama', 'approach-midpoint', 'focused-star', 'planet-focus',
 ])
+export const PLANET_STATE_NAMES = Object.freeze(['magma', 'desert', 'rock', 'tundra', 'ice'])
+export const PLANET_IMAGE_NAMES = Object.freeze([...PLANET_STATE_NAMES, 'far-a', 'far-b', 'far-flip'])
 
 const PERFORMANCE_QUALITIES = Object.freeze(['medium', 'low'])
 const ABSOLUTE_BUDGETS = Object.freeze({ medium: 20, low: 33.3 })
@@ -258,6 +261,80 @@ export function deriveStellarPngPaths(jsonPath) {
   return Object.fromEntries(STELLAR_STATE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]))
 }
 
+export function derivePlanetPngPaths(jsonPath) {
+  const stem = basename(jsonPath, '.json')
+  const directory = dirname(jsonPath)
+  return Object.fromEntries(PLANET_IMAGE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]))
+}
+
+function validatePlanetSample(name, sample) {
+  if (!sample || sample.thermal !== name) throw new Error(`planet baseline: invalid ${name} thermal identity`)
+  positive(sample.bodyDiameter, `${name} body diameter`)
+  const dayNight = ratio(sample.dayNightContrast, `${name} day/night contrast`)
+  const atmosphere = ratio(sample.atmosphereEdgeRatio, `${name} atmosphere edge ratio`)
+  const bloom = ratio(sample.bloomHighlightRatio, `${name} bloom highlight ratio`)
+  const variance = ratio(sample.colorVariance, `${name} color variance`)
+  positive(sample.roughnessContrast, `${name} roughness contrast`)
+  if (!Array.isArray(sample.meanColor) || sample.meanColor.length !== 3 || !sample.meanColor.every(Number.isFinite)) {
+    throw new Error(`planet baseline: invalid ${name} mean color`)
+  }
+  if (dayNight < 0.06) throw new Error(`planet baseline: ${name} day/night contrast below gate`)
+  if (atmosphere < 0.005 || atmosphere > 0.35) throw new Error(`planet baseline: ${name} atmosphere edge outside gate`)
+  if (bloom > (name === 'magma' ? 0.12 : 0.04)) throw new Error(`planet baseline: ${name} bloom highlight exceeds gate`)
+  if (variance < 0.001) throw new Error(`planet baseline: ${name} color variance below gate`)
+}
+
+function comparePlanetSample(name, reference, measured) {
+  validatePlanetSample(name, reference)
+  validatePlanetSample(name, measured)
+  relativeSizeDrift(name, 'body size', reference.bodyDiameter, measured.bodyDiameter)
+  for (const metric of ['dayNightContrast', 'atmosphereEdgeRatio', 'bloomHighlightRatio', 'colorVariance', 'roughnessContrast']) {
+    const allowed = Math.max(0.015, Math.abs(reference[metric]) * 0.5)
+    if (Math.abs(measured[metric] - reference[metric]) > allowed) {
+      throw new Error(`planet baseline: ${name} ${metric} drift exceeded tolerance`)
+    }
+  }
+  const colorDrift = Math.hypot(...measured.meanColor.map((value, index) => value - reference.meanColor[index]))
+  if (colorDrift > 0.18) throw new Error(`planet baseline: ${name} mean color drift exceeded tolerance`)
+}
+
+function validateMaterialSeparation(samples) {
+  for (let left = 0; left < PLANET_STATE_NAMES.length; left += 1) {
+    for (let right = left + 1; right < PLANET_STATE_NAMES.length; right += 1) {
+      const a = samples[PLANET_STATE_NAMES[left]]
+      const b = samples[PLANET_STATE_NAMES[right]]
+      const colorDistance = Math.hypot(...a.meanColor.map((value, index) => value - b.meanColor[index]))
+      if (colorDistance <= 0.015) {
+        throw new Error(`planet baseline: ${a.thermal}/${b.thermal} material statistics are not distinguishable`)
+      }
+    }
+  }
+}
+
+function validateFarSample(far) {
+  if (!far || !PLANET_STATE_NAMES.includes(far.thermal)) throw new Error('planet baseline: invalid far thermal identity')
+  if (far.surfaceLevel !== 'low') throw new Error('planet baseline: far LOD must be low')
+  if (far.highPlanetCount !== 0) throw new Error('planet baseline: far sample must not retain a high mesh')
+  if (far.highFrequencyDetail !== false) throw new Error('planet baseline: far sample must disable high-frequency detail')
+  if (ratio(far.silhouetteDrift, 'far silhouette drift') > 0.02) throw new Error('planet baseline: far silhouette drift exceeds gate')
+  if (finite(far.lightAlignment, 'far light alignment') <= 0.05) throw new Error('planet baseline: far light direction does not align')
+  if (finite(far.lightDirectionFlip, 'far light direction flip') >= -0.5) throw new Error('planet baseline: far light direction did not flip')
+}
+
+export function comparePlanetRenderBaselines(baseline, candidate) {
+  for (const document of [baseline, candidate]) {
+    if (document.schemaVersion !== PLANET_BASELINE_SCHEMA) throw new Error(`planet baseline: schema must be ${PLANET_BASELINE_SCHEMA}`)
+    if (document.fixtureVersion !== 'planet-render-gate.v1') throw new Error('planet baseline: fixture mismatch')
+    if (document.rendererKind !== 'babylon') throw new Error('planet baseline: renderer kind must be Babylon')
+    validateViewport(document.viewport)
+    for (const name of PLANET_STATE_NAMES) validatePlanetSample(name, document.samples?.[name])
+    validateMaterialSeparation(document.samples)
+    validateFarSample(document.far)
+  }
+  for (const name of PLANET_STATE_NAMES) comparePlanetSample(name, baseline.samples[name], candidate.samples[name])
+  return { rendererKind: 'babylon', states: [...PLANET_STATE_NAMES, 'far'] }
+}
+
 export async function validateStellarPngArtifacts(jsonPath) {
   const paths = deriveStellarPngPaths(jsonPath)
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -271,6 +348,20 @@ export async function validateStellarPngArtifacts(jsonPath) {
     if (png.length === 0) throw new Error(`render baseline: empty PNG artifact ${name}`)
     if (png.length < signature.length || !png.subarray(0, signature.length).equals(signature)) {
       throw new Error(`render baseline: invalid PNG signature for ${name}`)
+    }
+  }
+  return paths
+}
+
+export async function validatePlanetPngArtifacts(jsonPath) {
+  const paths = derivePlanetPngPaths(jsonPath)
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  for (const name of PLANET_IMAGE_NAMES) {
+    let png
+    try { png = await readFile(paths[name]) } catch { throw new Error(`planet baseline: missing PNG artifact ${name}`) }
+    if (png.length === 0) throw new Error(`planet baseline: empty PNG artifact ${name}`)
+    if (png.length < signature.length || !png.subarray(0, signature.length).equals(signature)) {
+      throw new Error(`planet baseline: invalid PNG signature for ${name}`)
     }
   }
   return paths
@@ -314,6 +405,15 @@ async function main() {
     readFile(resolve(baselinePath), 'utf8').then(JSON.parse),
     readFile(resolve(candidatePath), 'utf8').then(JSON.parse),
   ])
+  if (baseline.schemaVersion === PLANET_BASELINE_SCHEMA || candidate.schemaVersion === PLANET_BASELINE_SCHEMA) {
+    await Promise.all([
+      validatePlanetPngArtifacts(resolve(baselinePath)),
+      validatePlanetPngArtifacts(resolve(candidatePath)),
+    ])
+    const result = comparePlanetRenderBaselines(baseline, candidate)
+    process.stdout.write(`render baselines verified: ${result.rendererKind}; states ${result.states.join(', ')}\n`)
+    return
+  }
   if (baseline.schemaVersion !== undefined || candidate.schemaVersion !== undefined) {
     await Promise.all([
       validateStellarPngArtifacts(resolve(baselinePath)),

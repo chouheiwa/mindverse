@@ -18,15 +18,15 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_babylon-D_6zVRPi.js": {
-    "file": "assets/babylon-D_6zVRPi.js",
+  "_babylon-CGtv7d4x.js": {
+    "file": "assets/babylon-CGtv7d4x.js",
     "name": "babylon",
     "imports": [
       "_theme-Dor0K0Z_.js",
       "universe.html"
     ],
     "dynamicImports": [
-      "_babylon-D_6zVRPi.js"
+      "_babylon-CGtv7d4x.js"
     ]
   },
   "_theme-CbzUqeID.css": {
@@ -54,7 +54,7 @@
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-D2zM-_oh.js",
+    "file": "assets/QuestionWorkspace-Cm0czc4o.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -80,7 +80,7 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-B65GQGRP.js",
+    "file": "assets/Universe-CC9xvA4Z.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
@@ -100,7 +100,7 @@
     ]
   },
   "universe.html": {
-    "file": "assets/universe-DFGFninj.js",
+    "file": "assets/universe-BJpwSUuM.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,
@@ -113,13 +113,13 @@
     ]
   },
   "virtual:mindverse-renderer": {
-    "file": "assets/_virtual_mindverse-renderer-B4j3cRmY.js",
+    "file": "assets/_virtual_mindverse-renderer-XOeVHD2B.js",
     "name": "_virtual_mindverse-renderer",
     "src": "virtual:mindverse-renderer",
     "isDynamicEntry": true,
     "imports": [
       "_api-vGgttR-j.js",
-      "_babylon-D_6zVRPi.js",
+      "_babylon-CGtv7d4x.js",
       "src/ui/Universe.tsx"
     ]
   }

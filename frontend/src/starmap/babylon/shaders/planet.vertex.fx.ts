@@ -23,6 +23,7 @@ uniform vec4 uLargeCraterShape[8];
 varying vec3 vLocal;
 varying vec3 vWorldPosition;
 varying vec3 vRadial;
+varying vec3 vWorldRadial;
 varying vec3 vNormal;
 varying float vHeight;
 varying float vRelief;
@@ -167,7 +168,7 @@ vec4 terrainSample(vec3 direction) {
   float mountainMask = smoothstep(0.48, 0.72, continents);
   float ridges = ridgedNoise(warped * 5.4, uOctaves) * mountainMask * uFaultStrength;
   float fineDetail = (gradientNoise(warped * mix(11.0, 23.0, uDetailDensity)) - 0.5)
-    * mix(0.0, 0.08, uDetailDensity);
+    * mix(0.028, 0.085, uDetailDensity);
   vec2 largeCraters = largeCraterField(direction);
   vec2 smallCraters = smallCraterField(direction);
   float height = (continents - 0.48) * 0.72 + ridges * 0.28 + fineDetail
@@ -205,9 +206,13 @@ void main(void) {
   vLocal = displaced;
   vWorldPosition = worldPosition.xyz;
   vRadial = radial;
+  vWorldRadial = normalize(mat3(world) * radial);
   vNormal = normalize(mat3(world) * localNormal);
   vHeight = terrain.x;
-  vRelief = terrain.x;
+  // A compact, high-frequency material signal. It is deliberately separate
+  // from displacement so small strata remain readable without distorting the
+  // silhouette or the stellar terminator.
+  vRelief = gradientNoise(radial * mix(14.0, 24.0, uDetailDensity)) - 0.5;
   vRidgeMask = clamp(terrain.y, 0.0, 1.0);
   vCraterMask = clamp(max(terrain.z, terrain.w), 0.0, 1.0);
   gl_Position = worldViewProjection * vec4(displaced, 1.0);

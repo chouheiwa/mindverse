@@ -53,6 +53,6 @@ void main(void) {
   float alpha = uDensity * pathLength * normalizedPath * nightShadow * uReveal
     / max(uShellRadius, 0.0001);
   alpha = clamp(alpha * (0.18 + limb * 0.82), 0.0, 0.72);
-  gl_FragColor = vec4(min(scattering * uDensity * nightShadow, vec3(1.4)), alpha);
+  gl_FragColor = vec4(min(scattering * nightShadow * 1.35, vec3(1.15)), alpha);
 }
 `

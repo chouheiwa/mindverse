@@ -69,6 +69,41 @@ describe('PlanetVisual resource boundary', () => {
     expect(visual.activeMesh).toBe(visual.orbitMesh)
   })
 
+  test('uses shared vertices for smooth surface and atmosphere normals at every LOD', () => {
+    const { visual } = setup()
+    visual.setLod('high')
+
+    expect(visual.focusMesh!.getTotalVertices()).toBeGreaterThanOrEqual(3_000)
+    for (const mesh of visual.meshes) {
+      const positions = mesh.getVerticesData('position')!
+      const normals = mesh.getVerticesData('normal')!
+      const normalsByPosition = new Map<string, Set<string>>()
+      for (let index = 0; index < positions.length; index += 3) {
+        const position = Array.from(positions.slice(index, index + 3), (value) => value.toFixed(5)).join(',')
+        const normal = Array.from(normals.slice(index, index + 3), (value) => value.toFixed(5)).join(',')
+        const values = normalsByPosition.get(position) ?? new Set<string>()
+        values.add(normal)
+        normalsByPosition.set(position, values)
+      }
+      expect([...normalsByPosition.values()].every((values) => values.size === 1)).toBe(true)
+    }
+  })
+
+  test('reports high-frequency detail only after the visible high mesh compiles', async () => {
+    let finishCompilation!: () => void
+    const compilation = new Promise<void>((resolve) => { finishCompilation = resolve })
+    const { visual } = setup({ compileSurface: async () => compilation })
+
+    visual.setFocusBlend(1)
+    const request = visual.ensureLod('high')
+    expect(visual.diagnostics()).toMatchObject({ surfaceLevel: 'high', highFrequencyDetail: false })
+    finishCompilation()
+    await request
+
+    expect(visual.focusMesh?.isEnabled()).toBe(true)
+    expect(visual.diagnostics()).toMatchObject({ surfaceLevel: 'high', highFrequencyDetail: true })
+  })
+
   test('does not update time or camera uniforms while its active surface is invisible', () => {
     const setFloat = vi.spyOn(ShaderMaterial.prototype, 'setFloat')
     const { visual } = setup()

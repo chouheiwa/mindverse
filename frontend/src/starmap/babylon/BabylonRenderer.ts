@@ -38,7 +38,7 @@ import type {
 } from '../rendererContract'
 import { BabylonRuntime, BabylonWebGL2RequiredError } from './runtime'
 import { buildPlanetSurfaceDescriptor, type PlanetSurfaceDescriptor } from './planetSurface'
-import { projectedCoverage } from './planetLod'
+import { projectedCoverage, projectedSphereDiameterPixels } from './planetLod'
 import { PlanetVisual } from './PlanetVisual'
 import { PlanetFocusController } from './PlanetFocusController'
 import {
@@ -143,6 +143,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private hoverProgress = 0
   private pressedProgress = 0
   private activeFlight: Readonly<{ flight: CameraFlight; elapsedMs: number }> | null = null
+  private diagnosticLastFlight: CameraFlight | null = null
   private presentation: StarPresentation = describeStarPresentation({ phase: 'panorama' })
   private lastLayerPresentation: StarPresentation | null = null
   private lastLayerHoverKey: string | null = null
@@ -328,6 +329,19 @@ export class BabylonRenderer implements MindverseRenderer {
                 surfaceFallback: diagnostics?.surfaceFallback ?? false,
                 atmosphereFallback: diagnostics?.atmosphereFallback ?? false,
                 rotation: diagnostics?.rotation ?? null,
+                thermalDominant: diagnostics?.thermalDominant ?? null,
+                highFrequencyDetail: diagnostics?.highFrequencyDetail ?? false,
+                visible: [...this.visualByQuestion.values()].flatMap(({ datum, visual }) => {
+                  if (!visual.activeMesh.isEnabled()) return []
+                  const details = visual.diagnostics()
+                  return [{
+                    questionId: datum.question.id,
+                    surfaceLevel: details.surfaceLevel,
+                    thermalDominant: details.thermalDominant,
+                    highFrequencyDetail: details.highFrequencyDetail,
+                    bounds: this.planetBounds(visual.activeMesh, visual.radius),
+                  }]
+                }),
               }
             },
             resources: () => ({
@@ -335,6 +349,8 @@ export class BabylonRenderer implements MindverseRenderer {
                 .filter(({ visual }) => visual.focusMesh?.isEnabled()).length,
             }),
             setApproachProgress: (progress) => this.setDiagnosticApproachProgress(progress),
+            preparePlanetCapture: () => this.prepareDiagnosticPlanetCapture(),
+            flipFarPlanetCapture: () => this.flipDiagnosticFarPlanetCapture(),
           },
         )
       }
@@ -627,6 +643,9 @@ export class BabylonRenderer implements MindverseRenderer {
       normalizedOrbitDistance: datum.orbitR / ORBIT_BASE,
     })
     const orbit = this.createQuestionOrbit(datum)
+    const diagnosticParams = import.meta.env.VITE_E2E_DIAGNOSTICS === '1' ? new URLSearchParams(location.search) : null
+    const surfaceFailure = diagnosticParams?.get('e2ePlanetSurfaceFail')
+    const atmosphereFailure = diagnosticParams?.get('e2ePlanetAtmosphereFail') === '1'
     let record: PlanetVisualRecord
     const visual = new PlanetVisual({
       scene: this.scene,
@@ -634,6 +653,15 @@ export class BabylonRenderer implements MindverseRenderer {
       parent: this.universeRoot,
       initialLod: this.quality === 'low' ? 'low' : 'medium',
       onMeshesChanged: () => this.refreshPlanetMeshIndex(record),
+      ...(surfaceFailure ? {
+        compileSurface: async (material, level, mesh) => {
+          if (surfaceFailure === 'all' || surfaceFailure === level) throw new Error(`E2E injected ${level} planet surface failure`)
+          await material.forceCompilationAsync(mesh)
+        },
+      } : {}),
+      ...(atmosphereFailure ? {
+        compileAtmosphere: async () => { throw new Error('E2E injected planet atmosphere failure') },
+      } : {}),
     })
     record = Object.freeze({ datum, descriptor, visual, orbit })
     this.visualByQuestion.set(datum.question.id, record)
@@ -787,6 +815,25 @@ export class BabylonRenderer implements MindverseRenderer {
     }
   }
 
+  private prepareDiagnosticPlanetCapture(): boolean {
+    const record = this.selectedVisual
+    if (!record || !this.universeVisible) return false
+    const target = record.visual.activeMesh.getAbsolutePosition().clone()
+    const light = this.currentStarPosition(record.datum.star).subtract(target)
+    let side = Vector3.Cross(light, Vector3.Up())
+    if (side.lengthSquared() < 1e-8) side = Vector3.Right()
+    side.normalize().scaleInPlace(this.camera.radius)
+    this.camera.setTarget(target)
+    this.camera.setPosition(target.add(side).add(Vector3.Up().scale(this.camera.radius * 0.12)))
+    return true
+  }
+
+  private flipDiagnosticFarPlanetCapture(): boolean {
+    if (!this.focusedStar || this.selectedVisual || !this.universeVisible) return false
+    this.camera.alpha += Math.PI
+    return true
+  }
+
   private diagnosticScene(): RenderSnapshot['scene'] {
     const firstStar = this.stars[0] ? this.projectToCss(this.currentStarPosition(this.stars[0])) : null
     return {
@@ -851,15 +898,25 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private selectedPlanetBounds(): RenderSnapshot['projectedBounds']['selectedPlanet'] {
-    const mesh = this.selectedVisual?.visual.activeMesh
-    if (!mesh || !this.universeVisible) return null
+    const visual = this.selectedVisual?.visual
+    if (!visual || !this.universeVisible) return null
+    return this.planetBounds(visual.activeMesh, visual.radius)
+  }
+
+  private planetBounds(mesh: Mesh, surfaceRadius: number): RenderSnapshot['projectedBounds']['selectedPlanet'] {
+    if (!this.universeVisible) return null
     mesh.computeWorldMatrix(true)
-    const points = mesh.getBoundingInfo().boundingBox.vectorsWorld.map((point) => this.projectToCss(point))
-    const minX = Math.min(...points.map(({ x }) => x))
-    const maxX = Math.max(...points.map(({ x }) => x))
-    const minY = Math.min(...points.map(({ y }) => y))
-    const maxY = Math.max(...points.map(({ y }) => y))
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+    const sphere = mesh.getBoundingInfo().boundingSphere
+    const center = this.projectToCss(sphere.centerWorld)
+    const rect = this.canvas.getBoundingClientRect()
+    const diameter = projectedSphereDiameterPixels(
+      surfaceRadius,
+      Vector3.Distance(this.camera.globalPosition, sphere.centerWorld),
+      this.camera.fov,
+      rect.width,
+      rect.height * this.camera.viewport.height,
+    )
+    return { x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter }
   }
 
   private answerSpecimenDiagnostics(): NonNullable<RenderSnapshot['projectedBounds']['answerSpecimens']> {
@@ -1307,10 +1364,12 @@ export class BabylonRenderer implements MindverseRenderer {
         reducedMotion: this.reducedMotion,
       })
       if (result.kind === 'started') {
+        this.diagnosticLastFlight = result.flight
         this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
         this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
         this.recordDiagnosticCameraSample()
       } else if (result.kind === 'noop') {
+        this.diagnosticLastFlight = null
         this.activeFlight = null
         this.camera.setTarget(target)
         this.camera.radius = framing.radius
@@ -1425,7 +1484,9 @@ export class BabylonRenderer implements MindverseRenderer {
       this.diagnosticApproachProgressOverride = null
       return wasFrozen
     }
-    const active = this.activeFlight
+    const active = this.activeFlight ?? (this.diagnosticLastFlight
+      ? Object.freeze({ flight: this.diagnosticLastFlight, elapsedMs: this.diagnosticLastFlight.durationMs })
+      : null)
     if (!active || !this.focusedStar || !Number.isFinite(progress) || progress < 0 || progress > 1) return false
     const deterministicTarget = starWorldPosition(this.focusedStar, 0, 0, new Vector3())
     const deterministicFlight: CameraFlight = Object.freeze({

@@ -36,5 +36,6 @@ describe('Babylon planet atmosphere shader contract', () => {
     expect(planetAtmosphereFragmentShader).toMatch(/alpha[\s\S]*pathLength/)
     expect(planetAtmosphereFragmentShader).toMatch(/alpha[\s\S]*uReveal/)
     expect(planetAtmosphereFragmentShader).toMatch(/clamp\(alpha/)
+    expect(planetAtmosphereFragmentShader).not.toMatch(/scattering\s*\*\s*uDensity/)
   })
 })

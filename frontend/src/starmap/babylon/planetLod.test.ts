@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { initialPlanetLod, nextPlanetLod, projectedCoverage } from './planetLod'
+import { initialPlanetLod, nextPlanetLod, projectedCoverage, projectedSphereDiameterPixels } from './planetLod'
 
 describe('projectedCoverage', () => {
   test('reports projected diameter as a fraction of the canvas short edge', () => {
@@ -15,6 +15,14 @@ describe('projectedCoverage', () => {
     expect(projectedCoverage(1, 1, 1, 100, 100)).toBe(0)
     expect(projectedCoverage(1, 10, Number.NaN, 100, 100)).toBe(0)
     expect(projectedCoverage(9, 10, 0.1, 100, 100)).toBe(1)
+  })
+
+  test('uses the projected spherical limb instead of an inflated box-corner envelope', () => {
+    const diameter = projectedSphereDiameterPixels(1, 10, Math.PI / 2, 1440, 900)
+    const boxCornerEnvelope = diameter * Math.SQRT2
+
+    expect(diameter).toBeCloseTo(90.4534, 3)
+    expect(boxCornerEnvelope - diameter).toBeGreaterThan(diameter * 0.4)
   })
 })
 

@@ -79,6 +79,7 @@ export class PlanetVisual {
   private selected = false
   private atmosphereFallback = false
   private highUnavailable = false
+  private readonly compiledSurfaceLevels = new Set<PlanetLod>()
   private disposed = false
   private readonly lightScratch = new Vector3()
 
@@ -176,6 +177,7 @@ export class PlanetVisual {
         const mesh = level === 'high' ? this.focusMesh : this.orbitMesh
         if (!mesh?.material) throw new Error(`Planet ${level} surface was not created`)
         await this.compileSurface(mesh.material, level, mesh)
+        this.compiledSurfaceLevels.add(level)
         if (level === 'high' && this.focusAtmosphereMesh?.material && !this.atmosphereFallback) {
           try {
             await this.compileAtmosphere(this.focusAtmosphereMesh.material, this.focusAtmosphereMesh)
@@ -247,6 +249,8 @@ export class PlanetVisual {
     surfaceFallback: boolean
     atmosphereFallback: boolean
     rotation: readonly [number, number, number, number]
+    thermalDominant: keyof PlanetSurfaceDescriptor['thermal']
+    highFrequencyDetail: boolean
   }> {
     const rotation = this.activeMesh.rotationQuaternion ?? Quaternion.Identity()
     return Object.freeze({
@@ -254,6 +258,11 @@ export class PlanetVisual {
       surfaceFallback: this.level === 'lambert',
       atmosphereFallback: this.atmosphereFallback,
       rotation: Object.freeze([rotation.x, rotation.y, rotation.z, rotation.w] as const),
+      thermalDominant: (Object.entries(this.descriptor.thermal) as [keyof PlanetSurfaceDescriptor['thermal'], number][])
+        .reduce((best, entry) => entry[1] > best[1] ? entry : best)[0],
+      highFrequencyDetail: this.level === 'high'
+        && this.compiledSurfaceLevels.has('high')
+        && this.focusMesh?.isEnabled() === true,
     })
   }
 
@@ -268,7 +277,8 @@ export class PlanetVisual {
   private createSurfaceMesh(suffix: string, level: PlanetLod): Mesh {
     const mesh = CreateIcoSphere(`planet:${this.descriptor.metadata.questionId}:${suffix}`, {
       radius: 1,
-      subdivisions: level === 'high' ? 6 : level === 'medium' ? 4 : 3,
+      subdivisions: level === 'high' ? 12 : level === 'medium' ? 6 : 3,
+      flat: false,
     }, this.scene)
     mesh.parent = this.parent ?? null
     mesh.scaling.setAll(this.radius)
@@ -296,7 +306,7 @@ export class PlanetVisual {
   private configureSurfaceMaterial(material: ShaderMaterial, level: PlanetLod): void {
     const terrain = buildPlanetTerrain(this.descriptor, level)
     material.setFloat('uTime', 0)
-    material.setFloat('uDisplacement', 0.08 + this.descriptor.detailDensity * 0.16)
+    material.setFloat('uDisplacement', 0.045 + this.descriptor.detailDensity * 0.08)
     material.setFloat('uDetailDensity', this.descriptor.detailDensity)
     material.setFloat('uFaultStrength', this.descriptor.faultStrength)
     material.setFloat('uWarpStrength', terrain.warpStrength)
@@ -332,9 +342,10 @@ export class PlanetVisual {
     const mesh = CreateIcoSphere(`planet:${this.descriptor.metadata.questionId}:${suffix}:atmosphere`, {
       radius: 1,
       subdivisions: suffix === 'focus' ? 5 : 3,
+      flat: false,
     }, this.scene)
     mesh.parent = this.parent ?? null
-    const shellRadius = this.radius * (1.025 + this.descriptor.atmosphere * 0.035)
+    const shellRadius = this.radius * (1.095 + this.descriptor.atmosphere * 0.025)
     mesh.scaling.setAll(shellRadius)
     mesh.isPickable = false
     mesh.metadata = { ...this.descriptor.metadata }
@@ -350,7 +361,7 @@ export class PlanetVisual {
     material.disableDepthWrite = true
     material.setColor3('uRayleighColor', new Color3(0.24, 0.48, 0.82))
     material.setFloat('uShellRadius', shellRadius)
-    material.setFloat('uDensity', 0.08 + this.descriptor.atmosphere * 0.24)
+    material.setFloat('uDensity', 0.20 + this.descriptor.atmosphere * 0.22)
     material.setFloat('uReveal', 0)
     material.setInt('uQualityLevel', suffix === 'focus' ? 2 : QUALITY_LEVEL[this.level === 'lambert' ? 'low' : this.level])
     mesh.material = material
@@ -376,6 +387,7 @@ export class PlanetVisual {
     this.focusMaterial = null
     this.focusAtmosphereMesh = null
     this.focusAtmosphereMaterial = null
+    this.compiledSurfaceLevels.delete('high')
   }
 
   private installLambertFallback(): void {

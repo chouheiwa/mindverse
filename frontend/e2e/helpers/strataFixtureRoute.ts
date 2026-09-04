@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import type { Page } from '@playwright/test'
 import type { WireCurrentStar, WireGeneration } from '../../src/types'
 
@@ -40,13 +41,16 @@ export function createStrataUniverseFixture(options: StrataFixtureOptions = {}):
     const radial = Math.sqrt(Math.max(0, 1 - unitY * unitY))
     const theta = index * goldenAngle
     const radius = 32 + index % 17 * 0.75
+    const concept = `Dense ${index.toString().padStart(3, '0')}`
+    const normalizedConcept = concept.split(/\p{White_Space}+/u).filter(Boolean).join(' ').toLowerCase()
+    const stableDigest = createHash('sha256').update(normalizedConcept).digest('hex').slice(0, 16)
     return {
-      id: `star:v1:public:dense-${index.toString().padStart(3, '0')}`,
+      id: `star:v1:public:${stableDigest}`,
       scope: 'public',
       externalQueryAllowed: true,
       questionIds: [],
       probeIds: [],
-      c: `Dense ${index.toString().padStart(3, '0')}`,
+      c: concept,
       g: 0,
       p: [Math.cos(theta) * radial * radius, unitY * radius, Math.sin(theta) * radial * radius],
       n: 1 + index % 37,

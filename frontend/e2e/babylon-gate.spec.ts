@@ -471,6 +471,30 @@ test('below-gate question opens a blocked surface-only room', async ({ page }) =
   await expect(page.getByRole('region', { name: '答案地层导航' })).toContainText('深层已阻断')
 })
 
+test('planet surface fallback stays pickable and can enter strata', async ({ page }) => {
+  await openBabylonUniverse(page, '?e2ePlanetSurfaceFail=all')
+  await expectReady(page)
+  await openStar(page)
+  await openQuestionWorkspace(page, '固定地层问题')
+  await expect.poll(async () => (await snapshot(page))!.planet.surfaceLevel).toBe('lambert')
+  expect((await snapshot(page))!.planet).toMatchObject({
+    selectedQuestionId: 'question:7', surfaceFallback: true, highFrequencyDetail: false,
+  })
+  await enterStrata(page, '回溯地层')
+  await exitStrata(page)
+})
+
+test('atmosphere fallback hides only the shell and preserves strata navigation', async ({ page }) => {
+  await openBabylonUniverse(page, '?e2ePlanetAtmosphereFail=1')
+  await expectReady(page)
+  await openStar(page)
+  await openQuestionWorkspace(page, '固定地层问题')
+  await expect.poll(async () => (await snapshot(page))!.planet.atmosphereFallback).toBe(true)
+  expect((await snapshot(page))!.planet.surfaceFallback).toBe(false)
+  await enterStrata(page, '回溯地层')
+  await exitStrata(page)
+})
+
 for (const [label, query, message] of [
   ['Engine 初始化', '?e2eEngineFail=1', /Engine initialization failure/],
   ['WebGL2 能力', '?e2eWebGL2Unavailable=1', /不支持 WebGL2/],

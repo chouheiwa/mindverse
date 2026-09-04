@@ -44,6 +44,7 @@ function installDiagnostics() {
     planet: () => ({
       selectedQuestionId: 'q:7', surfaceLevel: 'high', surfaceFallback: false,
       atmosphereFallback: false, rotation: [0, 0.2, 0, 0.98] as const,
+      thermalDominant: 'rock', highFrequencyDetail: true, visible: [],
     }),
     resources: () => ({ highPlanetCount: 1 }),
     stellar: () => ({

@@ -28,6 +28,15 @@ export interface RenderSnapshot {
     surfaceFallback: boolean
     atmosphereFallback: boolean
     rotation: readonly [number, number, number, number] | null
+    thermalDominant: 'magma' | 'desert' | 'rock' | 'tundra' | 'ice' | null
+    highFrequencyDetail: boolean
+    visible: readonly {
+      questionId: string
+      surfaceLevel: 'low' | 'medium' | 'high' | 'lambert'
+      thermalDominant: 'magma' | 'desert' | 'rock' | 'tundra' | 'ice'
+      highFrequencyDetail: boolean
+      bounds: { x: number, y: number, width: number, height: number } | null
+    }[]
   }
   resources: { highPlanetCount: number }
   stellar: StellarDiagnosticsSnapshot
@@ -89,6 +98,8 @@ export interface StellarDiagnosticsSnapshot {
 interface E2EDiagnosticsApi {
   snapshot(): RenderSnapshot
   setApproachProgress(progress: number | null): boolean
+  preparePlanetCapture(): boolean
+  flipFarPlanetCapture(): boolean
 }
 
 interface FrameSample {
@@ -124,6 +135,8 @@ export interface E2EDiagnosticsDetails {
   readonly planet?: () => RenderSnapshot['planet']
   readonly resources?: () => RenderSnapshot['resources']
   readonly setApproachProgress?: (progress: number | null) => boolean
+  readonly preparePlanetCapture?: () => boolean
+  readonly flipFarPlanetCapture?: () => boolean
 }
 
 declare global {
@@ -167,6 +180,8 @@ export function installE2EDiagnostics(
 ): void {
   let state: ActiveDiagnostics
   const api: E2EDiagnosticsApi = Object.freeze({
+    preparePlanetCapture: (): boolean => state.details.preparePlanetCapture?.() ?? false,
+    flipFarPlanetCapture: (): boolean => state.details.flipFarPlanetCapture?.() ?? false,
     setApproachProgress: (progress: number | null): boolean => {
       if (progress !== null && (!Number.isFinite(progress) || progress < 0 || progress > 1)) return false
       return state.details.setApproachProgress?.(progress) ?? false
@@ -194,6 +209,9 @@ export function installE2EDiagnostics(
           surfaceFallback: false,
           atmosphereFallback: false,
           rotation: null,
+          thermalDominant: null,
+          highFrequencyDetail: false,
+          visible: [],
         }),
         resources: { ...(state.details.resources?.() ?? { highPlanetCount: 0 }) },
         stellar: structuredClone(state.details.stellar?.() ?? {

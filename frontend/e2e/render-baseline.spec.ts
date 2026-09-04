@@ -4,11 +4,19 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, relative, resolve } from 'node:path'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
+import { parseUniverse } from '../src/domain/universe'
 import { createStrataUniverseFixture, installStrataFixture, strataUniverseFixture } from './helpers/strataFixtureRoute'
+import {
+  createPlanetRenderFixture,
+  installPlanetRenderFixture,
+  PLANET_FIXTURE_VERSION,
+  PLANET_RENDER_CASES,
+} from './helpers/planetFixtureRoute'
 
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1 } as const
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus'] as const
 type StateName = typeof STATE_NAMES[number]
+type PlanetThermal = typeof PLANET_RENDER_CASES[number]['thermal']
 
 test.use({ viewport: VIEWPORT, deviceScaleFactor: 1 })
 test.setTimeout(120_000)
@@ -33,6 +41,19 @@ test('dense fixture is a repeatable versioned 500-star universe without content 
   expect(universe.questions).toEqual([])
   expect(universe.answers).toEqual([])
   expect(universe.probes).toEqual([])
+  expect(() => parseUniverse(universe)).not.toThrow()
+})
+
+test('planet gate fixture deterministically pins five thermal cases without user snapshots', () => {
+  const first = createPlanetRenderFixture()
+  const second = createPlanetRenderFixture()
+  const universe = first.generation.universe
+  if (!universe || universe.schemaVersion !== 'universe.v1') throw new Error('expected current universe')
+  expect(first.fixtureVersion).toBe(PLANET_FIXTURE_VERSION)
+  expect(first).toEqual(second)
+  expect(universe.meta.source).toBe('e2e-planet-render-gate-v1')
+  expect(universe.stars?.[0]?.questionIds).toHaveLength(8)
+  expect(PLANET_RENDER_CASES.map(({ thermal }) => thermal)).toEqual(['magma', 'desert', 'rock', 'tundra', 'ice'])
 })
 
 test('baseline and candidate outputs derive disjoint PNG paths from their JSON stems', () => {
@@ -60,6 +81,17 @@ async function settleFrame(page: Page) {
   await page.evaluate(() => new Promise<void>((resolveFrame) => requestAnimationFrame(() => {
     requestAnimationFrame(() => resolveFrame())
   })))
+}
+
+async function isolateCanvasCapture(page: Page) {
+  await canvas(page).evaluate((target) => {
+    const root = target.parentElement
+    if (!root) throw new Error('render canvas has no capture root')
+    for (const sibling of [...root.children]) {
+      if (sibling !== target) sibling.remove()
+    }
+  })
+  await settleFrame(page)
 }
 
 async function readPngPixelMetrics(page: Page, png: Buffer) {
@@ -101,6 +133,77 @@ async function readPngPixelMetrics(page: Page, png: Buffer) {
       clippedWhiteRatio: clippedWhite / pixelCount,
     }
   }, png.toString('base64'))
+}
+
+async function readPlanetPixelMetrics(
+  page: Page,
+  png: Buffer,
+  bounds: { x: number; y: number; width: number; height: number },
+  lightPoint: { x: number; y: number },
+) {
+  return page.evaluate(async ({ base64, bounds, lightPoint }) => {
+    const binary = atob(base64)
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+    const decoded = document.createElement('canvas')
+    decoded.width = bitmap.width
+    decoded.height = bitmap.height
+    const context = decoded.getContext('2d', { willReadFrequently: true })!
+    context.drawImage(bitmap, 0, 0)
+    bitmap.close()
+    const pixels = context.getImageData(0, 0, decoded.width, decoded.height).data
+    const centerX = bounds.x + bounds.width / 2
+    const centerY = bounds.y + bounds.height / 2
+    const radius = Math.max(1, Math.min(bounds.width, bounds.height) / 2)
+    const lightLength = Math.max(1e-6, Math.hypot(lightPoint.x - centerX, lightPoint.y - centerY))
+    const lightX = (lightPoint.x - centerX) / lightLength
+    const lightY = (lightPoint.y - centerY) / lightLength
+    let day = 0; let dayCount = 0; let night = 0; let nightCount = 0
+    let edgeLuminance = 0; let edgeCount = 0; let outerLuminance = 0; let outerCount = 0; let bloom = 0; let bodyCount = 0
+    let redSum = 0; let greenSum = 0; let blueSum = 0; let colorSquareSum = 0; let gradient = 0
+    const startX = Math.max(1, Math.floor(centerX - radius * 1.2))
+    const endX = Math.min(decoded.width - 2, Math.ceil(centerX + radius * 1.2))
+    const startY = Math.max(1, Math.floor(centerY - radius * 1.2))
+    const endY = Math.min(decoded.height - 2, Math.ceil(centerY + radius * 1.2))
+    for (let y = startY; y <= endY; y += 1) for (let x = startX; x <= endX; x += 1) {
+      const dx = (x - centerX) / radius
+      const dy = (y - centerY) / radius
+      const radial = Math.hypot(dx, dy)
+      const index = (y * decoded.width + x) * 4
+      const red = pixels[index]! / 255
+      const green = pixels[index + 1]! / 255
+      const blue = pixels[index + 2]! / 255
+      const luminance = red * 0.2126 + green * 0.7152 + blue * 0.0722
+      if (radial <= 0.92) {
+        bodyCount += 1
+        if (dx * lightX + dy * lightY >= 0) { day += luminance; dayCount += 1 } else { night += luminance; nightCount += 1 }
+        if (Math.max(red, green, blue) >= 0.92) bloom += 1
+        redSum += red; greenSum += green; blueSum += blue
+        colorSquareSum += (red * red + green * green + blue * blue) / 3
+        const next = index + 4
+        const nextLum = pixels[next]! / 255 * 0.2126 + pixels[next + 1]! / 255 * 0.7152 + pixels[next + 2]! / 255 * 0.0722
+        gradient += Math.abs(nextLum - luminance)
+      } else if (radial >= 1 && radial <= 1.14) {
+        edgeCount += 1
+        edgeLuminance += luminance
+      } else if (radial >= 1.16 && radial <= 1.2) {
+        outerCount += 1
+        outerLuminance += luminance
+      }
+    }
+    const meanColor = [redSum / bodyCount, greenSum / bodyCount, blueSum / bodyCount]
+    const colorMean = (meanColor[0] + meanColor[1] + meanColor[2]) / 3
+    return {
+      bodyDiameter: Math.min(bounds.width, bounds.height),
+      dayNightContrast: Math.abs(day / dayCount - night / nightCount),
+      lightAlignment: day / dayCount - night / nightCount,
+      atmosphereEdgeRatio: Math.min(1, Math.abs(edgeLuminance / edgeCount - outerLuminance / outerCount) * 2),
+      bloomHighlightRatio: bloom / bodyCount,
+      colorVariance: Math.max(0, colorSquareSum / bodyCount - colorMean * colorMean),
+      meanColor,
+      roughnessContrast: gradient / bodyCount,
+    }
+  }, { base64: png.toString('base64'), bounds, lightPoint })
 }
 
 async function captureState(page: Page, name: StateName) {
@@ -207,11 +310,17 @@ test('captures four deterministic stellar states and gates dense performance @me
   const states = {} as Record<StateName, Awaited<ReturnType<typeof captureState>>>
   states.panorama = await captureState(page, 'panorama')
   await page.emulateMedia({ reducedMotion: 'no-preference' })
-  const target = (await snapshot(page)).stellar.projectedStars[0]!
-  await canvas(page).click({
-    position: { x: target.halo.x + target.halo.width / 2, y: target.halo.y + target.halo.height / 2 },
-    force: true,
-  })
+  await expect.poll(async () => {
+    const state = await snapshot(page)
+    if (state.stellar.focusedStarKey) return true
+    const target = state.stellar.projectedStars[0]
+    if (!target) return false
+    await canvas(page).click({
+      position: { x: target.halo.x + target.halo.width / 2, y: target.halo.y + target.halo.height / 2 },
+      force: true,
+    })
+    return (await snapshot(page)).stellar.focusedStarKey !== null
+  }).toBe(true)
   await expect.poll(async () => page.evaluate(() => window.__MINDVERSE_E2E__!.setApproachProgress(0.65)))
     .toBe(true)
   const frozenBefore = await snapshot(page)
@@ -251,6 +360,168 @@ test('captures four deterministic stellar states and gates dense performance @me
   await assertRelativePerformance(metrics)
   await writeOrAttachBaseline(metrics, states, testInfo)
 })
+
+test('captures five deterministic thermal planets and a stable far LOD candidate @metal-performance', async ({ page }, testInfo) => {
+  await installPlanetRenderFixture(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const captures = {} as Record<PlanetThermal, { metrics: Awaited<ReturnType<typeof readPlanetPixelMetrics>>; png: Buffer }>
+
+  for (const renderCase of PLANET_RENDER_CASES) {
+    await page.goto('/universe.html?e2eQuality=high')
+    await expectReady(page)
+    await focusFirstStar(page)
+    await page.getByRole('button', { name: new RegExp(renderCase.title) }).click()
+    await expect.poll(async () => (await snapshot(page)).planet.selectedQuestionId).toBe(renderCase.questionId)
+    await expect.poll(async () => (await snapshot(page)).planet.surfaceLevel).toBe('high')
+    await expect.poll(async () => (await snapshot(page)).planet.highFrequencyDetail).toBe(true)
+    expect(await page.evaluate(() => window.__MINDVERSE_E2E__!.preparePlanetCapture())).toBe(true)
+    await settleFrame(page)
+    const state = await snapshot(page)
+    expect(state.planet.thermalDominant).toBe(renderCase.thermal)
+    expect(state.planet.atmosphereFallback).toBe(false)
+    const bounds = state.projectedBounds.selectedPlanet
+    const star = state.stellar.projectedStars.find(({ starKey }) => starKey === state.stellar.focusedStarKey)
+    if (!bounds || !star) throw new Error(`${renderCase.thermal}: missing projected planet or star`)
+    await isolateCanvasCapture(page)
+    const png = await canvas(page).screenshot()
+    const metrics = await readPlanetPixelMetrics(page, png, bounds, {
+      x: star.core.x + star.core.width / 2,
+      y: star.core.y + star.core.height / 2,
+    })
+    expect(metrics.bodyDiameter).toBeGreaterThanOrEqual(180)
+    expect(metrics.dayNightContrast).toBeGreaterThanOrEqual(0.06)
+    expect(metrics.atmosphereEdgeRatio, `${renderCase.thermal} bounds=${JSON.stringify(bounds)} metrics=${JSON.stringify(metrics)}`)
+      .toBeGreaterThanOrEqual(0.005)
+    expect(metrics.atmosphereEdgeRatio).toBeLessThanOrEqual(0.35)
+    expect(metrics.bloomHighlightRatio).toBeLessThanOrEqual(renderCase.thermal === 'magma' ? 0.12 : 0.04)
+    expect(metrics.colorVariance).toBeGreaterThanOrEqual(0.001)
+    captures[renderCase.thermal] = { metrics, png }
+  }
+
+  const materials = PLANET_RENDER_CASES.map(({ thermal }) => captures[thermal].metrics)
+  for (let left = 0; left < materials.length; left += 1) for (let right = left + 1; right < materials.length; right += 1) {
+    const colorDistance = Math.hypot(...materials[left].meanColor.map((value, index) => value - materials[right].meanColor[index]!))
+    expect(colorDistance,
+      `${PLANET_RENDER_CASES[left].thermal}/${PLANET_RENDER_CASES[right].thermal} mean colors ${materials[left].meanColor.join(',')} / ${materials[right].meanColor.join(',')}`,
+    ).toBeGreaterThan(0.015)
+  }
+
+  await page.goto('/universe.html?e2eQuality=low')
+  await expectReady(page)
+  await focusFirstStar(page)
+  const farAState = await snapshot(page)
+  const farVisual = farAState.planet.visible.find(({ questionId }) => questionId === 'question:103')
+  const star = farAState.stellar.projectedStars.find(({ starKey }) => starKey === farAState.stellar.focusedStarKey)
+  if (!farVisual?.bounds || !star) throw new Error('far ice sample is not projected')
+  await isolateCanvasCapture(page)
+  const farA = await canvas(page).screenshot()
+  const farAMetrics = await readPlanetPixelMetrics(page, farA, farVisual.bounds, {
+    x: star.core.x + star.core.width / 2,
+    y: star.core.y + star.core.height / 2,
+  })
+  await settleFrame(page)
+  const farBState = await snapshot(page)
+  const farBVisual = farBState.planet.visible.find(({ questionId }) => questionId === 'question:103')
+  if (!farBVisual?.bounds) throw new Error('second far ice sample is not projected')
+  const farB = await canvas(page).screenshot()
+  const silhouetteDrift = Math.max(
+    Math.abs(farVisual.bounds.width - farBVisual.bounds.width), Math.abs(farVisual.bounds.height - farBVisual.bounds.height),
+  ) / Math.max(1, farVisual.bounds.width, farVisual.bounds.height)
+  expect(await page.evaluate(() => window.__MINDVERSE_E2E__!.flipFarPlanetCapture())).toBe(true)
+  await settleFrame(page)
+  const farFlipState = await snapshot(page)
+  const farFlipVisual = farFlipState.planet.visible.find(({ questionId }) => questionId === 'question:103')
+  const farFlipStar = farFlipState.stellar.projectedStars.find(({ starKey }) => starKey === farFlipState.stellar.focusedStarKey)
+  if (!farFlipVisual?.bounds || !farFlipStar) throw new Error('flipped far ice sample is not projected')
+  const farFlip = await canvas(page).screenshot()
+  const farFlipMetrics = await readPlanetPixelMetrics(page, farFlip, farFlipVisual.bounds, {
+    x: farFlipStar.core.x + farFlipStar.core.width / 2,
+    y: farFlipStar.core.y + farFlipStar.core.height / 2,
+  })
+  const lightA = projectedDirection(star.core, farVisual.bounds)
+  const lightFlip = projectedDirection(farFlipStar.core, farFlipVisual.bounds)
+  const lightDirectionFlip = lightA.x * lightFlip.x + lightA.y * lightFlip.y
+  expect(farVisual.surfaceLevel).toBe('low')
+  expect(farVisual.thermalDominant).toBe('rock')
+  expect(farVisual.highFrequencyDetail).toBe(false)
+  expect(farAState.resources.highPlanetCount).toBe(0)
+  expect(silhouetteDrift).toBeLessThanOrEqual(0.02)
+  expect(farAMetrics.lightAlignment).toBeGreaterThan(0.01)
+  expect(farFlipMetrics.lightAlignment).toBeGreaterThan(0.01)
+  expect(lightDirectionFlip).toBeLessThan(-0.5)
+
+  const metrics = {
+    schemaVersion: 'babylon-planets-baseline.v1',
+    fixtureVersion: PLANET_FIXTURE_VERSION,
+    rendererKind: 'babylon',
+    viewport: VIEWPORT,
+    samples: Object.fromEntries(PLANET_RENDER_CASES.map(({ thermal }) => [thermal, { thermal, ...captures[thermal].metrics }])),
+    far: {
+      thermal: farVisual.thermalDominant,
+      surfaceLevel: farVisual.surfaceLevel,
+      highPlanetCount: farAState.resources.highPlanetCount,
+      highFrequencyDetail: farVisual.highFrequencyDetail,
+      silhouetteDrift,
+      lightAlignment: Math.min(farAMetrics.lightAlignment, farFlipMetrics.lightAlignment),
+      lightDirectionFlip,
+    },
+    commitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+  }
+  await writeOrAttachPlanetCandidate(metrics, captures, { farA, farB, farFlip }, testInfo)
+})
+
+async function focusFirstStar(page: Page) {
+  await expect.poll(async () => (await snapshot(page)).stellar.projectedStars[0] ?? null).not.toBeNull()
+  const target = (await snapshot(page)).stellar.projectedStars[0]!
+  await canvas(page).click({
+    position: { x: target.halo.x + target.halo.width / 2, y: target.halo.y + target.halo.height / 2 },
+    force: true,
+  })
+  await expect.poll(async () => (await snapshot(page)).stellar.approachProgress).toBe(1)
+}
+
+function projectedDirection(
+  star: { x: number; y: number; width: number; height: number },
+  planet: { x: number; y: number; width: number; height: number },
+) {
+  const x = star.x + star.width / 2 - planet.x - planet.width / 2
+  const y = star.y + star.height / 2 - planet.y - planet.height / 2
+  const length = Math.max(1e-6, Math.hypot(x, y))
+  return { x: x / length, y: y / length }
+}
+
+async function writeOrAttachPlanetCandidate(
+  metrics: object,
+  captures: Record<PlanetThermal, { png: Buffer }>,
+  far: { farA: Buffer; farB: Buffer; farFlip: Buffer },
+  testInfo: TestInfo,
+) {
+  const value = process.env.MINDVERSE_PLANET_BASELINE_OUT
+  if (value) {
+    const root = resolve(process.cwd(), 'testdata/render-baselines')
+    const json = resolve(process.cwd(), value)
+    const pathFromRoot = relative(root, json)
+    if (extname(json) !== '.json' || pathFromRoot.startsWith('..') || !/candidate/i.test(basename(json))) {
+      throw new Error('MINDVERSE_PLANET_BASELINE_OUT must be a candidate .json inside testdata/render-baselines')
+    }
+    const directory = dirname(json)
+    const stem = basename(json, '.json')
+    await mkdir(directory, { recursive: true })
+    await writeFile(json, JSON.stringify(metrics, null, 2) + '\n')
+    for (const { thermal } of PLANET_RENDER_CASES) await writeFile(resolve(directory, `${stem}-${thermal}.png`), captures[thermal].png)
+    await writeFile(resolve(directory, `${stem}-far-a.png`), far.farA)
+    await writeFile(resolve(directory, `${stem}-far-b.png`), far.farB)
+    await writeFile(resolve(directory, `${stem}-far-flip.png`), far.farFlip)
+    return
+  }
+  await testInfo.attach('babylon-planets-candidate.json', { body: JSON.stringify(metrics, null, 2), contentType: 'application/json' })
+  for (const { thermal } of PLANET_RENDER_CASES) {
+    await testInfo.attach(`babylon-planets-candidate-${thermal}.png`, { body: captures[thermal].png, contentType: 'image/png' })
+  }
+  await testInfo.attach('babylon-planets-candidate-far-a.png', { body: far.farA, contentType: 'image/png' })
+  await testInfo.attach('babylon-planets-candidate-far-b.png', { body: far.farB, contentType: 'image/png' })
+  await testInfo.attach('babylon-planets-candidate-far-flip.png', { body: far.farFlip, contentType: 'image/png' })
+}
 
 async function assertRelativePerformance(metrics: {
   performance: Record<'medium' | 'low', { p95FrameTime: number }>

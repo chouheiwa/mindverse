@@ -33,6 +33,17 @@ export function projectedCoverage(
   return Math.min(1, Math.max(0, diameterPixels / Math.min(renderWidth, renderHeight)))
 }
 
+export function projectedSphereDiameterPixels(
+  radius: number,
+  cameraDistance: number,
+  verticalFov: number,
+  renderWidth: number,
+  renderHeight: number,
+): number {
+  return projectedCoverage(radius, cameraDistance, verticalFov, renderWidth, renderHeight)
+    * Math.min(renderWidth, renderHeight)
+}
+
 export function initialPlanetLod(coverage: number, focused: boolean): PlanetLod {
   const value = clampCoverage(coverage)
   if (focused && value >= MEDIUM_TO_HIGH) return 'high'

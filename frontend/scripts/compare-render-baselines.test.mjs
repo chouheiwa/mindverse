@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   compareRenderBaselines,
+  comparePlanetRenderBaselines,
+  derivePlanetPngPaths,
   deriveStellarPngPaths,
   validateStellarPngArtifacts,
 } from './compare-render-baselines.mjs'
@@ -238,4 +240,69 @@ test('validates every derived stellar PNG artifact as present, non-empty PNG dat
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
+})
+
+const PLANET_COLORS = {
+  magma: [0.55, 0.16, 0.05], desert: [0.55, 0.38, 0.12], rock: [0.28, 0.29, 0.31],
+  tundra: [0.22, 0.36, 0.34], ice: [0.24, 0.42, 0.62],
+}
+const PLANET_ROUGHNESS = { magma: 0.025, desert: 0.035, rock: 0.05, tundra: 0.065, ice: 0.08 }
+
+const planetSample = (thermal, overrides = {}) => ({
+  thermal,
+  bodyDiameter: 260,
+  dayNightContrast: 0.18,
+  atmosphereEdgeRatio: 0.08,
+  bloomHighlightRatio: thermal === 'magma' ? 0.035 : 0.008,
+  colorVariance: 0.02,
+  meanColor: PLANET_COLORS[thermal],
+  roughnessContrast: PLANET_ROUGHNESS[thermal],
+  ...overrides,
+})
+
+const planetBaseline = () => ({
+  schemaVersion: 'babylon-planets-baseline.v1',
+  fixtureVersion: 'planet-render-gate.v1',
+  rendererKind: 'babylon',
+  viewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
+  samples: Object.fromEntries(['magma', 'desert', 'rock', 'tundra', 'ice'].map((name) => [name, planetSample(name)])),
+  far: { thermal: 'ice', surfaceLevel: 'low', highPlanetCount: 0, highFrequencyDetail: false, silhouetteDrift: 0.004, lightAlignment: 0.2, lightDirectionFlip: -0.9 },
+})
+
+test('planet comparator gates day/night, atmosphere, bloom, material variation and far LOD', () => {
+  assert.deepEqual(comparePlanetRenderBaselines(planetBaseline(), structuredClone(planetBaseline())).states,
+    ['magma', 'desert', 'rock', 'tundra', 'ice', 'far'])
+  for (const [mutate, message] of [
+    [(value) => { value.samples.rock.dayNightContrast = 0.01 }, /day.?night/i],
+    [(value) => { value.samples.ice.atmosphereEdgeRatio = 0 }, /atmosphere/i],
+    [(value) => { value.samples.desert.bloomHighlightRatio = 0.2 }, /bloom/i],
+    [(value) => { value.samples.tundra.colorVariance = 0 }, /variance/i],
+    [(value) => { value.far.surfaceLevel = 'high' }, /far.*LOD/i],
+    [(value) => { value.far.highPlanetCount = 1 }, /high.*mesh/i],
+    [(value) => { value.far.silhouetteDrift = 0.08 }, /silhouette/i],
+    [(value) => { value.far.lightAlignment = -0.1 }, /light/i],
+    [(value) => { value.far.lightDirectionFlip = 0.1 }, /light.*flip/i],
+  ]) {
+    const value = planetBaseline()
+    mutate(value)
+    assert.throws(() => comparePlanetRenderBaselines(planetBaseline(), value), message)
+  }
+})
+
+test('planet comparator preserves perceptible absolute gates', () => {
+  for (const [mutate, message] of [
+    [(value) => { value.samples.rock.dayNightContrast = 0.059 }, /day.?night/i],
+    [(value) => { value.samples.ice.atmosphereEdgeRatio = 0.0049 }, /atmosphere/i],
+    [(value) => { value.samples.rock.meanColor = [0.280, 0.290, 0.310]; value.samples.tundra.meanColor = [0.294, 0.290, 0.310] }, /rock\/tundra.*not distinguishable/i],
+  ]) {
+    const value = planetBaseline()
+    mutate(value)
+    assert.throws(() => comparePlanetRenderBaselines(planetBaseline(), value), message)
+  }
+})
+
+test('derives isolated PNG paths for all planet samples', () => {
+  const paths = derivePlanetPngPaths('/tmp/babylon-planets-candidate.json')
+  assert.deepEqual(Object.keys(paths), ['magma', 'desert', 'rock', 'tundra', 'ice', 'far-a', 'far-b', 'far-flip'])
+  assert.equal(paths.magma, '/tmp/babylon-planets-candidate-magma.png')
 })

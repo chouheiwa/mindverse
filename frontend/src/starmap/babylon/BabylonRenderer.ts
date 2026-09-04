@@ -110,10 +110,13 @@ export function shouldUpdateMaterializedPlanet(universeVisible: boolean, meshEna
   return universeVisible && meshEnabled
 }
 
-export function elapsedRenderDelta(previousNow: number | null, now: number, fallbackDelta: number): number {
-  const fallback = Math.min(50, Math.max(0, Number.isFinite(fallbackDelta) ? fallbackDelta : 0))
-  if (previousNow === null || !Number.isFinite(previousNow) || !Number.isFinite(now) || now < previousNow) return fallback
+export function elapsedRenderDelta(previousNow: number | null, now: number): number {
+  if (previousNow === null || !Number.isFinite(previousNow) || !Number.isFinite(now) || now < previousNow) return 0
   return Math.min(50, Math.max(0, now - previousNow))
+}
+
+export function advanceTransitionElapsed(elapsed: number, previousRenderedAt: number, renderedAt: number): number {
+  return elapsed + elapsedRenderDelta(previousRenderedAt, renderedAt)
 }
 
 function mobileDevice(): boolean {
@@ -837,7 +840,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private updateScene(): void {
     if (this.destroyed) return
     const now = performance.now()
-    const deltaTime = elapsedRenderDelta(this.lastSceneUpdateAt, now, this.engine.getDeltaTime())
+    const deltaTime = elapsedRenderDelta(this.lastSceneUpdateAt, now)
     if (Number.isFinite(now)) this.lastSceneUpdateAt = now
     this.elapsedMs += this.reducedMotion || this.diagnosticApproachProgressOverride != null ? 0 : deltaTime
     this.updateCameraFlight(deltaTime)
@@ -1197,11 +1200,14 @@ export class BabylonRenderer implements MindverseRenderer {
       : 0.9
     const duration = this.reducedMotion ? 0 : phase === 'surface-approach' ? 720 : 560
     let elapsed = 0
+    let lastRenderedAt = performance.now()
     let cancelled = false
     const observer = this.scene.onBeforeRenderObservable.add(() => {
       if (cancelled || this.destroyed) return
       try {
-        elapsed += Math.max(1, this.engine.getDeltaTime())
+        const renderedAt = performance.now()
+        elapsed = advanceTransitionElapsed(elapsed, lastRenderedAt, renderedAt)
+        if (Number.isFinite(renderedAt)) lastRenderedAt = renderedAt
         const progress = duration === 0 ? 1 : Math.min(1, elapsed / duration)
         const eased = progress * progress * (3 - 2 * progress)
         this.camera.setTarget(Vector3.Lerp(startTarget, endTarget, eased))

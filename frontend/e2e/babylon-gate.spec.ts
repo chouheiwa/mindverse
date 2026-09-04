@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
+import { readFreshPixelStats } from '../src/starmap/renderReadback'
 import { installStrataFixture } from './helpers/strataFixtureRoute'
 
 test.describe.configure({ mode: 'serial' })
@@ -81,29 +82,8 @@ const lifecycleAudit = (page: Page) => page.evaluate(() => (
 ).__MINDVERSE_LIFECYCLE_AUDIT__.snapshot())
 
 async function nonBackgroundRatio(page: Page): Promise<number> {
-  return canvas(page).evaluate(async (node: HTMLCanvasElement) => await new Promise<number>((complete, reject) => {
-    const initialRenderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
-    let attempts = 0
-    const sampleAfterRender = () => requestAnimationFrame(() => {
-      attempts += 1
-      const renderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
-      if (renderCount === initialRenderCount && attempts < 10) {
-        sampleAfterRender()
-        return
-      }
-      const gl = node.getContext('webgl2') ?? node.getContext('webgl')
-      if (!gl) return reject(new Error('WebGL context unavailable'))
-      const pixels = new Uint8Array(node.width * node.height * 4)
-      gl.finish()
-      gl.readPixels(0, 0, node.width, node.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
-      let count = 0
-      for (let index = 0; index < pixels.length; index += 4) {
-        if (Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) > 12) count += 1
-      }
-      complete(count / (pixels.length / 4))
-    })
-    sampleAfterRender()
-  }))
+  const stats = await canvas(page).evaluate(readFreshPixelStats, 10)
+  return stats.nonBackground / stats.total
 }
 
 async function openBabylonUniverse(page: Page, query = '', reducedMotion: 'reduce' | 'no-preference' = 'reduce') {

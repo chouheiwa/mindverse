@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Response } from '@playwright/test'
 import type { RenderSnapshot } from '../src/starmap/e2eDiagnostics'
+import { readFreshPixelStats } from '../src/starmap/renderReadback'
 import { installUniverseFixture, type E2EUniverseFixture } from './helpers/fixtureRoute'
 
 type E2EQuality = 'high' | 'medium' | 'low'
@@ -97,36 +98,7 @@ async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
   expect(webglLimits.readyError).toBe(webglLimits.noError)
   expect(webglLimits.observedFrameError).toBe(webglLimits.noError)
 
-  const pixels = await canvas.evaluate(async (node: HTMLCanvasElement) => {
-    const initialRenderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
-    return await new Promise<{ nonBackground: number, deepBlack: number, total: number }>((resolve, reject) => {
-      let attempts = 0
-      const sampleAfterRender = () => requestAnimationFrame(() => {
-        attempts += 1
-        const renderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
-        if (typeof initialRenderCount === 'number' && renderCount === initialRenderCount && attempts < 10) {
-          sampleAfterRender()
-          return
-        }
-      const gl = node.getContext('webgl2') ?? node.getContext('webgl')
-      if (!gl) {
-        reject(new Error('WebGL context unavailable during pixel sampling'))
-        return
-      }
-      const pixels = new Uint8Array(node.width * node.height * 4)
-      gl.finish()
-      gl.readPixels(0, 0, node.width, node.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
-      let count = 0
-      let deepBlack = 0
-      for (let index = 0; index < pixels.length; index += 4) {
-        if (Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) > 12) count += 1
-        if (Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) <= 12) deepBlack += 1
-      }
-      resolve({ nonBackground: count, deepBlack, total: pixels.length / 4 })
-      })
-      sampleAfterRender()
-    })
-  })
+  const pixels = await canvas.evaluate(readFreshPixelStats, 10)
   expect(pixels.nonBackground).toBeGreaterThanOrEqual(fixture.assertions.minNonBackgroundPixels)
   expect(pixels.deepBlack).toBeGreaterThan(pixels.total * 0.5)
   process.stdout.write(`[visual] url=${page.url()} nonBackground=${pixels.nonBackground} deepBlack=${pixels.deepBlack} total=${pixels.total}\n`)

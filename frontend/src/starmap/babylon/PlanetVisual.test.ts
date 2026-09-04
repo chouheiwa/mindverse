@@ -36,6 +36,16 @@ function setup(options: ConstructorParameters<typeof PlanetVisual>[0] extends in
   return { engine, scene, visual }
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (cause?: unknown) => void
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
+
 describe('PlanetVisual resource boundary', () => {
   test('owns one pickable surface and a non-pickable back-face atmosphere shell', () => {
     const { visual } = setup()
@@ -165,5 +175,68 @@ describe('PlanetVisual resource boundary', () => {
 
     expect(attempts).toEqual(['high', 'medium', 'medium'])
     expect(visual.diagnostics().surfaceLevel).toBe('medium')
+  })
+
+  test('does not touch or recreate resources when surface compilation resolves after disposal', async () => {
+    const compilation = deferred()
+    const compileAtmosphere = vi.fn(async () => undefined)
+    let cancellation: AbortSignal | undefined
+    const { scene, visual } = setup({
+      compileSurface: (_material, _level, _mesh, signal) => {
+        cancellation = signal
+        return compilation.promise
+      },
+      compileAtmosphere,
+    })
+    const pending = visual.ensureLod('high')
+
+    visual.dispose()
+    expect(scene.meshes).toHaveLength(0)
+    const materialsAfterDisposal = [...scene.materials]
+    expect(cancellation?.aborted).toBe(true)
+    compilation.resolve()
+    await pending
+
+    expect(compileAtmosphere).not.toHaveBeenCalled()
+    expect(scene.meshes).toHaveLength(0)
+    expect(scene.materials).toEqual(materialsAfterDisposal)
+  })
+
+  test('does not install a fallback or report when surface compilation rejects after disposal', async () => {
+    const compilation = deferred()
+    const onError = vi.fn()
+    const { scene, visual } = setup({
+      compileSurface: () => compilation.promise,
+      onError,
+    })
+    const pending = visual.ensureLod('high')
+
+    visual.dispose()
+    const materialsAfterDisposal = [...scene.materials]
+    compilation.reject(new Error('late failure'))
+    await pending
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(scene.meshes).toHaveLength(0)
+    expect(scene.materials).toEqual(materialsAfterDisposal)
+  })
+
+  test('does not mutate disposed atmosphere state after late compilation rejection', async () => {
+    const compilation = deferred()
+    const onError = vi.fn()
+    const { scene, visual } = setup({
+      compileAtmosphere: () => compilation.promise,
+      onError,
+    })
+    const pending = visual.ensureAtmosphere()
+
+    visual.dispose()
+    const materialsAfterDisposal = [...scene.materials]
+    compilation.reject(new Error('late atmosphere failure'))
+    await pending
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(scene.meshes).toHaveLength(0)
+    expect(scene.materials).toEqual(materialsAfterDisposal)
   })
 })

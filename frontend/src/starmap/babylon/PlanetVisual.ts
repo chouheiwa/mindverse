@@ -16,8 +16,8 @@ import { planetFragmentShader } from './shaders/planet.fragment.fx'
 import { planetVertexShader } from './shaders/planet.vertex.fx'
 
 type SurfaceLevel = PlanetLod | 'lambert'
-type SurfaceCompiler = (material: Material, level: PlanetLod, mesh: Mesh) => Promise<void>
-type AtmosphereCompiler = (material: Material, mesh: Mesh) => Promise<void>
+type SurfaceCompiler = (material: Material, level: PlanetLod, mesh: Mesh, signal: AbortSignal) => Promise<void>
+type AtmosphereCompiler = (material: Material, mesh: Mesh, signal: AbortSignal) => Promise<void>
 
 export interface PlanetVisualOptions {
   readonly scene: Scene
@@ -80,6 +80,7 @@ export class PlanetVisual {
   private atmosphereFallback = false
   private highUnavailable = false
   private disposed = false
+  private readonly compilationAbort = new AbortController()
   private readonly lightScratch = new Vector3()
 
   constructor(options: PlanetVisualOptions) {
@@ -166,20 +167,30 @@ export class PlanetVisual {
   }
 
   async ensureLod(requested: PlanetLod): Promise<void> {
+    if (this.disposed) return
     const effectiveRequest = requested === 'high' && this.highUnavailable ? 'medium' : requested
     const chain: readonly PlanetLod[] = effectiveRequest === 'high'
       ? ['high', 'medium', 'low']
       : effectiveRequest === 'medium' ? ['medium', 'low'] : ['low']
     for (const level of chain) {
+      if (this.disposed) return
       try {
         this.setLod(level)
+        if (this.disposed) return
         const mesh = level === 'high' ? this.focusMesh : this.orbitMesh
         if (!mesh?.material) throw new Error(`Planet ${level} surface was not created`)
-        await this.compileSurface(mesh.material, level, mesh)
+        await this.compileSurface(mesh.material, level, mesh, this.compilationAbort.signal)
+        if (this.disposed) return
         if (level === 'high' && this.focusAtmosphereMesh?.material && !this.atmosphereFallback) {
           try {
-            await this.compileAtmosphere(this.focusAtmosphereMesh.material, this.focusAtmosphereMesh)
+            await this.compileAtmosphere(
+              this.focusAtmosphereMesh.material,
+              this.focusAtmosphereMesh,
+              this.compilationAbort.signal,
+            )
+            if (this.disposed) return
           } catch (cause) {
+            if (this.disposed) return
             this.atmosphereFallback = true
             this.atmosphereMesh.setEnabled(false)
             this.focusAtmosphereMesh.setEnabled(false)
@@ -188,17 +199,21 @@ export class PlanetVisual {
         }
         return
       } catch (cause) {
+        if (this.disposed) return
         if (level === 'high') this.highUnavailable = true
         this.report(cause)
       }
     }
-    this.installLambertFallback()
+    if (!this.disposed) this.installLambertFallback()
   }
 
   async ensureAtmosphere(): Promise<void> {
+    if (this.disposed) return
     try {
-      await this.compileAtmosphere(this.atmosphereMaterial, this.atmosphereMesh)
+      await this.compileAtmosphere(this.atmosphereMaterial, this.atmosphereMesh, this.compilationAbort.signal)
+      if (this.disposed) return
     } catch (cause) {
+      if (this.disposed) return
       this.atmosphereFallback = true
       this.atmosphereMesh.setEnabled(false)
       this.focusAtmosphereMesh?.setEnabled(false)
@@ -267,6 +282,7 @@ export class PlanetVisual {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.compilationAbort.abort()
     this.disposeFocusResources()
     this.orbitMesh.dispose(false, true)
     this.atmosphereMesh.dispose(false, true)

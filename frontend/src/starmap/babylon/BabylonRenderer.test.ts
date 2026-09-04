@@ -2,6 +2,7 @@ import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imagePro
 import { describe, expect, test } from 'vitest'
 import {
   BABYLON_BLOOM_THRESHOLD,
+  advanceTransitionElapsed,
   babylonBloomPolicy,
   cappedDevicePixelRatio,
   configurePlanetImageProcessing,
@@ -42,10 +43,22 @@ describe('Babylon planet rendering policy', () => {
   })
 
   test('advances animation by elapsed wall time between actual renders and caps a hidden-page gap', () => {
-    expect(elapsedRenderDelta(null, 1_000, 8)).toBe(8)
-    expect(elapsedRenderDelta(1_000, 1_034, 8)).toBe(34)
-    expect(elapsedRenderDelta(1_000, 5_000, 8)).toBe(50)
-    expect(elapsedRenderDelta(1_000, Number.NaN, 8)).toBe(8)
+    expect(elapsedRenderDelta(null, 1_000)).toBe(0)
+    expect(elapsedRenderDelta(1_000, 1_034)).toBe(34)
+    expect(elapsedRenderDelta(1_000, 5_000)).toBe(50)
+    expect(elapsedRenderDelta(1_000, Number.NaN)).toBe(0)
+  })
+
+  test('advances a 60 Hz transition by rendered wall time when its source RAF runs at 120 Hz', () => {
+    const sourceRafDelta = 1_000 / 120
+    const renderedAt = [0, sourceRafDelta * 2, sourceRafDelta * 4, sourceRafDelta * 6]
+    let elapsed = 0
+    for (let index = 1; index < renderedAt.length; index += 1) {
+      elapsed = advanceTransitionElapsed(elapsed, renderedAt[index - 1], renderedAt[index])
+    }
+
+    expect(elapsed).toBeCloseTo(50)
+    expect(elapsed).not.toBeCloseTo(sourceRafDelta * 3)
   })
 
   test('uses KHR PBR Neutral, dithering and a bloom threshold above ordinary surface output', () => {

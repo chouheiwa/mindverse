@@ -34,6 +34,13 @@ describe('stellar shader contracts', () => {
     expect(starPanoramaVertexShader).toMatch(/mix\(aCoreDim,\s*aHaloDim/)
   })
 
+  it('keeps panorama sprites bounded and delegates near-field scale to the focused body', () => {
+    expect(starPanoramaVertexShader).toContain('clamp(requestedCss, 1.0, 36.0)')
+    expect(starPanoramaVertexShader).not.toContain('nearScale')
+    expect(starPanoramaVertexShader).not.toContain('nearCss')
+    expect(starPanoramaVertexShader).not.toMatch(/uRenderHeight\s*\*\s*0\.45/)
+  })
+
   it('renders radial hot cores, independent two-slope halos, and gated rotated flares', () => {
     expect(starCoreFragmentShader).toMatch(/if\s*\(d2\s*>\s*1\.0\)\s*discard/)
     expect(starCoreFragmentShader).toMatch(/if\s*\(vAlpha\s*<=\s*0\.001\)\s*discard/)

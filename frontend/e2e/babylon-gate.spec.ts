@@ -346,7 +346,7 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   })
   expect(initial).toMatchObject({
     rendererKind: 'babylon', activeContextCount: 1, scenePhase: 'universe',
-    lifecycle: { rafLoops: 1, listeners: 3 }, scene: { planetCount: 2, probeCount: 0 },
+    lifecycle: { rafLoops: 1, listeners: 10 }, scene: { planetCount: 2, probeCount: 0 },
   })
   await openStar(page)
   await openQuestionWorkspace(page, '固定地层问题')

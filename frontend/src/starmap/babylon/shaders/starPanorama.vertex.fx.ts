@@ -51,7 +51,6 @@ vec3 starWorldPosition(vec3 source) {
 void main(void) {
   vec3 worldPosition = starWorldPosition(position);
   vec4 view = worldView * vec4(worldPosition, 1.0);
-  float viewZ = max(0.01, -view.z);
   gl_Position = projection * view;
 
   float twinkle = 1.0 - (0.09 + 0.26 * aBurst)
@@ -59,13 +58,11 @@ void main(void) {
   float coreCss = aCoreSize * uCoreScale * aInteraction.x;
   float haloCss = aHaloSize * mix(uHaloIntensity * aInteraction.z, 1.7, step(1.5, uLayer));
   float requestedCss = mix(coreCss, haloCss, step(0.5, uLayer));
-  float projectedBodyCss = aBodyR * uProjectionScale / viewZ / max(1.0, uDevicePixelRatio);
-  float nearScale = smoothstep(6.0, 18.0, projectedBodyCss);
-  float nearCss = aBodyR * mix(7.0, 10.5, step(1.5, uLayer)) * uProjectionScale / viewZ
-    / max(1.0, uDevicePixelRatio);
-  float cssSize = mix(requestedCss, nearCss, nearScale);
+  // Panorama sprites stay screen-space bounded. Near-field scale belongs to the
+  // separately rendered focused sphere/corona pair after a star is selected.
+  float cssSize = clamp(requestedCss, 1.0, 36.0);
   float physicalSize = cssSize * max(1.0, uDevicePixelRatio);
-  gl_PointSize = clamp(physicalSize, 1.0, min(520.0 * uDevicePixelRatio, uRenderHeight * 0.45));
+  gl_PointSize = physicalSize;
 
   vColor = aColor;
   vBright = aBright;

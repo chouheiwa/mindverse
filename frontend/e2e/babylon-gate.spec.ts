@@ -82,7 +82,15 @@ const lifecycleAudit = (page: Page) => page.evaluate(() => (
 
 async function nonBackgroundRatio(page: Page): Promise<number> {
   return canvas(page).evaluate(async (node: HTMLCanvasElement) => await new Promise<number>((complete, reject) => {
-    requestAnimationFrame(() => {
+    const initialRenderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
+    let attempts = 0
+    const sampleAfterRender = () => requestAnimationFrame(() => {
+      attempts += 1
+      const renderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
+      if (renderCount === initialRenderCount && attempts < 10) {
+        sampleAfterRender()
+        return
+      }
       const gl = node.getContext('webgl2') ?? node.getContext('webgl')
       if (!gl) return reject(new Error('WebGL context unavailable'))
       const pixels = new Uint8Array(node.width * node.height * 4)
@@ -94,6 +102,7 @@ async function nonBackgroundRatio(page: Page): Promise<number> {
       }
       complete(count / (pixels.length / 4))
     })
+    sampleAfterRender()
   }))
 }
 
@@ -347,8 +356,18 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   expect(initial).toMatchObject({
     rendererKind: 'babylon', activeContextCount: 1, scenePhase: 'universe',
     lifecycle: { rafLoops: 1, listeners: 10 }, scene: { planetCount: 2, probeCount: 0 },
+    resources: {
+      materializedPlanetCount: 0,
+      planetVisualConstructions: 0,
+      planetShaderCompileRequests: 0,
+      planetUpdatesLastFrame: 0,
+    },
   })
   await openStar(page)
+  await expect.poll(async () => (await snapshot(page))?.resources.materializedPlanetCount).toBe(2)
+  await expect.poll(async () => (await snapshot(page))?.resources.planetShaderCompileRequests ?? 0).toBeGreaterThanOrEqual(4)
+  await expect.poll(async () => (await snapshot(page))?.resources.planetUpdatesLastFrame).toBe(2)
+  expect((await snapshot(page))!.resources.planetVisualConstructions).toBe(2)
   await openQuestionWorkspace(page, '固定地层问题')
 
   const selectedBefore = (await snapshot(page))!.projectedBounds.selectedPlanet!

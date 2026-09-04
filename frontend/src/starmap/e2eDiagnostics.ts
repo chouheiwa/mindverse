@@ -38,7 +38,14 @@ export interface RenderSnapshot {
       bounds: { x: number, y: number, width: number, height: number } | null
     }[]
   }
-  resources: { highPlanetCount: number }
+  resources: {
+    highPlanetCount: number
+    materializedPlanetCount?: number
+    planetVisualConstructions?: number
+    planetShaderCompileRequests?: number
+    planetUpdatesLastFrame?: number
+    actualRenderCount?: number
+  }
   stellar: StellarDiagnosticsSnapshot
   p95FrameTime: number | null
   renderReady: boolean

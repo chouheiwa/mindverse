@@ -21,11 +21,14 @@ export interface BabylonRuntimePorts {
   readonly scene: BabylonScenePort
   readonly canvas: BabylonCanvasPort
   readonly releaseContext?: () => void
+  readonly now?: () => number
+  readonly isPageHidden?: () => boolean
 }
 
 export interface BabylonRuntimeCallbacks {
   readonly onReady?: () => void
   readonly onError?: (cause: Error) => void
+  readonly isAnimating?: () => boolean
 }
 
 export class BabylonWebGL2RequiredError extends Error {
@@ -48,6 +51,9 @@ export class BabylonRuntime {
   private readyReported = false
   private fatalReported = false
   private listenerCount = 0
+  private lastRenderAt: number | null = null
+  private lastAnimating: boolean | null = null
+  private actualRenders = 0
 
   constructor(ports: BabylonRuntimePorts, callbacks: BabylonRuntimeCallbacks = {}) {
     this.ports = ports
@@ -80,7 +86,6 @@ export class BabylonRuntime {
   suspend(): void {
     if (this.destroyed || this.suspended) return
     this.suspended = true
-    this.stopActiveLoop()
   }
 
   resume(): void {
@@ -101,17 +106,29 @@ export class BabylonRuntime {
     this.disposeAll()
   }
 
-  diagnostics(): Readonly<{ renderLoops: number; listeners: number }> {
+  diagnostics(): Readonly<{ renderLoops: number; listeners: number; actualRenders: number }> {
     return Object.freeze({
       renderLoops: this.running ? 1 : 0,
       listeners: this.listenerCount,
+      actualRenders: this.actualRenders,
     })
   }
 
   private readonly frame = (): void => {
     if (this.destroyed || this.fatalReported) return
+    if (this.suspended || this.ports.isPageHidden?.()) return
+    const animating = this.callbacks.isAnimating?.() ?? false
+    const now = this.ports.now?.() ?? performance.now()
+    if (this.lastAnimating !== animating) {
+      this.lastAnimating = animating
+      this.lastRenderAt = null
+    }
+    const minimumInterval = 1000 / (animating ? 60 : 30)
+    if (this.lastRenderAt !== null && now - this.lastRenderAt < minimumInterval) return
     try {
       this.ports.scene.render()
+      this.lastRenderAt = now
+      this.actualRenders += 1
       if (!this.readyReported) {
         this.readyReported = true
         this.callbacks.onReady?.()

@@ -88,7 +88,32 @@ export function configurePlanetImageProcessing(configuration: PlanetImageProcess
 
 export function cappedDevicePixelRatio(devicePixelRatio: number, mobile: boolean): number {
   const finiteRatio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
-  return Math.min(mobile ? 1.5 : 2, Math.max(1, finiteRatio))
+  return Math.min(mobile ? 1 : 1.25, Math.max(1, finiteRatio))
+}
+
+type BabylonScenePhase = 'panorama' | 'star-focus' | 'planet-focus' | 'strata'
+
+export function babylonBloomPolicy(phase: BabylonScenePhase): Readonly<{ enabled: boolean; kernel: number }> {
+  if (phase === 'panorama') return Object.freeze({ enabled: false, kernel: 16 })
+  if (phase === 'strata') return Object.freeze({ enabled: true, kernel: 24 })
+  return Object.freeze({ enabled: true, kernel: 32 })
+}
+
+export function materializedPlanetsForStar(
+  planets: readonly PlanetDatum[],
+  star: StarDatum | null,
+): readonly PlanetDatum[] {
+  return star ? planets.filter((planet) => planet.star === star) : []
+}
+
+export function shouldUpdateMaterializedPlanet(universeVisible: boolean, meshEnabled: boolean): boolean {
+  return universeVisible && meshEnabled
+}
+
+export function elapsedRenderDelta(previousNow: number | null, now: number, fallbackDelta: number): number {
+  const fallback = Math.min(50, Math.max(0, Number.isFinite(fallbackDelta) ? fallbackDelta : 0))
+  if (previousNow === null || !Number.isFinite(previousNow) || !Number.isFinite(now) || now < previousNow) return fallback
+  return Math.min(50, Math.max(0, now - previousNow))
 }
 
 function mobileDevice(): boolean {
@@ -114,6 +139,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly labelCanvas: HTMLCanvasElement
   private readonly engine: Engine
   private readonly scene: Scene
+  private pipeline!: DefaultRenderingPipeline
   private readonly camera: ArcRotateCamera
   private readonly universeRoot: TransformNode
   private readonly universe: Universe
@@ -129,6 +155,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly visualByQuestion = new Map<string, PlanetVisualRecord>()
   private readonly macroOrbits: MacroOrbitVisual[] = []
   private readonly visualByMeshId = new Map<number, PlanetVisualRecord>()
+  private materializedOwnerKey: string | null = null
   private readonly specimenByMeshId = new Map<number, CaveSpecimenPlacement>()
   private readonly probes: ReadonlySet<string>
   private readonly strataTransition: StrataTransitionController
@@ -154,6 +181,7 @@ export class BabylonRenderer implements MindverseRenderer {
     pressedProgress: number
   }> | null = null
   private elapsedMs = 0
+  private lastSceneUpdateAt: number | null = null
   private lastStrataMoveAt: number | null = null
   private overviewTarget = Vector3.Zero()
   private overviewRadius = 30
@@ -173,6 +201,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private readonly diagnosticCameraSamples: StellarDiagnosticsSnapshot['cameraSamples'] = []
   private diagnosticCameraSequence = 0
   private diagnosticApproachProgressOverride: number | null = null
+  private diagnosticPlanetVisualConstructions = 0
+  private diagnosticPlanetShaderCompileRequests = 0
+  private diagnosticPlanetUpdatesLastFrame = 0
   private readonly starPositionScratch = new Vector3()
   private readonly flightTargetScratch = new Vector3()
   private readonly planetStarPositionScratch = new Vector3()
@@ -285,9 +316,11 @@ export class BabylonRenderer implements MindverseRenderer {
           addEventListener: (type, listener) => canvas.addEventListener(type, listener),
           removeEventListener: (type, listener) => canvas.removeEventListener(type, listener),
         },
+        isPageHidden: () => document.hidden,
       }, {
         onReady: callbacks.onRenderReady,
         onError: callbacks.onRenderError,
+        isAnimating: () => this.hasActiveAnimation(),
       })
       this.runtime = runtime
       this.resizeLabels()
@@ -346,6 +379,11 @@ export class BabylonRenderer implements MindverseRenderer {
             resources: () => ({
               highPlanetCount: [...this.visualByQuestion.values()]
                 .filter(({ visual }) => visual.focusMesh?.isEnabled()).length,
+              materializedPlanetCount: this.visualByQuestion.size,
+              planetVisualConstructions: this.diagnosticPlanetVisualConstructions,
+              planetShaderCompileRequests: this.diagnosticPlanetShaderCompileRequests,
+              planetUpdatesLastFrame: this.diagnosticPlanetUpdatesLastFrame,
+              actualRenderCount: this.runtime.diagnostics().actualRenders,
             }),
             setApproachProgress: (progress) => this.setDiagnosticApproachProgress(progress),
             preparePlanetCapture: () => this.prepareDiagnosticPlanetCapture(),
@@ -390,9 +428,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.clearPointerFeedback()
     this.strataTransition.destroy()
     this.removePointerListeners()
-    for (const record of this.visualByQuestion.values()) record.visual.dispose()
-    this.visualByQuestion.clear()
-    this.visualByMeshId.clear()
+    this.releaseMaterializedPlanets()
     this.starLayer.dispose()
     if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') removeE2EDiagnostics(this)
     this.runtime.destroy()
@@ -424,6 +460,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.cancelFlight('reset')
     this.clearPlanet()
     this.focusedStar = null
+    this.releaseMaterializedPlanets()
     this.starLayer.setFocus(null, null)
     this.camera.setTarget(this.overviewTarget)
     this.camera.radius = this.overviewRadius
@@ -453,6 +490,7 @@ export class BabylonRenderer implements MindverseRenderer {
     if (!planet) return null
     this.cancelFlight('planet')
     this.selectedVisual?.visual.setSelected(false)
+    this.materializeStarSystem(planet.star)
     this.selected = planet
     this.selectedVisual = this.visualByQuestion.get(planet.question.id) ?? null
     this.focusedStar = planet.star
@@ -563,15 +601,15 @@ export class BabylonRenderer implements MindverseRenderer {
   private createScene(index: UniverseIndex): void {
     configurePlanetImageProcessing(this.scene.imageProcessingConfiguration)
     const pipeline = new DefaultRenderingPipeline('mindverse-pipeline', true, this.scene, [this.camera])
+    this.pipeline = pipeline
     pipeline.fxaaEnabled = false
-    pipeline.bloomEnabled = true
+    pipeline.bloomEnabled = false
     pipeline.bloomThreshold = BABYLON_BLOOM_THRESHOLD
     pipeline.bloomWeight = 0.14
-    pipeline.bloomKernel = 48
+    pipeline.bloomKernel = 16
 
     this.configureOverview(this.stars)
     this.createMacroOrbits(index)
-    for (const planet of this.planets) this.createPlanet(planet)
     this.syncOrbitPresentation()
 
     this.scene.onBeforeRenderObservable.add(() => this.updateScene())
@@ -652,22 +690,59 @@ export class BabylonRenderer implements MindverseRenderer {
       parent: this.universeRoot,
       initialLod: this.quality === 'low' ? 'low' : 'medium',
       onMeshesChanged: () => this.refreshPlanetMeshIndex(record),
-      ...(surfaceFailure ? {
-        compileSurface: async (material, level, mesh) => {
-          if (surfaceFailure === 'all' || surfaceFailure === level) throw new Error(`E2E injected ${level} planet surface failure`)
-          await material.forceCompilationAsync(mesh)
-        },
-      } : {}),
-      ...(atmosphereFailure ? {
-        compileAtmosphere: async () => { throw new Error('E2E injected planet atmosphere failure') },
-      } : {}),
+      compileSurface: async (material, level, mesh) => {
+        this.diagnosticPlanetShaderCompileRequests += 1
+        if (surfaceFailure === 'all' || surfaceFailure === level) throw new Error(`E2E injected ${level} planet surface failure`)
+        await material.forceCompilationAsync(mesh)
+      },
+      compileAtmosphere: async (material, mesh) => {
+        this.diagnosticPlanetShaderCompileRequests += 1
+        if (atmosphereFailure) throw new Error('E2E injected planet atmosphere failure')
+        await material.forceCompilationAsync(mesh)
+      },
     })
+    this.diagnosticPlanetVisualConstructions += 1
     record = Object.freeze({ datum, descriptor, visual, orbit })
     this.visualByQuestion.set(datum.question.id, record)
     this.refreshPlanetMeshIndex(record)
     this.updatePlanetPosition(record, 0)
     void visual.ensureLod(this.quality === 'low' ? 'low' : 'medium')
     void visual.ensureAtmosphere()
+  }
+
+  private materializeStarSystem(star: StarDatum): void {
+    const ownerKey = starOwnerKey(star)
+    if (this.materializedOwnerKey === ownerKey) return
+    this.releaseMaterializedPlanets()
+    this.materializedOwnerKey = ownerKey
+    try {
+      for (const planet of materializedPlanetsForStar(this.planets, star)) this.createPlanet(planet)
+    } catch (cause) {
+      this.releaseMaterializedPlanets()
+      throw cause
+    }
+  }
+
+  private releaseMaterializedPlanets(): void {
+    for (const record of this.visualByQuestion.values()) {
+      record.visual.dispose()
+      record.orbit.dispose(false, true)
+    }
+    this.visualByQuestion.clear()
+    this.visualByMeshId.clear()
+    this.materializedOwnerKey = null
+  }
+
+  private hasActiveAnimation(): boolean {
+    const cameraMoving = [
+      this.camera.inertialAlphaOffset,
+      this.camera.inertialBetaOffset,
+      this.camera.inertialRadiusOffset,
+      this.camera.inertialPanningX,
+      this.camera.inertialPanningY,
+    ].some((value) => Math.abs(value) > 1e-5)
+    return Boolean(this.activeFlight || this.selected || this.strataTransition.phase !== null
+      || this.planetExitPending || this.hoverKey || this.pressedKey || cameraMoving)
   }
 
   private createMacroOrbits(index: UniverseIndex): void {
@@ -738,6 +813,10 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private syncOrbitPresentation(): void {
     const state = this.orbitPresentationState()
+    const bloom = babylonBloomPolicy(!this.universeVisible ? 'strata'
+      : this.selected ? 'planet-focus' : this.focusedStar ? 'star-focus' : 'panorama')
+    this.pipeline.bloomEnabled = bloom.enabled
+    this.pipeline.bloomKernel = bloom.kernel
     for (const orbit of this.macroOrbits) {
       applyOrbitLineAlpha(orbit.mesh, macroOrbitAlpha({ ...state, ownerKey: orbit.ownerKey }))
     }
@@ -757,7 +836,9 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updateScene(): void {
     if (this.destroyed) return
-    const deltaTime = Math.min(50, Math.max(0, this.engine.getDeltaTime()))
+    const now = performance.now()
+    const deltaTime = elapsedRenderDelta(this.lastSceneUpdateAt, now, this.engine.getDeltaTime())
+    if (Number.isFinite(now)) this.lastSceneUpdateAt = now
     this.elapsedMs += this.reducedMotion || this.diagnosticApproachProgressOverride != null ? 0 : deltaTime
     this.updateCameraFlight(deltaTime)
     this.planetFocusController.update(deltaTime)
@@ -774,10 +855,13 @@ export class BabylonRenderer implements MindverseRenderer {
       devicePixelRatio: dpr,
       projectionScale: renderHeight * 0.5 / Math.tan(this.camera.fov * 0.5),
     })
+    this.diagnosticPlanetUpdatesLastFrame = 0
     for (const visual of this.visualByQuestion.values()) {
+      if (!shouldUpdateMaterializedPlanet(this.universeVisible, visual.visual.activeMesh.isEnabled())) continue
       this.updatePlanetPosition(visual, this.elapsedMs)
       const mesh = visual.visual.activeMesh
       const distance = Vector3.Distance(this.camera.globalPosition, mesh.getAbsolutePosition())
+      this.diagnosticPlanetUpdatesLastFrame += 1
       visual.visual.update({
         elapsedMs: this.motionTime(),
         cameraPosition: this.camera.globalPosition,
@@ -836,7 +920,7 @@ export class BabylonRenderer implements MindverseRenderer {
   private diagnosticScene(): RenderSnapshot['scene'] {
     const firstStar = this.stars[0] ? this.projectToCss(this.currentStarPosition(this.stars[0])) : null
     return {
-      planetCount: this.visualByQuestion.size,
+      planetCount: this.planets.length,
       probeCount: this.probes.size,
       probeNearVisible: false,
       firstStarX: firstStar?.x ?? null,
@@ -1337,6 +1421,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.diagnosticApproachProgressOverride = null
       this.diagnosticCameraSamples?.splice(0)
       this.clearPlanet()
+      this.materializeStarSystem(star)
       this.focusedStar = star
       const starKey = starIdentity(star.s)
       const target = this.currentStarPosition(star)
@@ -1379,6 +1464,8 @@ export class BabylonRenderer implements MindverseRenderer {
       return true
     } catch (cause) {
       this.recoverCamera(cause)
+      if (this.focusedStar) attemptRecovery(() => this.materializeStarSystem(this.focusedStar as StarDatum))
+      else attemptRecovery(() => this.releaseMaterializedPlanets())
       return false
     }
   }

@@ -98,7 +98,16 @@ async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
   expect(webglLimits.observedFrameError).toBe(webglLimits.noError)
 
   const pixels = await canvas.evaluate(async (node: HTMLCanvasElement) => {
-    return await new Promise<{ nonBackground: number, deepBlack: number, total: number }>((resolve, reject) => requestAnimationFrame(() => {
+    const initialRenderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
+    return await new Promise<{ nonBackground: number, deepBlack: number, total: number }>((resolve, reject) => {
+      let attempts = 0
+      const sampleAfterRender = () => requestAnimationFrame(() => {
+        attempts += 1
+        const renderCount = window.__MINDVERSE_E2E__?.snapshot().resources.actualRenderCount
+        if (typeof initialRenderCount === 'number' && renderCount === initialRenderCount && attempts < 10) {
+          sampleAfterRender()
+          return
+        }
       const gl = node.getContext('webgl2') ?? node.getContext('webgl')
       if (!gl) {
         reject(new Error('WebGL context unavailable during pixel sampling'))
@@ -114,7 +123,9 @@ async function expectCanvasContract(page: Page, fixture: E2EUniverseFixture) {
         if (Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) <= 12) deepBlack += 1
       }
       resolve({ nonBackground: count, deepBlack, total: pixels.length / 4 })
-    }))
+      })
+      sampleAfterRender()
+    })
   })
   expect(pixels.nonBackground).toBeGreaterThanOrEqual(fixture.assertions.minNonBackgroundPixels)
   expect(pixels.deepBlack).toBeGreaterThan(pixels.total * 0.5)
@@ -134,6 +145,14 @@ async function expectSnapshot(page: Page, quality?: E2EQuality) {
   expect(snapshot?.memory.textures).toBeGreaterThanOrEqual(0)
   expect(snapshot?.scene.planetCount).toBe(512)
   expect(snapshot?.scene.probeCount).toBe(300)
+  if (snapshot?.rendererKind === 'babylon') {
+    expect(snapshot.resources).toMatchObject({
+      materializedPlanetCount: 0,
+      planetVisualConstructions: 0,
+      planetShaderCompileRequests: 0,
+      planetUpdatesLastFrame: 0,
+    })
+  }
 
   const mutated = await page.evaluate(() => {
     const first = window.__MINDVERSE_E2E__!.snapshot()
@@ -387,7 +406,10 @@ for (const quality of ['high', 'low'] as const) {
     await expectCanvasContract(page, fixture)
     await expectSnapshot(page, quality)
     const apiShape = await page.evaluate(() => Object.keys(window.__MINDVERSE_E2E__ ?? {}))
-    expect(apiShape).toEqual(['snapshot'])
+    const rendererKind = await page.evaluate(() => window.__MINDVERSE_E2E__?.snapshot().rendererKind)
+    expect(apiShape).toEqual(rendererKind === 'babylon'
+      ? ['preparePlanetCapture', 'flipFarPlanetCapture', 'setApproachProgress', 'snapshot']
+      : ['snapshot'])
   })
 }
 
@@ -398,7 +420,7 @@ function percentile95(samples: readonly number[]): number {
 }
 
 for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
-  test(`${quality} renders the fixed 512-planet/300-probe fixture within its 30-second p95 budget @metal-performance`, async ({ page }) => {
+  test(`${quality} keeps the fixed 512-planet/300-probe panorama lazy within its 30-second budget @metal-performance`, async ({ page }) => {
     test.skip(process.platform !== 'darwin', 'production performance budgets require Chromium ANGLE Metal on Darwin hardware')
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 1920, height: 1080 })
@@ -417,6 +439,12 @@ for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
     const snapshot = await page.evaluate(() => window.__MINDVERSE_E2E__!.snapshot())
     expect(snapshot.quality).toBe(quality)
     expect(snapshot.scene).toMatchObject({ planetCount: 512, probeCount: 300 })
+    expect(snapshot.resources).toMatchObject({
+      materializedPlanetCount: 0,
+      planetVisualConstructions: 0,
+      planetShaderCompileRequests: 0,
+      planetUpdatesLastFrame: 0,
+    })
     expect(snapshot.frames.nextSequence).toBeGreaterThan(warm.frames.nextSequence)
     expect(snapshot.frames.firstSequence).toBeLessThanOrEqual(warm.frames.nextSequence)
     const windowDropped = Math.max(0, snapshot.frames.firstSequence - warm.frames.nextSequence)
@@ -426,6 +454,7 @@ for (const [quality, limit] of [['medium', 20], ['low', 33.3]] as const) {
     const samples = snapshot.frameTimes.slice(offset)
     expect(samples).toHaveLength(snapshot.frames.nextSequence - warm.frames.nextSequence)
     expect(samples.length).toBeGreaterThan(30)
+    expect(samples.length).toBeLessThanOrEqual(1_050)
     const coveredMs = snapshot.frames.lastTimestampMs! - warm.frames.lastTimestampMs!
     expect(coveredMs).toBeGreaterThanOrEqual(30_000)
     const p95 = percentile95(samples)

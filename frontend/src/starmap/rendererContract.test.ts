@@ -159,6 +159,9 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
   renderer.focusedStar = null
   renderer.planets = []
   renderer.visualByQuestion = new Map()
+  renderer.visualByMeshId = new Map()
+  renderer.materializedOwnerKey = null
+  renderer.materializeStarSystem = vi.fn()
   renderer.elapsedMs = 0
   renderer.reducedMotion = true
   renderer.overviewTarget = new Vector3(Number.NaN, 4, 5)
@@ -507,6 +510,38 @@ describe('Babylon camera recovery behavior', () => {
 })
 
 describe('Babylon stellar motion runtime', () => {
+  test('switching the materialized star system disposes the previous heavy planet resources', () => {
+    const firstStar = makeDatum(makeStar({ id: 'star:first' }))
+    const secondStar = makeDatum(makeStar({ id: 'star:second', c: 'second' }))
+    const firstPlanet = { star: firstStar, question: { id: 'q:first' } }
+    const secondPlanet = { star: secondStar, question: { id: 'q:second' } }
+    const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.planets = [firstPlanet, secondPlanet]
+    renderer.visualByQuestion = new Map()
+    renderer.visualByMeshId = new Map()
+    renderer.materializedOwnerKey = null
+    renderer.createPlanet = vi.fn((planet: any) => {
+      renderer.visualByQuestion.set(planet.question.id, {
+        datum: planet,
+        visual: { dispose: vi.fn() },
+        orbit: { dispose: vi.fn() },
+      })
+    })
+
+    renderer.materializeStarSystem(firstStar)
+    const firstRecord = renderer.visualByQuestion.get('q:first')
+    expect([...renderer.visualByQuestion.keys()]).toEqual(['q:first'])
+
+    renderer.materializeStarSystem(secondStar)
+    expect(firstRecord.visual.dispose).toHaveBeenCalledOnce()
+    expect(firstRecord.orbit.dispose).toHaveBeenCalledOnce()
+    expect([...renderer.visualByQuestion.keys()]).toEqual(['q:second'])
+
+    renderer.releaseMaterializedPlanets()
+    expect(renderer.visualByQuestion.size).toBe(0)
+    expect(renderer.materializedOwnerKey).toBeNull()
+  })
+
   test('planet bookkeeping preserves canonical star identity through framing and mode changes', () => {
     const privateStar = makeStar({
       id: 'star:private', scope: 'private', externalQueryAllowed: false,
@@ -542,6 +577,8 @@ describe('Babylon stellar motion runtime', () => {
     renderer.universe = universe; renderer.mode = 'all'; renderer.wormIdx = 0
     renderer.overviewRadius = 300; renderer.interactionByDatum = new Map()
     renderer.visualByQuestion = new Map(); renderer.selected = null; renderer.selectedVisual = null
+    renderer.visualByMeshId = new Map(); renderer.materializedOwnerKey = null
+    renderer.materializeStarSystem = vi.fn()
     renderer.focusedStar = null; renderer.hoverKey = null
     renderer.starLayer = { setFocus: vi.fn(), setDimensions: vi.fn() }
     renderer.cameraFlightController = { cancel: vi.fn() }

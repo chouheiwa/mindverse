@@ -5,6 +5,8 @@ function fakePorts(options: { webGLVersion?: number; failListener?: string; rele
   const log: string[] = []
   const listeners = new Map<string, EventListener>()
   let frame: (() => void) | null = null
+  let now = 0
+  let hidden = false
   const ports: BabylonRuntimePorts = {
     engine: {
       webGLVersion: options.webGLVersion ?? 2,
@@ -29,10 +31,13 @@ function fakePorts(options: { webGLVersion?: number; failListener?: string; rele
       }),
     },
     ...(options.releaseContext ? { releaseContext: vi.fn(() => { log.push('context:release') }) } : {}),
+    now: () => now,
+    isPageHidden: () => hidden,
   }
   return {
     ports, log,
-    frame: () => frame?.(),
+    frame: (timestamp = now) => { now = timestamp; frame?.() },
+    setHidden: (value: boolean) => { hidden = value },
     dispatch: (type: string, event: Event) => listeners.get(type)?.(event),
   }
 }
@@ -62,16 +67,51 @@ describe('BabylonRuntime lifecycle shell', () => {
 
     runtime.start()
     runtime.start()
-    expect(runtime.diagnostics()).toEqual({ renderLoops: 1, listeners: 2 })
-    fake.frame()
-    fake.frame()
+    expect(runtime.diagnostics()).toMatchObject({ renderLoops: 1, listeners: 2 })
+    fake.frame(0)
+    fake.frame(34)
 
     expect(fake.ports.engine.runRenderLoop).toHaveBeenCalledOnce()
     expect(fake.ports.scene.render).toHaveBeenCalledTimes(2)
     expect(onReady).toHaveBeenCalledOnce()
   })
 
-  test('suspends and resumes the requested loop without creating concurrent loops', () => {
+  test('throttles quiet frames to about 30 FPS and animation frames to at most 60 FPS', () => {
+    const fake = fakePorts()
+    let animating = false
+    const runtime = new BabylonRuntime(fake.ports, { isAnimating: () => animating })
+    runtime.start()
+
+    for (const timestamp of [0, 16, 33]) fake.frame(timestamp)
+    expect(fake.ports.scene.render).toHaveBeenCalledOnce()
+    for (const timestamp of [34, 50, 68]) fake.frame(timestamp)
+    expect(fake.ports.scene.render).toHaveBeenCalledTimes(3)
+
+    animating = true
+    fake.frame(69)
+    fake.frame(85.2)
+    expect(fake.ports.scene.render).toHaveBeenCalledTimes(4)
+    for (const timestamp of [85.7, 102, 102.4]) fake.frame(timestamp)
+    expect(fake.ports.scene.render).toHaveBeenCalledTimes(6)
+    expect(runtime.diagnostics()).toMatchObject({ actualRenders: 6 })
+  })
+
+  test('keeps the single engine loop but skips scene.render while the page is hidden', () => {
+    const fake = fakePorts()
+    const runtime = new BabylonRuntime(fake.ports)
+    runtime.start()
+    fake.frame(0)
+    fake.setHidden(true)
+    fake.frame(40)
+    fake.frame(80)
+    fake.setHidden(false)
+    fake.frame(81)
+
+    expect(fake.ports.engine.runRenderLoop).toHaveBeenCalledOnce()
+    expect(fake.ports.scene.render).toHaveBeenCalledTimes(2)
+  })
+
+  test('suspends actual rendering without unregistering or recreating the unique engine loop', () => {
     const fake = fakePorts()
     const runtime = new BabylonRuntime(fake.ports)
 
@@ -81,8 +121,8 @@ describe('BabylonRuntime lifecycle shell', () => {
     runtime.resume()
     runtime.resume()
 
-    expect(fake.ports.engine.runRenderLoop).toHaveBeenCalledTimes(2)
-    expect(fake.ports.engine.stopRenderLoop).toHaveBeenCalledOnce()
+    expect(fake.ports.engine.runRenderLoop).toHaveBeenCalledOnce()
+    expect(fake.ports.engine.stopRenderLoop).not.toHaveBeenCalled()
   })
 
   test('resizes the engine and reports render failure once', () => {
@@ -123,12 +163,12 @@ describe('BabylonRuntime lifecycle shell', () => {
     const onReady = vi.fn()
     const onError = vi.fn()
     const runtime = new BabylonRuntime(fake.ports, { onReady, onError })
-    expect(runtime.diagnostics()).toEqual({ renderLoops: 0, listeners: 2 })
+    expect(runtime.diagnostics()).toMatchObject({ renderLoops: 0, listeners: 2 })
     runtime.start()
 
     runtime.destroy()
     runtime.destroy()
-    expect(runtime.diagnostics()).toEqual({ renderLoops: 0, listeners: 0 })
+    expect(runtime.diagnostics()).toMatchObject({ renderLoops: 0, listeners: 0 })
     fake.frame()
     fake.dispatch('webglcontextlost', new Event('webglcontextlost', { cancelable: true }))
     fake.dispatch('webglcontextrestored', new Event('webglcontextrestored'))

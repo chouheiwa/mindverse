@@ -89,16 +89,15 @@ describe('PlanetVisual resource boundary', () => {
     }
   })
 
-  test('reports high-frequency detail only after the visible high mesh compiles', async () => {
-    let finishCompilation!: () => void
-    const compilation = new Promise<void>((resolve) => { finishCompilation = resolve })
-    const { visual } = setup({ compileSurface: async () => compilation })
-
+  test('derives high-frequency detail from the visible high shader readiness', async () => {
+    const { visual } = setup({ compileSurface: async () => undefined })
     visual.setFocusBlend(1)
-    const request = visual.ensureLod('high')
+    await visual.ensureLod('high')
+    const material = visual.focusMesh!.material as ShaderMaterial
+    const isReady = vi.spyOn(material, 'isReady').mockReturnValue(false)
+
     expect(visual.diagnostics()).toMatchObject({ surfaceLevel: 'high', highFrequencyDetail: false })
-    finishCompilation()
-    await request
+    isReady.mockReturnValue(true)
 
     expect(visual.focusMesh?.isEnabled()).toBe(true)
     expect(visual.diagnostics()).toMatchObject({ surfaceLevel: 'high', highFrequencyDetail: true })

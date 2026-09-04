@@ -41,6 +41,13 @@ export function validateBuildBoundaries({
   if (renderer !== 'three' && renderer !== 'babylon') {
     throw new Error('build boundary: renderer must explicitly be three or babylon')
   }
+  for (const field of ['compiledSurfaceLevels', 'diagnosticLastFlight']) {
+    const stateAsset = Object.entries(assetSources)
+      .find(([, source]) => typeof source === 'string' && source.includes(field))
+    if (stateAsset) {
+      throw new Error(`build boundary: forbidden renderer state ${field} found in ${stateAsset[0]}`)
+    }
+  }
   if (!diagnostics) {
     const diagnosticAsset = Object.entries(assetSources)
       .find(([, source]) => typeof source === 'string' && source.includes('__MINDVERSE_E2E__'))

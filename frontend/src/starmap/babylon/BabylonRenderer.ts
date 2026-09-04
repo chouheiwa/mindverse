@@ -143,7 +143,6 @@ export class BabylonRenderer implements MindverseRenderer {
   private hoverProgress = 0
   private pressedProgress = 0
   private activeFlight: Readonly<{ flight: CameraFlight; elapsedMs: number }> | null = null
-  private diagnosticLastFlight: CameraFlight | null = null
   private presentation: StarPresentation = describeStarPresentation({ phase: 'panorama' })
   private lastLayerPresentation: StarPresentation | null = null
   private lastLayerHoverKey: string | null = null
@@ -1364,12 +1363,10 @@ export class BabylonRenderer implements MindverseRenderer {
         reducedMotion: this.reducedMotion,
       })
       if (result.kind === 'started') {
-        this.diagnosticLastFlight = result.flight
         this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0 })
         this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
         this.recordDiagnosticCameraSample()
       } else if (result.kind === 'noop') {
-        this.diagnosticLastFlight = null
         this.activeFlight = null
         this.camera.setTarget(target)
         this.camera.radius = framing.radius
@@ -1484,9 +1481,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.diagnosticApproachProgressOverride = null
       return wasFrozen
     }
-    const active = this.activeFlight ?? (this.diagnosticLastFlight
-      ? Object.freeze({ flight: this.diagnosticLastFlight, elapsedMs: this.diagnosticLastFlight.durationMs })
-      : null)
+    const active = this.activeFlight
     if (!active || !this.focusedStar || !Number.isFinite(progress) || progress < 0 || progress > 1) return false
     const deterministicTarget = starWorldPosition(this.focusedStar, 0, 0, new Vector3())
     const deterministicFlight: CameraFlight = Object.freeze({

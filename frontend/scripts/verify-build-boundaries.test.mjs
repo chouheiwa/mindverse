@@ -136,6 +136,17 @@ describe('build boundary verifier', () => {
     expect(validateBuildBoundaries(fixture)).toMatchObject({ renderer: 'babylon' })
   })
 
+  test.each(['compiledSurfaceLevels', 'diagnosticLastFlight'])(
+    'rejects production renderer state named %s',
+    (field) => {
+      const fixture = validBabylonFixture()
+      fixture.assetSources = { 'assets/BabylonRenderer.js': `class Renderer { ${field} = null }` }
+      expect(() => validateBuildBoundaries(fixture)).toThrow(new RegExp(field))
+      fixture.diagnostics = true
+      expect(() => validateBuildBoundaries(fixture)).toThrow(new RegExp(field))
+    },
+  )
+
   test('rejects Three and postprocessing code in a Babylon artifact', () => {
     const fixture = validBabylonFixture()
     fixture.chunks.push({

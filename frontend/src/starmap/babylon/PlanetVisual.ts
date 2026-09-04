@@ -79,7 +79,6 @@ export class PlanetVisual {
   private selected = false
   private atmosphereFallback = false
   private highUnavailable = false
-  private readonly compiledSurfaceLevels = new Set<PlanetLod>()
   private disposed = false
   private readonly lightScratch = new Vector3()
 
@@ -177,7 +176,6 @@ export class PlanetVisual {
         const mesh = level === 'high' ? this.focusMesh : this.orbitMesh
         if (!mesh?.material) throw new Error(`Planet ${level} surface was not created`)
         await this.compileSurface(mesh.material, level, mesh)
-        this.compiledSurfaceLevels.add(level)
         if (level === 'high' && this.focusAtmosphereMesh?.material && !this.atmosphereFallback) {
           try {
             await this.compileAtmosphere(this.focusAtmosphereMesh.material, this.focusAtmosphereMesh)
@@ -261,8 +259,8 @@ export class PlanetVisual {
       thermalDominant: (Object.entries(this.descriptor.thermal) as [keyof PlanetSurfaceDescriptor['thermal'], number][])
         .reduce((best, entry) => entry[1] > best[1] ? entry : best)[0],
       highFrequencyDetail: this.level === 'high'
-        && this.compiledSurfaceLevels.has('high')
-        && this.focusMesh?.isEnabled() === true,
+        && this.focusMesh?.isEnabled() === true
+        && this.focusMaterial?.isReady(this.focusMesh) === true,
     })
   }
 
@@ -387,7 +385,6 @@ export class PlanetVisual {
     this.focusMaterial = null
     this.focusAtmosphereMesh = null
     this.focusAtmosphereMaterial = null
-    this.compiledSurfaceLevels.delete('high')
   }
 
   private installLambertFallback(): void {

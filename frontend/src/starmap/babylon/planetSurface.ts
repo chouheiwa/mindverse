@@ -16,13 +16,14 @@ export interface PlanetSurfaceEvidence {
 
 export interface PlanetSurfaceDescriptor {
   readonly metadata: Readonly<{ questionId: string; starId: string }>
+  readonly seed: number
   readonly radius: number
   readonly craterCount: number
   readonly detailDensity: number
   readonly faultStrength: number
   readonly atmosphere: number
-  readonly createdGlow: number
-  readonly collectedMarker: number
+  readonly createdGlow: 0 | 1
+  readonly collectedMarker: 0 | 1
   readonly incident: number
   readonly thermal: ThermalWeights
 }
@@ -41,7 +42,8 @@ const THERMAL_CENTERS = Object.freeze([
 export function incidentEnergy(normalizedStarEnergy: number, normalizedOrbitDistance: number): number {
   const energy = Number.isFinite(normalizedStarEnergy) ? Math.max(0, normalizedStarEnergy) : 0
   const distance = Number.isFinite(normalizedOrbitDistance) ? Math.abs(normalizedOrbitDistance) : 0
-  return energy / Math.max(distance * distance, EPSILON)
+  const incident = energy / Math.max(distance * distance, EPSILON)
+  return Number.isFinite(incident) ? incident : Number.MAX_VALUE
 }
 
 export function thermalWeights(incident: number): ThermalWeights {
@@ -79,17 +81,29 @@ export function buildPlanetSurfaceDescriptor(evidence: PlanetSurfaceEvidence): P
   const incident = incidentEnergy(evidence.normalizedStarEnergy, evidence.normalizedOrbitDistance)
   return Object.freeze({
     metadata: Object.freeze({ questionId: evidence.questionId, starId: evidence.starId }),
-    radius: 0.55 + 0.45 * answerDensity,
-    craterCount: Math.round(5 + 43 * answerDensity),
-    detailDensity: answerDensity,
-    faultStrength,
+    seed: stablePlanetSeed(evidence.questionId, evidence.starId),
+    radius: clamp(0.55 + 0.45 * answerDensity, 0.55, 1),
+    craterCount: Math.round(clamp(5 + 43 * answerDensity, 5, 48)),
+    detailDensity: clamp01(answerDensity),
+    faultStrength: clamp01(faultStrength),
     atmosphere: clamp01(evidence.freshness),
-    createdGlow: evidence.created ? 1 : 0,
-    collectedMarker: evidence.collected ? 1 : 0,
-    incident,
+    createdGlow: evidence.created ? 1 as const : 0 as const,
+    collectedMarker: evidence.collected ? 1 as const : 0 as const,
+    incident: clamp(incident, 0, Number.MAX_VALUE),
     thermal: thermalWeights(incident),
   })
 }
 
+export function stablePlanetSeed(questionId: string, starId: string): number {
+  let hash = 2166136261
+  for (const codePoint of `${questionId}\u0000${starId}`) {
+    hash ^= codePoint.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
 const finite = (value: number): number => Number.isFinite(value) ? value : 0
-const clamp01 = (value: number): number => Math.min(1, Math.max(0, finite(value)))
+const clamp = (value: number, minimum: number, maximum: number): number =>
+  Math.min(maximum, Math.max(minimum, finite(value)))
+const clamp01 = (value: number): number => clamp(value, 0, 1)

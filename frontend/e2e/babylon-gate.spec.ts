@@ -356,12 +356,13 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   const stage = page.getByRole('region', { name: '问题行星近景' })
   const stageBounds = await stage.boundingBox()
   if (!stageBounds) throw new Error('question planet stage has no bounds')
-  const orbitBefore = (await snapshot(page))!.scene.cameraAlpha!
+  const rotationBefore = (await snapshot(page))!.planet.rotation
   await page.mouse.move(stageBounds.x + stageBounds.width * 0.35, stageBounds.y + stageBounds.height * 0.45)
   await page.mouse.down()
   await page.mouse.move(stageBounds.x + stageBounds.width * 0.58, stageBounds.y + stageBounds.height * 0.35, { steps: 5 })
   await page.mouse.up()
-  await expect.poll(async () => (await snapshot(page))!.scene.cameraAlpha).not.toBe(orbitBefore)
+  await expect.poll(async () => (await snapshot(page))!.planet.rotation).not.toEqual(rotationBefore)
+  expect((await snapshot(page))!.resources.highPlanetCount).toBeLessThanOrEqual(1)
   const entryCamera = (await snapshot(page))!.scene
   await enterStrata(page, '回溯地层')
   expect(await nonBackgroundRatio(page)).toBeGreaterThanOrEqual(0.35)

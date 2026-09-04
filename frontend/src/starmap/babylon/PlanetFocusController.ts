@@ -19,6 +19,7 @@ export interface FocusCameraPort {
 /** Adapter boundary implemented by a PlanetVisual without exposing Babylon meshes. */
 export interface FocusPlanetVisualPort {
   readonly radius: number
+  readonly minimumFocusRadiusMultiplier?: number
   focusTarget(): FocusVector3
   setFocusBlend(value: number): void
   rotate(yawDelta: number, pitchDelta: number): void
@@ -115,10 +116,10 @@ export class PlanetFocusController {
   }
 
   /** Leaves focus for another renderer mode without requesting navigation. */
-  suspend(): void {
+  suspend(restoreCamera = true): void {
     if (this.state === 'idle') return
     this.clearRotationInertia()
-    if (this.returnPose) this.camera.writePose(copyPose(this.returnPose))
+    if (restoreCamera && this.returnPose) this.camera.writePose(copyPose(this.returnPose))
     if (this.visual) this.visual.setFocusBlend(0)
     this.finishExit()
   }
@@ -163,7 +164,9 @@ export class PlanetFocusController {
   wheel(deltaY: number): boolean {
     if (this.state !== 'focused' || !Number.isFinite(deltaY)) return false
     const current = this.camera.readPose()
-    this.camera.writePose({ ...current, radius: this.clampRadius(current.radius * Math.exp(deltaY * this.wheelSensitivity)) })
+    const nextRadius = this.clampRadius(current.radius * Math.exp(deltaY * this.wheelSensitivity))
+    if (deltaY > 0 && nextRadius <= current.radius + 1e-6) return false
+    this.camera.writePose({ ...current, radius: nextRadius })
     return true
   }
 
@@ -242,7 +245,10 @@ export class PlanetFocusController {
 
   private clampRadius(radius: number): number {
     const planetRadius = Number.isFinite(this.visual?.radius) && this.visual!.radius > 0 ? this.visual!.radius : 1
-    return Math.min(planetRadius * this.maxRadiusMultiplier, Math.max(planetRadius * this.minRadiusMultiplier, radius))
+    const visualMinimum = this.visual?.minimumFocusRadiusMultiplier
+    const minimumMultiplier = Number.isFinite(visualMinimum) && visualMinimum! > 0
+      ? Math.max(this.minRadiusMultiplier, visualMinimum!) : this.minRadiusMultiplier
+    return Math.min(planetRadius * this.maxRadiusMultiplier, Math.max(planetRadius * minimumMultiplier, radius))
   }
 
   private clearRotationInertia(): void {

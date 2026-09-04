@@ -41,6 +41,11 @@ function installDiagnostics() {
     scenePhase: () => 'strata-free',
     projectedBounds: () => ({ selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } }),
     lifecycle: () => ({ rafLoops: 1, listeners: 4 }),
+    planet: () => ({
+      selectedQuestionId: 'q:7', surfaceLevel: 'high', surfaceFallback: false,
+      atmosphereFallback: false, rotation: [0, 0.2, 0, 0.98] as const,
+    }),
+    resources: () => ({ highPlanetCount: 1 }),
     stellar: () => ({
       projectedStars: [{
         starKey: 'star:v1:public:alpha',
@@ -91,6 +96,8 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
     scenePhase: 'strata-free',
     projectedBounds: { selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } },
     lifecycle: { rafLoops: 1, listeners: 4 },
+    planet: { selectedQuestionId: 'q:7', surfaceLevel: 'high', surfaceFallback: false },
+    resources: { highPlanetCount: 1 },
     stellar: {
       projectedStars: [{
         starKey: 'star:v1:public:alpha',
@@ -106,6 +113,7 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
     },
   })
   first.stellar.projectedStars[0]!.halo.width = 1
+  ;(first.planet.rotation as unknown as number[])[1] = 99
   first.stellar.cameraSamples.length = 0
   first.frameTimes.length = 0
   first.scene.planetCount = 0
@@ -117,6 +125,7 @@ test.each([120, 144, 240])('retains a full 30-second window at %iHz with monoton
       projectedStars: [{ halo: { width: 48 } }],
       cameraSamples: { length: 3 },
     },
+    planet: { rotation: [0, 0.2, 0, 0.98] },
   })
   removeE2EDiagnostics(owner)
   expect(window.__MINDVERSE_E2E__).toBeUndefined()

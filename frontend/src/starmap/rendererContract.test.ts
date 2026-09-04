@@ -169,6 +169,15 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
     setTarget(target: Vector3) { this.target = target.clone() },
   }
   renderer.cameraFlightController = new CameraFlightController()
+  renderer.planetFocusController = {
+    state: 'idle',
+    setReducedMotion: vi.fn(),
+    suspend: vi.fn(),
+    drag: vi.fn(() => false),
+    wheel: vi.fn(() => false),
+    keyDown: vi.fn(() => false),
+    update: vi.fn(),
+  }
   renderer.starPositionScratch = new Vector3()
   renderer.flightTargetScratch = new Vector3()
   renderer.planetStarPositionScratch = new Vector3()

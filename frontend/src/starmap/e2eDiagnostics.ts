@@ -22,6 +22,14 @@ export interface RenderSnapshot {
     clickEvents?: number
     lastPick?: 'none' | 'star' | 'planet' | 'specimen' | 'other'
   }
+  planet: {
+    selectedQuestionId: string | null
+    surfaceLevel: 'low' | 'medium' | 'high' | 'lambert' | null
+    surfaceFallback: boolean
+    atmosphereFallback: boolean
+    rotation: readonly [number, number, number, number] | null
+  }
+  resources: { highPlanetCount: number }
   stellar: StellarDiagnosticsSnapshot
   p95FrameTime: number | null
   renderReady: boolean
@@ -113,6 +121,8 @@ export interface E2EDiagnosticsDetails {
   readonly projectedBounds: () => RenderSnapshot['projectedBounds']
   readonly lifecycle: () => RenderSnapshot['lifecycle']
   readonly stellar?: () => StellarDiagnosticsSnapshot
+  readonly planet?: () => RenderSnapshot['planet']
+  readonly resources?: () => RenderSnapshot['resources']
   readonly setApproachProgress?: (progress: number | null) => boolean
 }
 
@@ -178,6 +188,14 @@ export function installE2EDiagnostics(
         scenePhase: state.details.scenePhase(),
         projectedBounds: structuredClone(state.details.projectedBounds()),
         lifecycle: { ...state.details.lifecycle() },
+        planet: structuredClone(state.details.planet?.() ?? {
+          selectedQuestionId: null,
+          surfaceLevel: null,
+          surfaceFallback: false,
+          atmosphereFallback: false,
+          rotation: null,
+        }),
+        resources: { ...(state.details.resources?.() ?? { highPlanetCount: 0 }) },
         stellar: structuredClone(state.details.stellar?.() ?? {
           starCount: 0,
           projectedStars: [],

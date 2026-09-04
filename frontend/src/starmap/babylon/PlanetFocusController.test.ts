@@ -73,6 +73,18 @@ describe('PlanetFocusController state machine', () => {
     expect(onExit).not.toHaveBeenCalled()
     expect(readPose()).toEqual(pose(30, -5))
   })
+
+  test('can suspend for strata without replacing the current entry camera pose', () => {
+    const { controller, visual, onExit, readPose } = setup(true)
+    controller.enter(visual)
+    const focusedPose = readPose()
+
+    controller.suspend(false)
+
+    expect(controller.state).toBe('idle')
+    expect(onExit).not.toHaveBeenCalled()
+    expect(readPose()).toEqual(focusedPose)
+  })
 })
 
 describe('PlanetFocusController input', () => {

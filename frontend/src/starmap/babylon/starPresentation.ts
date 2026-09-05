@@ -1,3 +1,5 @@
+import { NON_FOCUSED_OPACITY } from '../focusEmphasis'
+
 export const HOVER_INTERPOLATION_MS = 150
 
 export type StarPresentationPhase =
@@ -72,9 +74,9 @@ function basePresentation(
       coronaIntensity: 1,
       systemReveal,
       focusedOpacity: 1,
-      nonFocusedTargetOpacity: 0.18,
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
       backgroundDimMix: handoff,
-      effectiveNonFocusedOpacity: lerp(1, 0.18, handoff),
+      effectiveNonFocusedOpacity: lerp(1, NON_FOCUSED_OPACITY, handoff),
       lodIntent: progress === 0 ? 'point' : progress === 1 ? 'surface' : 'transition',
     }
   }
@@ -89,9 +91,9 @@ function basePresentation(
       coronaIntensity: planetFocus ? 0.55 : 1,
       systemReveal: 1,
       focusedOpacity: 1,
-      nonFocusedTargetOpacity: 0.18,
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
       backgroundDimMix: 1,
-      effectiveNonFocusedOpacity: 0.18,
+      effectiveNonFocusedOpacity: NON_FOCUSED_OPACITY,
       lodIntent: 'surface',
     }
   }
@@ -99,7 +101,7 @@ function basePresentation(
   return {
     coreAlpha: 1, haloAlpha: 1, surfaceAlpha: 0, coronaAlpha: 0,
     coronaIntensity: 0, systemReveal: 0, focusedOpacity: 1,
-    nonFocusedTargetOpacity: 0.18, backgroundDimMix: 0, effectiveNonFocusedOpacity: 1,
+    nonFocusedTargetOpacity: NON_FOCUSED_OPACITY, backgroundDimMix: 0, effectiveNonFocusedOpacity: 1,
     lodIntent: 'point',
   }
 }

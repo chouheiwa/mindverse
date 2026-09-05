@@ -1,3 +1,5 @@
+import { LabelStrategyCache } from './labelVisibility'
+import { THREE_VERTICAL_FOV, systemDistance } from './babylon/framing'
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { Viewport } from '@babylonjs/core/Maths/math.viewport.js'
 import { readFileSync } from 'node:fs'
@@ -46,6 +48,7 @@ function threeHarness(stars: StarDatum[], callbacks: { onPick?: (star: Star | nu
 
 function babylonHarness(stars: StarDatum[], callbacks: { onPick?: (star: Star | null) => void }): RendererHarness {
   const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+  renderer.labelStrategy = new LabelStrategyCache([], [])
   renderer.destroyed = false
   renderer.universeVisible = true
   renderer.strataTransition = { phase: null }
@@ -153,6 +156,7 @@ describe.each([
 
 function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void): RendererHarness {
   const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+  renderer.labelStrategy = new LabelStrategyCache([], [])
   renderer.destroyed = false
   renderer.selected = null
   renderer.selectedVisual = null
@@ -169,6 +173,7 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
   renderer.camera = {
     target: Vector3.Zero(),
     radius: 20,
+    fov: THREE_VERTICAL_FOV,
     setTarget(target: Vector3) { this.target = target.clone() },
   }
   renderer.cameraFlightController = new CameraFlightController()
@@ -203,6 +208,7 @@ function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void)
 describe('Babylon camera recovery behavior', () => {
   test('destroy clears a diagnostic freeze before fallible cleanup begins', () => {
     const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.labelStrategy = new LabelStrategyCache([], [])
     renderer.destroyed = false
     renderer.diagnosticApproachProgressOverride = 0.65
     renderer.selected = null
@@ -516,6 +522,7 @@ describe('Babylon stellar motion runtime', () => {
     const firstPlanet = { star: firstStar, question: { id: 'q:first' } }
     const secondPlanet = { star: secondStar, question: { id: 'q:second' } }
     const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.labelStrategy = new LabelStrategyCache([], [])
     renderer.planets = [firstPlanet, secondPlanet]
     renderer.visualByQuestion = new Map()
     renderer.visualByMeshId = new Map()
@@ -573,6 +580,7 @@ describe('Babylon stellar motion runtime', () => {
     expect(planets[1]?.star).toBe(canonicalStars[1])
 
     const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.labelStrategy = new LabelStrategyCache([], [])
     renderer.destroyed = false; renderer.planets = planets; renderer.stars = canonicalStars
     renderer.universe = universe; renderer.mode = 'all'; renderer.wormIdx = 0
     renderer.overviewRadius = 300; renderer.interactionByDatum = new Map()
@@ -581,6 +589,7 @@ describe('Babylon stellar motion runtime', () => {
     renderer.materializeStarSystem = vi.fn()
     renderer.focusedStar = null; renderer.hoverKey = null
     renderer.starLayer = { setFocus: vi.fn(), setDimensions: vi.fn() }
+    renderer.camera = { fov: THREE_VERTICAL_FOV }
     renderer.cameraFlightController = { cancel: vi.fn() }
     renderer.callbacks = {}; renderer.syncOrbitPresentation = vi.fn()
     renderer.resetView = vi.fn(() => { renderer.focusedStar = null })
@@ -595,6 +604,7 @@ describe('Babylon stellar motion runtime', () => {
 
   test('projects pointer candidates into retained caller-owned output', () => {
     const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+    renderer.labelStrategy = new LabelStrategyCache([], [])
     renderer.engine = { getRenderWidth: () => 200, getRenderHeight: () => 100 }
     renderer.camera = { viewport: new Viewport(0, 0, 1, 1) }
     renderer.scene = { getTransformMatrix: () => Matrix.Identity() }
@@ -606,6 +616,48 @@ describe('Babylon stellar motion runtime', () => {
 
     expect(renderer.projectToCssToRef(Vector3.Zero(), output)).toBe(output)
     expect([output.x, output.y, output.z].every(Number.isFinite)).toBe(true)
+  })
+
+  test('clicking a part of the inspected craft focuses it and tells the UI', () => {
+    const datum = makeDatum(makeStar())
+    const renderer = recoveryHarness(datum, vi.fn())
+    const onProbePartChange = vi.fn()
+    renderer.callbacks = { onProbePartChange }
+    renderer.inspectedProbeId = 'article:701'
+    const setPartHighlight = vi.fn()
+    renderer.probeLayer = { setPartHighlight }
+
+    renderer.activatePointerTarget('probe-part:scanner-lens')
+
+    expect(setPartHighlight).toHaveBeenCalledWith('scanner-lens')
+    expect(onProbePartChange).toHaveBeenCalledWith('scanner-lens')
+  })
+
+  test('Escape belongs to the probe dialog while an inspection is open', () => {
+    const datum = makeDatum(makeStar())
+    const renderer = recoveryHarness(datum, vi.fn())
+    renderer.workspaceOpen = false
+    renderer.universeVisible = true
+    renderer.focusedStar = datum
+    renderer.planetFocusController = { keyDown: () => false }
+    renderer.exitHierarchy = vi.fn()
+    renderer.inspectedProbeId = 'article:701'
+
+    renderer.applyKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }))
+    // 关闭检查面板的 Escape 不该顺手把恒星聚焦也退掉 —— 旧版按下 Escape
+    // 只关面板，焦点回到「检查探测器」按钮。
+    expect(renderer.exitHierarchy).not.toHaveBeenCalled()
+
+    // 面板的 Escape 处理器先跑、先关面板再冒泡到 window —— 到达渲染器时
+    // inspectedProbeId 已经清空了，只有「这个事件已经被消费」还能拦住它。
+    renderer.inspectedProbeId = null
+    const consumed = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    consumed.preventDefault()
+    renderer.applyKeyDown(consumed)
+    expect(renderer.exitHierarchy).not.toHaveBeenCalled()
+
+    renderer.applyKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(renderer.exitHierarchy).toHaveBeenCalledTimes(1)
   })
 
   test('Escape during approach cancels the flight and exits to a safe panorama', () => {
@@ -649,7 +701,7 @@ describe('Babylon stellar motion runtime', () => {
       durationMs: 100,
     }
     renderer.focusedStar = datum
-    renderer.activeFlight = { flight, elapsedMs: 0 }
+    renderer.activeFlight = { flight, elapsedMs: 0, startedAt: performance.now() }
     renderer.cameraFlightController = {
       frame: vi.fn((_flight: unknown, elapsedMs: number) => {
         const progress = Math.min(1, elapsedMs / 100)
@@ -663,12 +715,19 @@ describe('Babylon stellar motion runtime', () => {
     }
     renderer.currentStarPosition = vi.fn(() => new Vector3(30, 6, -3))
 
-    renderer.updateCameraFlight(50)
-    expect(renderer.camera.target.asArray()).toEqual([15, 3, -1.5])
-    expect(renderer.camera.radius).toBeCloseTo(50)
-    expect(renderer.activeFlight.elapsedMs).toBe(50)
+    // The flight runs on wall time, so the harness moves its start instead of
+    // feeding it deltas — a slow frame must not leave the flight short.
+    renderer.activeFlight = { flight, elapsedMs: 50, startedAt: performance.now() - 50 }
+    renderer.updateCameraFlight()
+    // Wall time carries real jitter, so the rebase is checked to tolerance.
+    for (const [axis, expected] of [[0, 15], [1, 3], [2, -1.5]] as const) {
+      expect(renderer.camera.target.asArray()[axis]).toBeCloseTo(expected, 2)
+    }
+    expect(renderer.camera.radius).toBeCloseTo(50, 1)
+    expect(renderer.activeFlight.elapsedMs).toBeGreaterThanOrEqual(50)
 
-    renderer.updateCameraFlight(50)
+    renderer.activeFlight = { flight, elapsedMs: 100, startedAt: performance.now() - 100 }
+    renderer.updateCameraFlight()
     expect(renderer.camera.target.asArray()).toEqual([30, 6, -3])
     expect(renderer.camera.radius).toBeCloseTo(25)
     expect(renderer.activeFlight).toBeNull()
@@ -757,7 +816,8 @@ describe('Babylon stellar motion runtime', () => {
 
     expect(renderer.focusStar('alpha')).toBe(datum.s)
     const systemRadius = renderer.activeFlight.flight.to.radius
-    expect(systemRadius).toBeCloseTo(140.4)
+    // orbit 100 + planet 4 framed at Three's share of the vertical FOV.
+    expect(systemRadius).toBeCloseTo(systemDistance(104, THREE_VERTICAL_FOV), 4)
     renderer.camera.target = new Vector3(7, 8, 9)
     renderer.camera.radius = 77
     expect(renderer.focusStar('alpha')).toBe(datum.s)

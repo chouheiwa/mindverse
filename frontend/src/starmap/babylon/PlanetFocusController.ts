@@ -27,6 +27,12 @@ export interface FocusPlanetVisualPort {
 
 export type PlanetFocusState = 'idle' | 'entering' | 'focused' | 'exiting'
 
+/** 绝对距离范围；由调用方按轨道尺度给出，不再从行星半径推。 */
+export interface FocusRadiusRange {
+  readonly low: number
+  readonly high: number
+}
+
 export interface PlanetFocusControllerOptions {
   reducedMotion?: boolean
   transitionMs?: number
@@ -61,6 +67,7 @@ export class PlanetFocusController {
   private readonly onExit: () => void
   private visual: FocusPlanetVisualPort | null = null
   private returnPose: FocusCameraPose | null = null
+  private radiusRange: FocusRadiusRange | null = null
   private transitionFrom: FocusCameraPose | null = null
   private transitionTo: FocusCameraPose | null = null
   private transitionElapsed = 0
@@ -97,12 +104,27 @@ export class PlanetFocusController {
     this.wheelSensitivity = options.wheelSensitivity ?? 0.001
   }
 
-  enter(visual: FocusPlanetVisualPort): void {
+  /**
+   * @param focusDistance 目标距离。由调用方按**轨道半径**导出（见 framing.ts）——
+   *   用行星半径推会让恒星退化成占满背景的一堵墙。
+   * @param radiusRange 滚轮可达的绝对距离范围。
+   */
+  enter(visual: FocusPlanetVisualPort, focusDistance?: number, radiusRange?: FocusRadiusRange): void {
     if (this.state === 'idle') this.returnPose = copyPose(this.camera.readPose())
     this.visual = visual
     this.exitNotified = false
     this.clearRotationInertia()
-    const radius = this.clampRadius(visual.radius * this.focusRadiusMultiplier)
+    this.radiusRange = radiusRange && Number.isFinite(radiusRange.low) && Number.isFinite(radiusRange.high)
+      && radiusRange.low > 0 && radiusRange.high >= radiusRange.low
+      ? radiusRange
+      : null
+    // An explicit distance already carries the orbit-scale reasoning, so it is
+    // honoured as given; only the legacy planet-radius fallback needs clamping.
+    const radius = Number.isFinite(focusDistance) && (focusDistance as number) > 0
+      ? this.radiusRange
+        ? Math.min(this.radiusRange.high, Math.max(this.radiusRange.low, focusDistance as number))
+        : focusDistance as number
+      : this.clampRadius(visual.radius * this.focusRadiusMultiplier)
     this.beginTransition('entering', {
       target: { ...visual.focusTarget() },
       radius,
@@ -112,6 +134,7 @@ export class PlanetFocusController {
   exit(): void {
     if (this.state === 'idle' || !this.visual || !this.returnPose) return
     this.clearRotationInertia()
+    this.radiusRange = null
     this.beginTransition('exiting', this.returnPose, 0)
   }
 
@@ -244,6 +267,9 @@ export class PlanetFocusController {
   }
 
   private clampRadius(radius: number): number {
+    if (this.radiusRange) {
+      return Math.min(this.radiusRange.high, Math.max(this.radiusRange.low, radius))
+    }
     const planetRadius = Number.isFinite(this.visual?.radius) && this.visual!.radius > 0 ? this.visual!.radius : 1
     const visualMinimum = this.visual?.minimumFocusRadiusMultiplier
     const minimumMultiplier = Number.isFinite(visualMinimum) && visualMinimum! > 0

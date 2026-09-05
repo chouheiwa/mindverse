@@ -54,6 +54,8 @@ export class BabylonRuntime {
   private lastRenderAt: number | null = null
   private lastAnimating: boolean | null = null
   private actualRenders = 0
+  private lastRenderCostMs = 0
+  private maxRenderCostMs = 0
 
   constructor(ports: BabylonRuntimePorts, callbacks: BabylonRuntimeCallbacks = {}) {
     this.ports = ports
@@ -106,11 +108,22 @@ export class BabylonRuntime {
     this.disposeAll()
   }
 
-  diagnostics(): Readonly<{ renderLoops: number; listeners: number; actualRenders: number }> {
+  diagnostics(): Readonly<{
+    renderLoops: number
+    listeners: number
+    actualRenders: number
+    lastRenderCostMs: number
+    maxRenderCostMs: number
+  }> {
     return Object.freeze({
       renderLoops: this.running ? 1 : 0,
       listeners: this.listenerCount,
       actualRenders: this.actualRenders,
+      // Recorded frame time is the *scheduling interval*, which the deliberate
+      // 30fps idle throttle pins near 33ms. Cost is the work itself, so a
+      // resolution or antialiasing change can be judged on its own terms.
+      lastRenderCostMs: this.lastRenderCostMs,
+      maxRenderCostMs: this.maxRenderCostMs,
     })
   }
 
@@ -127,6 +140,10 @@ export class BabylonRuntime {
     if (this.lastRenderAt !== null && now - this.lastRenderAt < minimumInterval) return
     try {
       this.ports.scene.render()
+      const finishedAt = this.ports.now?.() ?? performance.now()
+      const cost = Number.isFinite(finishedAt) ? Math.max(0, finishedAt - now) : 0
+      this.lastRenderCostMs = cost
+      this.maxRenderCostMs = Math.max(this.maxRenderCostMs, cost)
       this.lastRenderAt = now
       this.actualRenders += 1
       if (!this.readyReported) {

@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest'
+import { NON_FOCUSED_OPACITY } from '../focusEmphasis'
 import {
   HOVER_INTERPOLATION_MS,
   describeStarPresentation,
 } from './starPresentation'
 
 describe('describeStarPresentation', () => {
+  it('keeps the surrounding star field lit while a star or planet is focused', () => {
+    // Three dimmed unfocused owners to NON_FOCUSED_OPACITY rather than hiding
+    // them; the sky behind a focused system is what makes it read as deep space.
+    for (const phase of ['star-focus', 'planet-focus'] as const) {
+      const presentation = describeStarPresentation({ phase })
+      expect(presentation.effectiveNonFocusedOpacity).toBeCloseTo(NON_FOCUSED_OPACITY, 6)
+      expect(presentation.effectiveNonFocusedOpacity).toBeGreaterThan(0)
+    }
+    for (const phase of ['panorama', 'approach', 'star-focus', 'planet-focus'] as const) {
+      expect(describeStarPresentation({ phase, approachProgress: 1 }).effectiveNonFocusedOpacity)
+        .toBeGreaterThan(0)
+    }
+    expect(describeStarPresentation({ phase: 'strata' }).effectiveNonFocusedOpacity).toBe(0)
+  })
+
   it('describes panorama point rendering without revealing the system', () => {
     expect(describeStarPresentation({ phase: 'panorama' })).toMatchObject({
       coreAlpha: 1,
@@ -14,7 +30,7 @@ describe('describeStarPresentation', () => {
       coronaIntensity: 0,
       systemReveal: 0,
       focusedOpacity: 1,
-      nonFocusedTargetOpacity: 0.18,
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
       backgroundDimMix: 0,
       effectiveNonFocusedOpacity: 1,
       lodIntent: 'point',
@@ -31,7 +47,7 @@ describe('describeStarPresentation', () => {
     expect(quarter.systemReveal).toBe(0)
     expect(describeStarPresentation({ phase: 'approach', approachProgress: 0 }))
       .toMatchObject({
-        nonFocusedTargetOpacity: 0.18,
+        nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
         backgroundDimMix: 0,
         effectiveNonFocusedOpacity: 1,
       })
@@ -39,15 +55,15 @@ describe('describeStarPresentation', () => {
     expect(halfway.surfaceAlpha).toBe(0.5)
     expect(halfway.systemReveal).toBe(0)
     expect(halfway).toMatchObject({
-      nonFocusedTargetOpacity: 0.18,
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
       backgroundDimMix: 0.5,
-      effectiveNonFocusedOpacity: 0.59,
+      effectiveNonFocusedOpacity: 1 - (1 - NON_FOCUSED_OPACITY) * 0.5,
       coronaIntensity: 1,
     })
     expect(arrival).toMatchObject({
       coreAlpha: 0, haloAlpha: 0, surfaceAlpha: 1, coronaAlpha: 1, systemReveal: 1,
-      nonFocusedTargetOpacity: 0.18, backgroundDimMix: 1,
-      effectiveNonFocusedOpacity: 0.18, lodIntent: 'surface',
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY, backgroundDimMix: 1,
+      effectiveNonFocusedOpacity: NON_FOCUSED_OPACITY, lodIntent: 'surface',
     })
   })
 
@@ -56,9 +72,9 @@ describe('describeStarPresentation', () => {
       surfaceAlpha: 1,
       coronaAlpha: 1,
       focusedOpacity: 1,
-      nonFocusedTargetOpacity: 0.18,
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
       backgroundDimMix: 1,
-      effectiveNonFocusedOpacity: 0.18,
+      effectiveNonFocusedOpacity: NON_FOCUSED_OPACITY,
       systemReveal: 1,
       coronaIntensity: 1,
       lodIntent: 'surface',
@@ -67,9 +83,9 @@ describe('describeStarPresentation', () => {
       surfaceAlpha: 1,
       coronaAlpha: 0.45,
       focusedOpacity: 1,
-      nonFocusedTargetOpacity: 0.18,
+      nonFocusedTargetOpacity: NON_FOCUSED_OPACITY,
       backgroundDimMix: 1,
-      effectiveNonFocusedOpacity: 0.18,
+      effectiveNonFocusedOpacity: NON_FOCUSED_OPACITY,
       systemReveal: 1,
       coronaIntensity: 0.55,
       lodIntent: 'surface',

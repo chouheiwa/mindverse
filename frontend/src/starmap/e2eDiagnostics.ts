@@ -45,6 +45,17 @@ export interface RenderSnapshot {
     planetShaderCompileRequests?: number
     planetUpdatesLastFrame?: number
     actualRenderCount?: number
+    /** Time spent inside one scene render, as opposed to the scheduling interval. */
+    nebulaShellCount?: number
+    clusterRingCount?: number
+    wormholePointCount?: number
+    darkLensCount?: number
+    dustCount?: number
+    soloCount?: number
+    starfieldPointCount?: number
+    starfieldShellCount?: number
+    renderCostMs?: number
+    maxRenderCostMs?: number
   }
   stellar: StellarDiagnosticsSnapshot
   p95FrameTime: number | null

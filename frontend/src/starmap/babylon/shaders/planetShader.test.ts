@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { planetInteractionRim } from '../interactionFeedback'
 import { planetFragmentShader } from './planet.fragment.fx'
 import { planetVertexShader } from './planet.vertex.fx'
 
@@ -60,7 +61,13 @@ describe('Babylon procedural planet shader contract', () => {
     expect(planetFragmentShader).toMatch(/uniform\s+float\s+uCollected\s*;/)
     expect(planetFragmentShader).toMatch(/uniform\s+float\s+uSelected\s*;/)
     expect(planetFragmentShader).not.toMatch(/scanPosition|scanFeedback/)
-    expect(planetFragmentShader).toMatch(/selectionRim[\s\S]*uSelected\s*\*\s*0\.02/)
+    // 选中/悬停反馈仍然是一圈**轮廓**，不是一层扫描罩：强度由
+    // interactionFeedback.planetInteractionRim 给（自带 ≤ 0.42 的上限与单测），
+    // 着色器这边只保证它乘在边缘项上。旧写法把 0.02 写死在着色器里 ——
+    // 那个数在 bloom 与色调映射之后等于没写，用户点下去看不到「我点中了」。
+    expect(planetFragmentShader).toMatch(/selectionRim[\s\S]*uInteractionRim/)
+    expect(planetFragmentShader).toMatch(/selectionRim\s*=\s*pow\(1\.0 - NoV/)
+    expect(planetInteractionRim(1, 1).intensity).toBeLessThanOrEqual(0.42)
   })
 
   test('lights spatial material zones with view-dependent dielectric GGX and bounded emissive', () => {
@@ -80,6 +87,28 @@ describe('Babylon procedural planet shader contract', () => {
     expect(planetFragmentShader).toMatch(/const\s+vec3\s+DIELECTRIC_F0\s*=\s*vec3\(0\.04\)/)
     expect(planetFragmentShader).not.toContain('vec3(-0.6, 0.45, -0.72)')
     expectNoReversedNumericSmoothstep(planetFragmentShader)
+  })
+
+  test('derives the snow band upper edge from its lower edge so the cap can never invert', () => {
+    // GLSL 规定 smoothstep 在 `edge0 >= edge1` 时未定义；主流驱动实现成
+    // clamp((x - e0) / (e1 - e0), 0, 1)，分母变号之后极冠整个**翻转** ——
+    // 冰盖长在赤道、两极反而裸露。
+    //
+    // 提升批次一度把两个边**各自独立**算出来：
+    //   smoothstep(mix(snowBand, 0.42, uThermalIce), min(0.995, snowBand + 0.22), latitude)
+    // 冰行星（thermal.ice = 1、snowLine ≈ 0.067）于是得到 edge0 = 0.42 >
+    // edge1 ≈ 0.287 —— 每一颗冰行星都落在未定义分支里。
+    //
+    // 唯一结构性的护栏是让上缘由下缘推出来，而不是另算一遍。冰权重改为在
+    // CPU 侧（planetAppearance.snowLine）折进雪线，那里只能把它往赤道压。
+    expect(planetFragmentShader).toMatch(
+      /float\s+snowStart\s*=\s*clamp\([^;]*uSnowLine[^;]*\)\s*;/,
+    )
+    expect(planetFragmentShader).toMatch(
+      /polarMask\s*=\s*smoothstep\(\s*snowStart\s*,\s*min\(\s*0\.995\s*,\s*snowStart\s*\+\s*0\.22\s*\)\s*,\s*latitude\s*\)/,
+    )
+    // 雪线一旦回到「两个边各自独立算」的写法，这条就会红。
+    expect(planetFragmentShader).not.toMatch(/mix\(\s*snowBand\s*,\s*0\.42\s*,\s*uThermalIce\s*\)/)
   })
 
   test('uses portable varyings and no Three-specific shader built-ins', () => {

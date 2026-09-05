@@ -5,6 +5,7 @@ import { Material } from '@babylonjs/core/Materials/material.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { NON_FOCUSED_OPACITY } from '../focusEmphasis'
 import type { StarDatum } from '../gl/starData'
 import { describeStarPresentation } from './starPresentation'
 import { StarLayer, type StellarCompilePort } from './starLayer'
@@ -124,7 +125,10 @@ describe('StarLayer', () => {
     expect(scene.getMeshByName('stellar:focus:surface')).toBe(sphere)
     expect(scene.getMeshByName('stellar:focus:corona')).toBe(corona)
     expect(sphere.material).toBe(surfaceMaterial)
-    expect(scene.meshes.filter((mesh) => mesh.name.startsWith('stellar:focus:'))).toHaveLength(2)
+    // 聚焦恒星恒为三件：球面、日冕、衍射星芒。提升批次加进来的星芒
+    // 与前两件共用同一次聚焦，不是每次聚焦新建一组。
+    expect(scene.meshes.filter((mesh) => mesh.name.startsWith('stellar:focus:')).map(({ name }) => name))
+      .toEqual(['stellar:focus:surface', 'stellar:focus:corona', 'stellar:focus:diffraction'])
     layer.dispose()
   })
 
@@ -166,10 +170,10 @@ describe('StarLayer', () => {
     const core = scene.getMeshByName('stellar:panorama:core')!
     const halo = scene.getMeshByName('stellar:panorama:halo')!
     expect(Array.from(core.getVerticesData('aCoreDim') ?? [])).toEqual([
-      expect.closeTo(0), expect.closeTo(0.18), expect.closeTo(0.045),
+      expect.closeTo(0), expect.closeTo(NON_FOCUSED_OPACITY), expect.closeTo(0.25 * NON_FOCUSED_OPACITY),
     ])
     expect(Array.from(halo.getVerticesData('aHaloDim') ?? [])).toEqual([
-      expect.closeTo(0), expect.closeTo(0.18), expect.closeTo(0.045),
+      expect.closeTo(0), expect.closeTo(NON_FOCUSED_OPACITY), expect.closeTo(0.25 * NON_FOCUSED_OPACITY),
     ])
 
     layer.setPresentation(describeStarPresentation({ phase: 'strata' }), null, null)
@@ -309,15 +313,17 @@ describe('StarLayer', () => {
     layer.setPresentation(describeStarPresentation({ phase: 'star-focus' }), null, null)
     await vi.waitFor(() => expect(layer.diagnostics().stellarShaderFallback).toBe(true))
     expect(layer.diagnostics()).toMatchObject({ stellarShaderFallback: true, focusedPairCount: 1 })
-    expect(fallback).toHaveLength(2)
+    // 降级路径同样保留星芒层：分档与降级都只降规格，不删效果类别。
+    expect(fallback).toHaveLength(3)
     expect(fallback.every((material) => material instanceof ShaderMaterial)).toBe(true)
     expect(fallback.every((material) => typeof material.onError === 'function')).toBe(true)
     expect(sphere.material).toBe(fallback[0])
     expect(corona.material).toBe(fallback[1])
+    expect(scene.getMeshByName('stellar:focus:diffraction')!.material).toBe(fallback[2])
     expect(fallback.map(({ alphaMode }) => alphaMode)).toEqual([
-      Constants.ALPHA_COMBINE, Constants.ALPHA_ADD,
+      Constants.ALPHA_COMBINE, Constants.ALPHA_ADD, Constants.ALPHA_ADD,
     ])
-    expect(fallback.map(({ disableDepthWrite }) => disableDepthWrite)).toEqual([false, true])
+    expect(fallback.map(({ disableDepthWrite }) => disableDepthWrite)).toEqual([false, true, true])
     expect((fallback[0] as ShaderMaterial).backFaceCulling).toBe(true)
     expect((fallback[1] as ShaderMaterial).backFaceCulling).toBe(false)
     expect(sphere.isEnabled()).toBe(true)
@@ -357,8 +363,10 @@ describe('StarLayer', () => {
     layer.setPresentation(describeStarPresentation({ phase: 'star-focus' }), null, null)
     expect(layer.diagnostics().focusedReady).toBe(false)
     await vi.waitFor(() => expect(layer.diagnostics().focusedReady).toBe(true))
-    expect(forceCompilation.mock.calls).toEqual([[sphere], [corona]])
-    expect(forceCompilation.mock.contexts).toEqual([sphere.material, corona.material])
+    const diffraction = scene.getMeshByName('stellar:focus:diffraction')!
+    expect(forceCompilation.mock.calls).toEqual([[sphere], [corona], [diffraction]])
+    expect(forceCompilation.mock.contexts)
+      .toEqual([sphere.material, corona.material, diffraction.material])
     layer.dispose(); scene.dispose(); engine.dispose()
   })
 

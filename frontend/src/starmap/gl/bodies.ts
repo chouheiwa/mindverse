@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Mode, Universe } from '../../types'
 import { selectPlanetData, UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT, type QuestionPlanetDatum, type UniverseIndex } from '../../domain/universe'
 import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
+import { orbitPeriodFor, orbitPhase, orbitPlane, orbitRadiusFor } from '../orbitGeometry'
 import { starData, starWorldPosition, type StarDatum } from './starData'
 import { renderDim } from './stars'
 import { PLANET_CONVERGENCE_START, PLANET_STAR_LOD_END_PX, PLANET_STAR_LOD_START_PX, indexPlanetsByStar } from '../planetVisibility'
@@ -14,6 +15,7 @@ import {
   planetFamilyIndex,
   planetInstanceIndexMap,
   planetMaterialInput,
+  planetWorldRadius,
   type PlanetInstanceIndexMap,
   type PlanetLod,
   type PlanetMaterialInput,
@@ -35,11 +37,7 @@ import {
 // 纯公共问题都只反射恒星光。新鲜度只取回答的 PublishedAt / UpdatedAt。
 
 /** 行星轨道半径：从这里起步，每颗往外推一档。单位是世界坐标。 */
-const ORBIT_BASE = 2.1
-const ORBIT_STEP = 1.15
 /** 行星半径。刻意远小于恒星，否则读起来是双星不是行星系。 */
-const PLANET_MIN = 0.085
-const PLANET_MAX = 0.20
 
 /**
  * 增益。
@@ -555,13 +553,13 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
   planets.forEach((p, i) => {
     const d = p.d
     // 轨道面：整个恒星系共用一根轴，每颗再给一点点倾角，才有层次不是同心圆
-    const tilt = ((p.idx * 2654435761) % 1000) / 1000 - 0.5
-    const [uu, vv] = tilted(d.sysU, d.sysV, d.sysAxis, tilt * 0.22)
-    const r = ORBIT_BASE + p.idx * ORBIT_STEP
-    // 开普勒式：外圈更慢
-    const period = 7 + 2.4 * Math.pow(r, 1.5)
-    const phase = ((p.idx * 137.508 + d.seed * 31.7) * Math.PI) / 180
-    const rad = PLANET_MIN + (PLANET_MAX - PLANET_MIN) * p.material.answerDensity
+    const plane = orbitPlane(p.idx, d.sysU, d.sysV, d.sysAxis)
+    const uu = plane.u as [number, number, number]
+    const vv = plane.v as [number, number, number]
+    const r = orbitRadiusFor(p.idx)
+    const period = orbitPeriodFor(r)
+    const phase = orbitPhase(p.idx, d.seed)
+    const rad = planetWorldRadius(p.material.answerDensity)
 
     pU.set(uu, i * 3)
     pV.set(vv, i * 3)
@@ -878,18 +876,3 @@ function batchArrays(globalIndices: readonly number[], source: GlobalPlanetArray
 }
 
 /** 把一组正交基绕 axis 所在平面倾一个小角，给行星轨道一点层次。 */
-function tilted(
-  u: readonly [number, number, number],
-  v: readonly [number, number, number],
-  axis: readonly [number, number, number],
-  ang: number,
-): [[number, number, number], [number, number, number]] {
-  const c = Math.cos(ang)
-  const s = Math.sin(ang)
-  const nu: [number, number, number] = [
-    u[0] * c + axis[0] * s, u[1] * c + axis[1] * s, u[2] * c + axis[2] * s,
-  ]
-  const nn = Math.hypot(nu[0], nu[1], nu[2]) || 1
-  nu[0] /= nn; nu[1] /= nn; nu[2] /= nn
-  return [nu, [v[0], v[1], v[2]]]
-}

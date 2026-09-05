@@ -26,6 +26,34 @@ function setup(reducedMotion = false) {
   return { camera, visual, onExit, controller, readPose: () => currentPose }
 }
 
+describe('PlanetFocusController framing', () => {
+  test('enters at the distance the caller derives from the orbit, not from the planet radius', () => {
+    const { controller, visual, readPose } = setup()
+    // Three planetDist(orbitR) puts the camera and the star the same order of
+    // magnitude from the planet; planetRadius * 4 made the star a backdrop.
+    controller.enter(visual, 3.4)
+    controller.update(10_000)
+    expect(readPose().radius).toBeCloseTo(3.4, 6)
+  })
+
+  test('keeps the wheel inside the range the caller asks for', () => {
+    const { controller, visual, readPose } = setup()
+    controller.enter(visual, 4, { low: 1.2, high: 6 })
+    controller.update(10_000)
+    for (let step = 0; step < 40; step += 1) controller.wheel(-120)
+    expect(readPose().radius).toBeGreaterThanOrEqual(1.2 - 1e-6)
+    for (let step = 0; step < 80; step += 1) controller.wheel(120)
+    expect(readPose().radius).toBeLessThanOrEqual(6 + 1e-6)
+  })
+
+  test('still frames something sane when no explicit distance is supplied', () => {
+    const { controller, visual, readPose } = setup()
+    controller.enter(visual)
+    controller.update(10_000)
+    expect(readPose().radius).toBeGreaterThan(0)
+  })
+})
+
 describe('PlanetFocusController state machine', () => {
   test('moves idle -> entering -> focused -> exiting -> idle and restores framing', () => {
     const { controller, visual, readPose } = setup()

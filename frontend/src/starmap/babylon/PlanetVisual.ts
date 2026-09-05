@@ -8,7 +8,12 @@ import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import { initialPlanetLod, nextPlanetLod, type PlanetLod } from './planetLod'
+import { planetWorldRadius } from '../gl/planetMaterials'
 import type { PlanetSurfaceDescriptor } from './planetSurface'
+import { describePlanetAppearance, type PlanetAppearance } from './planetAppearance'
+import { planetInteractionRim } from './interactionFeedback'
+import { babylonUpliftTier, type BabylonUpliftTier } from './visualUplift'
+import type { Quality } from '../quality'
 import { buildPlanetTerrain } from './planetTerrain'
 import { planetAtmosphereFragmentShader } from './shaders/planetAtmosphere.fragment.fx'
 import { planetAtmosphereVertexShader } from './shaders/planetAtmosphere.vertex.fx'
@@ -25,6 +30,8 @@ export interface PlanetVisualOptions {
   readonly parent?: TransformNode
   readonly initialLod?: Exclude<PlanetLod, 'high'>
   readonly radiusScale?: number
+  /** 画质分档：只降规格，不删外观类别（见 visualUplift）。 */
+  readonly quality?: Quality
   readonly onError?: (cause: Error) => void
   readonly onMeshesChanged?: (visual: PlanetVisual) => void
   readonly compileSurface?: SurfaceCompiler
@@ -35,7 +42,8 @@ export interface PlanetVisualUpdate {
   readonly elapsedMs: number
   readonly cameraPosition: Vector3
   readonly starPosition: Vector3
-  readonly coverage: number
+  /** 行星在屏幕上的投影半径（像素），与 Three 的 LOD 阶梯同一个量。 */
+  readonly projectedRadiusPx: number
   readonly focused: boolean
 }
 
@@ -44,6 +52,8 @@ const SURFACE_UNIFORMS = [
   'uWarpStrength', 'uNormalEpsilon', 'uSmallCraterThreshold', 'uSeed', 'uOctaves', 'uQualityLevel',
   'uLargeCraterCount', 'uLargeCraters', 'uLargeCraterShape', 'uThermal', 'uThermalIce', 'uFreshness',
   'uCreated', 'uCollected', 'uSelected', 'uCraterDensity', 'uIncident', 'uReveal',
+  'uCloudCoverage', 'uCloudSpeed', 'uNightLights', 'uSnowLine', 'uLavaGlow', 'uIceFracture',
+  'uCraterVisibility', 'uCloudOctaves', 'uHovered', 'uInteractionRim', 'uInteractionColor',
   'uLightDirection', 'uCameraPosition',
 ] as const
 
@@ -56,6 +66,7 @@ const QUALITY_LEVEL: Readonly<Record<PlanetLod, number>> = Object.freeze({ low: 
 
 export class PlanetVisual {
   readonly descriptor: PlanetSurfaceDescriptor
+  readonly appearance: PlanetAppearance
   readonly radius: number
   readonly orbitMesh: Mesh
   readonly atmosphereMesh: Mesh
@@ -77,17 +88,24 @@ export class PlanetVisual {
   private reveal = 0
   private visible = true
   private selected = false
+  private hovered = false
   private atmosphereFallback = false
   private highUnavailable = false
   private disposed = false
   private readonly compilationAbort = new AbortController()
   private readonly lightScratch = new Vector3()
+  private readonly uplift: BabylonUpliftTier
 
   constructor(options: PlanetVisualOptions) {
     this.scene = options.scene
     this.parent = options.parent
     this.descriptor = options.descriptor
-    this.radius = options.descriptor.radius * (options.radiusScale ?? 0.38)
+    this.appearance = describePlanetAppearance(options.descriptor)
+    this.uplift = babylonUpliftTier(options.quality ?? 'high')
+    // 世界半径与 Three 实例同式（0.085 + 0.115·answerDensity）。descriptor.radius
+    // 是 0.55–1 的归一化外观量，拿它乘一个常数当世界半径，会让同一颗行星比
+    // 旧版大出将近一倍 —— 近景主体尺寸对不上的真正原因。
+    this.radius = planetWorldRadius(options.descriptor.detailDensity) * (options.radiusScale ?? 1)
     this.onError = options.onError
     this.onMeshesChanged = options.onMeshesChanged
     this.compileSurface = options.compileSurface
@@ -144,6 +162,26 @@ export class PlanetVisual {
     this.selected = selected
     if (this.level !== 'lambert') this.orbitMaterial.setFloat('uSelected', selected ? 1 : 0)
     this.focusMaterial?.setFloat('uSelected', selected ? 1 : 0)
+    this.applyInteractionRim()
+  }
+
+  /** 悬停反馈：暖色轮廓，说「这里可以点」。 */
+  setHovered(hovered: boolean): void {
+    if (this.disposed || this.hovered === hovered) return
+    this.hovered = hovered
+    if (this.level !== 'lambert') this.orbitMaterial.setFloat('uHovered', hovered ? 1 : 0)
+    this.focusMaterial?.setFloat('uHovered', hovered ? 1 : 0)
+    this.applyInteractionRim()
+  }
+
+  private applyInteractionRim(): void {
+    const rim = planetInteractionRim(this.hovered ? 1 : 0, this.selected ? 1 : 0)
+    const color = new Color3(rim.color[0], rim.color[1], rim.color[2])
+    for (const material of [this.orbitMaterial, this.focusMaterial]) {
+      if (!material || this.level === 'lambert') continue
+      material.setFloat('uInteractionRim', rim.intensity)
+      material.setColor3('uInteractionColor', color)
+    }
   }
 
   setFocusBlend(value: number): void {
@@ -227,7 +265,7 @@ export class PlanetVisual {
     const focused = input.focused
     const next = this.level === 'lambert'
       ? 'lambert'
-      : nextPlanetLod(this.level, input.coverage, focused)
+      : nextPlanetLod(this.level, input.projectedRadiusPx, focused)
     if (next !== 'lambert' && next !== this.level) void this.ensureLod(next)
 
     this.lightScratch.copyFrom(input.starPosition).subtractInPlace(this.activeMesh.position)
@@ -346,10 +384,25 @@ export class PlanetVisual {
     material.setFloat('uCreated', this.descriptor.createdGlow)
     material.setFloat('uCollected', this.descriptor.collectedMarker)
     material.setFloat('uSelected', this.selected ? 1 : 0)
+    material.setFloat('uHovered', this.hovered ? 1 : 0)
+    const rim = planetInteractionRim(this.hovered ? 1 : 0, this.selected ? 1 : 0)
+    material.setFloat('uInteractionRim', rim.intensity)
+    material.setColor3('uInteractionColor', new Color3(rim.color[0], rim.color[1], rim.color[2]))
     material.setFloat('uSeed', this.descriptor.seed)
     material.setFloat('uCraterDensity', this.descriptor.craterCount / 48)
     material.setFloat('uIncident', this.descriptor.incident)
     material.setFloat('uReveal', 0)
+    const appearance = this.appearance
+    material.setFloat('uCloudCoverage', appearance.cloudCoverage)
+    material.setFloat('uCloudSpeed', appearance.cloudSpeed)
+    material.setFloat('uNightLights', appearance.nightLightDensity)
+    material.setFloat('uSnowLine', appearance.snowLine)
+    material.setFloat('uLavaGlow', appearance.lavaGlow)
+    material.setFloat('uIceFracture', appearance.iceFracture)
+    material.setFloat('uCraterVisibility', appearance.craterVisibility)
+    // 云的八度按 LOD 分：远景一层足够读出「有云」，近景才需要涡。
+    material.setInt('uCloudOctaves', level === 'high' ? this.uplift.planetCloudOctaves
+      : Math.max(1, this.uplift.planetCloudOctaves - 1))
   }
 
   private createAtmosphere(suffix: string): { mesh: Mesh; material: ShaderMaterial } {
@@ -445,8 +498,8 @@ export class PlanetVisual {
   }
 }
 
-export function chooseInitialPlanetLod(coverage: number, focused: boolean): PlanetLod {
-  return initialPlanetLod(coverage, focused)
+export function chooseInitialPlanetLod(projectedRadiusPx: number, focused: boolean): PlanetLod {
+  return initialPlanetLod(projectedRadiusPx, focused)
 }
 
 const finite = (value: number): number => Number.isFinite(value) ? value : 0

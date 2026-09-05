@@ -233,3 +233,34 @@ describe('focus exits', () => {
     expect(shouldExitOnWheel(-1, 21, 20)).toBe(false)
   })
 })
+
+describe('createCameraFlight destination', () => {
+  const base = {
+    token: 0, starKey: 'alpha',
+    start: { target: { x: 0, y: 0, z: 0 }, radius: 300 },
+    targetStar: { x: 10, y: 0, z: 0 },
+    bodyR: 1, systemExtent: 104, overviewRadius: 300,
+    distance: 120, requestedMs: 900, reducedMotion: false,
+  }
+
+  it('flies to the destination the caller framed rather than re-deriving one', () => {
+    // systemFraming owns the rule; the flight recomputing extent * 1.35 made
+    // the two disagree and the camera landed somewhere nobody chose.
+    const result = createCameraFlight({ ...base, destinationRadius: 209.5 })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.flight.to.radius).toBeCloseTo(209.5, 6)
+  })
+
+  it('still clamps a caller destination into the safe band', () => {
+    const tooClose = createCameraFlight({ ...base, destinationRadius: 0.01 })
+    const tooFar = createCameraFlight({ ...base, destinationRadius: 10_000 })
+    expect(tooClose.ok && tooClose.flight.to.radius).toBeCloseTo(base.bodyR * 8, 6)
+    expect(tooFar.ok && tooFar.flight.to.radius).toBeCloseTo(base.overviewRadius * 0.72, 6)
+  })
+
+  it('falls back to the system extent when no destination is supplied', () => {
+    const result = createCameraFlight(base)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.flight.to.radius).toBeCloseTo(104 * 1.35, 6)
+  })
+})

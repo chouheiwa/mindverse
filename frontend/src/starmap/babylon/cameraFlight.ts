@@ -21,6 +21,12 @@ export interface CameraFlightInput {
   readonly targetStar: Vector3Like
   readonly bodyR: number
   readonly systemExtent: number
+  /**
+   * 调用方框好的落点半径（见 framing.ts）。缺省时退回按 systemExtent 推，
+   * 但那条路径会与 systemFraming 各算各的，两边一旦不一致相机就会落在
+   * 谁也没选过的位置。
+   */
+  readonly destinationRadius?: number
   readonly overviewRadius: number
   readonly distance: number
   readonly requestedMs: number
@@ -197,11 +203,10 @@ export function createCameraFlight(input: CameraFlightInput): CameraFlightResult
     || minimumRadius > maximumRadius) {
     return Object.freeze({ ok: false, error: 'invalid-input' })
   }
-  const destinationRadius = clamp(
-    Math.max(bodyRadius, systemRadius),
-    minimumRadius,
-    maximumRadius,
-  )
+  const requested = Number.isFinite(input.destinationRadius) && (input.destinationRadius as number) > 0
+    ? input.destinationRadius as number
+    : Math.max(bodyRadius, systemRadius)
+  const destinationRadius = clamp(requested, minimumRadius, maximumRadius)
   if (!Number.isFinite(destinationRadius) || destinationRadius <= 0) {
     return Object.freeze({ ok: false, error: 'invalid-input' })
   }

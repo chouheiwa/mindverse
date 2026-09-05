@@ -5,6 +5,7 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { PlanetSurfaceDescriptor } from './planetSurface'
 import { PlanetVisual } from './PlanetVisual'
+import { planetWorldRadius } from '../gl/planetMaterials'
 
 const descriptor: PlanetSurfaceDescriptor = Object.freeze({
   metadata: Object.freeze({ questionId: 'q:7', starId: 's:2' }),
@@ -18,6 +19,16 @@ const descriptor: PlanetSurfaceDescriptor = Object.freeze({
   collectedMarker: 0,
   incident: 0.5,
   thermal: Object.freeze({ magma: 0, desert: 0, rock: 1, tundra: 0, ice: 0 }),
+})
+
+describe('planet world radius', () => {
+  test('uses the same world radius as the Three instances, not its own scale', () => {
+    const { visual } = setup()
+    // 旧版：0.085 + 0.115·answerDensity。迁移期这里是 descriptor.radius × 0.38，
+    // 也就是同一颗行星大出将近一倍 —— 近景主体尺寸对不上的真正原因。
+    expect(visual.radius).toBeCloseTo(planetWorldRadius(descriptor.detailDensity), 6)
+    expect(visual.radius).toBeLessThan(0.2000001)
+  })
 })
 
 const disposables: Array<{ dispose(): void }> = []
@@ -123,7 +134,7 @@ describe('PlanetVisual resource boundary', () => {
       elapsedMs: 100,
       cameraPosition: new Vector3(0, 0, 5),
       starPosition: Vector3.Zero(),
-      coverage: 0.1,
+      projectedRadiusPx: 45.0,
       focused: false,
     })).toBe(false)
     expect(setFloat).not.toHaveBeenCalledWith('uTime', expect.any(Number))

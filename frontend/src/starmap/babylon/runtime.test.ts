@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { BabylonRuntime, BabylonWebGL2RequiredError, type BabylonRuntimePorts } from './runtime'
 
-function fakePorts(options: { webGLVersion?: number; failListener?: string; releaseContext?: boolean } = {}) {
+function fakePorts(options: { webGLVersion?: number; failListener?: string; releaseContext?: boolean; renderCostMs?: number } = {}) {
   const log: string[] = []
   const listeners = new Map<string, EventListener>()
   let frame: (() => void) | null = null
@@ -16,7 +16,7 @@ function fakePorts(options: { webGLVersion?: number; failListener?: string; rele
       dispose: vi.fn(() => { log.push('engine:dispose') }),
     },
     scene: {
-      render: vi.fn(() => { log.push('scene:render') }),
+      render: vi.fn(() => { log.push('scene:render'); now += options.renderCostMs ?? 0 }),
       dispose: vi.fn(() => { log.push('scene:dispose') }),
     },
     canvas: {
@@ -181,5 +181,36 @@ describe('BabylonRuntime lifecycle shell', () => {
     expect(onError).not.toHaveBeenCalled()
     expect(fake.ports.scene.dispose).toHaveBeenCalledOnce()
     expect(fake.ports.engine.dispose).toHaveBeenCalledOnce()
+  })
+})
+
+describe('BabylonRuntime render cost metering', () => {
+  test('reports the time spent inside scene.render, not the scheduling interval', () => {
+    const harness = fakePorts({ renderCostMs: 7 })
+    const runtime = new BabylonRuntime(harness.ports, { isAnimating: () => true })
+    runtime.start()
+
+    expect(runtime.diagnostics().lastRenderCostMs).toBe(0)
+    harness.frame(0)
+    harness.frame(100)
+    harness.frame(200)
+
+    // Three renders spaced 100 ms apart, each costing 7 ms of work.
+    expect(runtime.diagnostics().actualRenders).toBe(3)
+    expect(runtime.diagnostics().lastRenderCostMs).toBeCloseTo(7, 6)
+    expect(runtime.diagnostics().maxRenderCostMs).toBeCloseTo(7, 6)
+  })
+
+  test('keeps the cost at zero when the throttle skips a frame', () => {
+    const harness = fakePorts({ renderCostMs: 4 })
+    const runtime = new BabylonRuntime(harness.ports, { isAnimating: () => false })
+    runtime.start()
+
+    harness.frame(0)
+    const afterFirst = runtime.diagnostics().actualRenders
+    harness.frame(5) // Inside the 30fps idle interval, so no render happens.
+
+    expect(runtime.diagnostics().actualRenders).toBe(afterFirst)
+    expect(runtime.diagnostics().maxRenderCostMs).toBeCloseTo(4, 6)
   })
 })

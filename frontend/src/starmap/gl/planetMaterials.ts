@@ -180,3 +180,19 @@ export function planetMaterialInput(
     collected,
   })
 }
+
+/** 行星世界半径的上下限，与 gl/bodies.ts 的 PLANET_MIN / PLANET_MAX 同源。 */
+export const PLANET_WORLD_MIN = 0.085
+export const PLANET_WORLD_MAX = 0.20
+
+/**
+ * 行星的世界半径。
+ *
+ * 两个渲染器必须用同一条式子：镜头距离按轨道半径构图，行星半径一旦不同，
+ * 近景里的主体就会大出一整圈 —— 那不是「风格差异」，是同一颗星球被画成了
+ * 两个尺寸。
+ */
+export function planetWorldRadius(answerDensity: number): number {
+  const density = Number.isFinite(answerDensity) ? Math.min(1, Math.max(0, answerDensity)) : 0
+  return PLANET_WORLD_MIN + (PLANET_WORLD_MAX - PLANET_WORLD_MIN) * density
+}

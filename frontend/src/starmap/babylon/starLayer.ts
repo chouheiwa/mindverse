@@ -7,14 +7,20 @@ import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { StarDatum } from '../gl/starData'
 import type { Quality } from '../quality'
 import { starIdentity } from '../starIdentity'
 import type { StarPresentation } from './starPresentation'
+import { cappedCoronaScale } from './coronaCap'
 import { describeStarVisual, type StarVisualDescriptor } from './starVisualDescriptor'
+import { STAR_CHROMOSPHERE_COLOR, STAR_FLARE_THRESHOLD, starLimbTint } from './stellarRadiance'
+import { babylonUpliftTier, type BabylonUpliftTier } from './visualUplift'
+import { blackbodyRGB } from '../gl/blackbody'
 import { starCoreFragmentShader } from './shaders/starCore.fragment.fx'
 import { starCoronaFragmentShader } from './shaders/starCorona.fragment.fx'
+import { starDiffractionFragmentShader } from './shaders/starDiffraction.fragment.fx'
 import { starFlareFragmentShader } from './shaders/starFlare.fragment.fx'
 import { starHaloFragmentShader } from './shaders/starHalo.fragment.fx'
 import { starPanoramaVertexShader } from './shaders/starPanorama.vertex.fx'
@@ -43,6 +49,8 @@ export type StellarCompilePort = (
 export interface StarLayerOptions {
   readonly parent?: TransformNode
   readonly onError?: (cause: Error) => void
+  /** HDR gain applied to the focused surface so it clears the bloom threshold. */
+  readonly hdrGain?: number
   /** Narrow dependency seam for deterministic shader-compiler failure tests. */
   readonly compile?: StellarCompilePort
 }
@@ -72,6 +80,24 @@ const QUALITY_CONFIG = Object.freeze({
   medium: Object.freeze({ sphereSegments: 32, noiseOctaves: 3, coronaLayers: 2 }),
   low: Object.freeze({ sphereSegments: 20, noiseOctaves: 2, coronaLayers: 1 }),
 } satisfies Record<Quality, StarLayerDiagnostics['quality']>)
+
+/** 色球色，与 stellarRadiance 的 STAR_CHROMOSPHERE_COLOR 同源。 */
+const CHROMOSPHERE = new Color3(
+  STAR_CHROMOSPHERE_COLOR[0], STAR_CHROMOSPHERE_COLOR[1], STAR_CHROMOSPHERE_COLOR[2],
+)
+/**
+ * 超米粒混入米粒的比例。
+ *
+ * 0 是只有小尺度对流（读起来是噪声贴图），1 是只有大尺度（读起来是油画）。
+ * 0.38 让两个尺度都在，画面上是「在沸腾」。
+ */
+const SUPERGRANULATION_MIX = 0.28
+/** 星斑强度的下限：宁静恒星也得有一点斑，否则圆面在 bloom 之后仍是一团光。 */
+const SPOT_FLOOR = 0.42
+/** 星芒平面相对日冕的跨度。芒要伸得比冕远，否则读起来像日冕的一部分。 */
+const DIFFRACTION_SPAN = 3.1
+/** 星芒相对日冕 alpha 的权重。克制：它是点缀，不是主体。 */
+const DIFFRACTION_WEIGHT = 0.30
 
 const PANORAMA_ATTRIBUTES = [
   'position', 'aCenter', 'aAxis', 'aColor', 'aPeriod', 'aCoreSize', 'aHaloSize',
@@ -112,14 +138,15 @@ const FALLBACK_SURFACE_FRAGMENT = /* glsl */ `
 precision highp float;
 uniform vec3 uColor;
 uniform float uSurfaceAlpha;
+uniform float uHdrGain;
 varying vec3 vNormal;
 varying vec3 vViewDirection;
 void main(void) {
   float facing = max(0.0, dot(normalize(vNormal), normalize(vViewDirection)));
   float limb = 0.34 + 0.66 * pow(facing, 0.58);
   vec3 hotCore = mix(uColor, vec3(1.0), 0.64);
-  vec3 analyticCore = hotCore * min(2.2, 0.72 + limb * 1.18);
-  gl_FragColor = vec4(analyticCore, clamp(uSurfaceAlpha, 0.0, 1.0));
+  vec3 analyticCore = hotCore * min(2.2, 0.72 + limb * 1.18) * uHdrGain;
+  gl_FragColor = vec4(min(analyticCore, vec3(6.0)), clamp(uSurfaceAlpha, 0.0, 1.0));
 }
 `
 const FALLBACK_CORONA_FRAGMENT = /* glsl */ `
@@ -174,6 +201,10 @@ export class StarLayer {
   private focusedReady = false
   private disposed = false
   private focusUniforms = { kelvin: 0, seed: 0, rot: 0, activity: 0, time: 0 }
+  private readonly hdrGain: number
+  private readonly uplift: BabylonUpliftTier
+  private readonly focusDiffraction: Mesh
+  private readonly scene: Scene
 
   constructor(
     scene: Scene,
@@ -182,12 +213,17 @@ export class StarLayer {
     reducedMotion: boolean,
     options: StarLayerOptions = {},
   ) {
+    this.scene = scene
     this.stars = stars
     this.descriptors = stars.map(describeStarVisual)
     this.descriptorByDatum = new Map(stars.map((datum, index) => [datum, this.descriptors[index]!]))
     this.reducedMotion = reducedMotion
     this.options = options
+    this.hdrGain = Number.isFinite(options.hdrGain) && (options.hdrGain as number) > 0
+      ? options.hdrGain as number
+      : 1
     this.qualityConfig = QUALITY_CONFIG[quality]
+    this.uplift = babylonUpliftTier(quality)
     this.dimensionsBuffer = new Float32Array(stars.length).fill(1)
     this.baseDimensions = new Float32Array(stars.length).fill(1)
     this.interactionBuffer = new Float32Array(stars.length * 3).fill(1)
@@ -207,12 +243,14 @@ export class StarLayer {
       diameter: 2, segments: this.qualityConfig.sphereSegments,
     }, scene)
     this.focusCorona = CreatePlane('stellar:focus:corona', { size: 2 }, scene)
-    for (const mesh of [this.focusSphere, this.focusCorona]) {
+    this.focusDiffraction = CreatePlane('stellar:focus:diffraction', { size: 2 }, scene)
+    for (const mesh of [this.focusSphere, this.focusCorona, this.focusDiffraction]) {
       mesh.parent = options.parent ?? null
       mesh.isPickable = false
       mesh.setEnabled(false)
     }
     this.focusCorona.billboardMode = Mesh.BILLBOARDMODE_ALL
+    this.focusDiffraction.billboardMode = Mesh.BILLBOARDMODE_ALL
     this.installAdvancedFocusedMaterials(scene)
   }
 
@@ -303,6 +341,20 @@ export class StarLayer {
       material.setFloat('uProjectionScale', projectionScale)
     }
     this.applyFocusedAnimationTime(time)
+    this.applyCoronaCap(projectionScale)
+  }
+
+  /** 辉光的投影上限，与 gl/stars.ts 的 uMaxPx 同源。 */
+  private applyCoronaCap(projectionScale: number): void {
+    const datum = this.focusedDatum
+    const camera = this.scene.activeCamera
+    if (!datum || !camera) return
+    const descriptor = this.descriptorByDatum.get(datum) ?? describeStarVisual(datum)
+    const bodyRadius = clampFinite(datum.bodyR, 0.3, 0.01, 10)
+    const distance = Vector3.Distance(camera.globalPosition, this.focusCorona.position)
+    const capped = cappedCoronaScale(bodyRadius, descriptor.coronaScale, distance, projectionScale)
+    this.focusCorona.scaling.setAll(bodyRadius * capped)
+    this.focusDiffraction.scaling.setAll(bodyRadius * capped * DIFFRACTION_SPAN)
   }
 
   private applyAnimationTime(time: number): void {
@@ -315,6 +367,7 @@ export class StarLayer {
     const datum = this.focusedDatum
     safeStarWorldPosition(datum, time, this.reducedMotion ? 0 : 1.35, this.focusSphere.position)
     this.focusCorona.position.copyFrom(this.focusSphere.position)
+    this.focusDiffraction.position.copyFrom(this.focusSphere.position)
     this.focusUniforms = { ...this.focusUniforms, time }
     for (const material of this.focusedMaterials) {
       if (material instanceof ShaderMaterial) material.setFloat('uTime', time)
@@ -328,7 +381,9 @@ export class StarLayer {
       panoramaMeshIds: Object.freeze(this.panorama.map(({ mesh }) => mesh.uniqueId)),
       panoramaMaterialIds: Object.freeze(this.panorama.map(({ material }) => material.uniqueId)),
       focusedPairCount: 1,
-      focusedMeshIds: Object.freeze([this.focusSphere.uniqueId, this.focusCorona.uniqueId]),
+      focusedMeshIds: Object.freeze([
+        this.focusSphere.uniqueId, this.focusCorona.uniqueId, this.focusDiffraction.uniqueId,
+      ]),
       focusedVisible: this.focusSphere.isEnabled() || this.focusCorona.isEnabled(),
       starOrder: Object.freeze(this.stars.map(({ s }) => starIdentity(s))),
       dimensions: Object.freeze(Array.from(this.dimensionsBuffer)),
@@ -358,6 +413,7 @@ export class StarLayer {
     this.geometry.dispose()
     this.focusSphere.dispose(false, false)
     this.focusCorona.dispose(false, false)
+    this.focusDiffraction.dispose(false, false)
     for (const material of this.focusedMaterials) material.dispose()
     this.focusedMaterials = []
   }
@@ -386,7 +442,7 @@ export class StarLayer {
     material.setFloat('uHaloIntensity', 1)
     material.setFloat('uPanoramaAlpha', 1)
     material.setFloat('uHaloAlpha', 1)
-    material.setFloat('uFlareThreshold', 2.0)
+    material.setFloat('uFlareThreshold', STAR_FLARE_THRESHOLD)
     material.setFloat('uFlareAlpha', 1)
     mesh.material = material
     return { mesh, material, layer }
@@ -397,22 +453,34 @@ export class StarLayer {
       vertexSource: starSurfaceVertexShader, fragmentSource: starSurfaceFragmentShader,
     }, {
       attributes: ['position', 'normal'],
-      uniforms: ['worldViewProjection', 'world', 'cameraPosition', 'uColor', 'uKelvin', 'uSeed', 'uRot', 'uActivity', 'uTime', 'uSurfaceAlpha'],
+      uniforms: [
+        'worldViewProjection', 'world', 'cameraPosition', 'uColor', 'uLimbColor', 'uCoreColor',
+        'uKelvin', 'uSeed', 'uRot', 'uActivity', 'uTime', 'uSurfaceAlpha', 'uHdrGain',
+        'uSpotCount', 'uSpotStrength', 'uSupergranulation',
+      ],
       defines: [`#define STAR_NOISE_OCTAVES ${this.qualityConfig.noiseOctaves}`],
       needAlphaBlending: true,
     })
+    surface.setFloat('uHdrGain', this.hdrGain)
+    surface.setFloat('uSpotCount', this.uplift.starSpotCount)
+    surface.setFloat('uSupergranulation', SUPERGRANULATION_MIX)
     const corona = createCoronaMaterial(scene, 'advanced', starCoronaFragmentShader)
+    corona.setFloat('uStreamerCount', this.uplift.coronaStreamerCount)
+    corona.setColor3('uChromosphere', CHROMOSPHERE)
+    const diffraction = createDiffractionMaterial(scene, this.uplift.diffractionSpikeCount)
     surface.alphaMode = Constants.ALPHA_COMBINE
     surface.disableDepthWrite = true
     corona.alphaMode = Constants.ALPHA_ADD
     corona.disableDepthWrite = true
-    this.focusedMaterials = [surface, corona]
+    this.focusedMaterials = [surface, corona, diffraction]
     this.focusSphere.material = surface
     this.focusCorona.material = corona
+    this.focusDiffraction.material = diffraction
     this.focusedKind = 'advanced'
     this.startFocusedCompilation('advanced', [
       { material: surface, mesh: this.focusSphere },
       { material: corona, mesh: this.focusCorona },
+      { material: diffraction, mesh: this.focusDiffraction },
     ])
   }
 
@@ -424,19 +492,22 @@ export class StarLayer {
     this.focusedKind = 'fallback'
     const scene = this.focusSphere.getScene()
     const oldMaterials = this.focusedMaterials
-    const surface = createFallbackSurfaceMaterial(scene)
+    const surface = createFallbackSurfaceMaterial(scene, this.hdrGain)
     const corona = createCoronaMaterial(scene, 'fallback', FALLBACK_CORONA_FRAGMENT)
     corona.alphaMode = Constants.ALPHA_ADD
     corona.disableDepthWrite = true
-    this.focusedMaterials = [surface, corona]
+    const diffraction = createDiffractionMaterial(scene, this.uplift.diffractionSpikeCount)
+    this.focusedMaterials = [surface, corona, diffraction]
     this.focusSphere.material = surface
     this.focusCorona.material = corona
+    this.focusDiffraction.material = diffraction
     for (const material of oldMaterials) material.dispose()
     if (this.focusedDatum) this.applyFocusDatum(this.focusedDatum)
     this.applyFocusedPresentationUniforms()
     this.startFocusedCompilation('fallback', [
       { material: surface, mesh: this.focusSphere },
       { material: corona, mesh: this.focusCorona },
+      { material: diffraction, mesh: this.focusDiffraction },
     ])
   }
 
@@ -445,6 +516,7 @@ export class StarLayer {
     this.fallbackFailed = true
     this.focusSphere.setEnabled(false)
     this.focusCorona.setEnabled(false)
+    this.focusDiffraction.setEnabled(false)
     const original = this.advancedFailure ?? cause
     if (original !== cause && !('cause' in original)) {
       try {
@@ -464,6 +536,7 @@ export class StarLayer {
     const rotation = finiteOr(datum.rot, 0)
     this.focusSphere.scaling.setAll(bodyRadius)
     this.focusCorona.scaling.setAll(bodyRadius * descriptor.coronaScale)
+    this.focusDiffraction.scaling.setAll(bodyRadius * descriptor.coronaScale * DIFFRACTION_SPAN)
     this.focusUniforms = {
       kelvin, seed: descriptor.seed, rot: rotation,
       activity: descriptor.surfaceActivity, time: this.focusUniforms.time,
@@ -472,14 +545,35 @@ export class StarLayer {
       datum, this.focusUniforms.time, this.reducedMotion ? 0 : 1.35, this.focusSphere.position,
     )
     this.focusCorona.position.copyFrom(this.focusSphere.position)
+    this.focusDiffraction.position.copyFrom(this.focusSphere.position)
+    const limb = starLimbTint(kelvin)
+    const core = blackbodyRGB(kelvin * 1.16)
+    const limbColor = new Color3(limb[0], limb[1], limb[2])
+    // 核心视向再往白推一点：视线最深的那一层是最热的，但纯黑体色在
+    // 色调映射之后与光球分不开，混一点白才读得出「更热」。
+    const coreColor = new Color3(
+      core[0] + (1 - core[0]) * 0.42, core[1] + (1 - core[1]) * 0.42, core[2] + (1 - core[2]) * 0.42,
+    )
     for (const material of this.focusedMaterials) {
       if (material instanceof ShaderMaterial) {
         material.setColor3('uColor', color)
+        material.setColor3('uLimbColor', limbColor)
+        material.setColor3('uCoreColor', coreColor)
+        material.setColor3('uChromosphere', CHROMOSPHERE)
         material.setFloat('uKelvin', kelvin)
         material.setFloat('uSeed', descriptor.seed)
         material.setFloat('uRot', rotation)
         material.setFloat('uActivity', descriptor.surfaceActivity)
         material.setFloat('uCoronaLayers', this.qualityConfig.coronaLayers)
+        material.setFloat('uStreamerCount', this.uplift.coronaStreamerCount)
+        material.setFloat('uSpotCount', this.uplift.starSpotCount)
+        material.setFloat('uSupergranulation', SUPERGRANULATION_MIX)
+        // 星斑强度由活动性驱动：活跃的星长斑，宁静的星几乎不长。
+        // 保一个底 —— 完全没有斑的圆面在 bloom 之后仍是一团光。
+        material.setFloat('uSpotStrength', SPOT_FLOOR
+          + (1 - SPOT_FLOOR) * clampFinite(descriptor.surfaceActivity, 0, 0, 1))
+        material.setFloat('uProminenceCount', this.uplift.starProminenceCount)
+        material.setFloat('uSpikeCount', this.uplift.diffractionSpikeCount)
       }
     }
   }
@@ -490,6 +584,7 @@ export class StarLayer {
       && this.presentation.lodIntent !== 'point' && this.presentation.lodIntent !== 'hidden'
     this.focusSphere.setEnabled(visible && (this.presentation?.surfaceAlpha ?? 0) > 0)
     this.focusCorona.setEnabled(visible && (this.presentation?.coronaAlpha ?? 0) > 0)
+    this.focusDiffraction.setEnabled(visible && (this.presentation?.coronaAlpha ?? 0) > 0)
   }
 
   private applyPresentationDimensions(): void {
@@ -531,6 +626,11 @@ export class StarLayer {
       corona.disableDepthWrite = true
       corona.setFloat('uCoronaAlpha', this.presentation.coronaAlpha)
       corona.setFloat('uCoronaIntensity', this.presentation.coronaIntensity)
+    }
+    const diffraction = this.focusDiffraction.material
+    if (diffraction instanceof ShaderMaterial) {
+      diffraction.setFloat('uDiffractionAlpha',
+        this.presentation.coronaAlpha * DIFFRACTION_WEIGHT)
     }
   }
 
@@ -611,11 +711,15 @@ function createCoronaMaterial(scene: Scene, suffix: string, fragmentSource: stri
     vertexSource: CORONA_VERTEX, fragmentSource,
   }, {
     attributes: ['position', 'uv'],
-    uniforms: ['worldViewProjection', 'uColor', 'uActivity', 'uSeed', 'uRot', 'uTime', 'uCoronaAlpha', 'uCoronaIntensity', 'uCoronaLayers'],
+    uniforms: [
+      'worldViewProjection', 'uColor', 'uChromosphere', 'uActivity', 'uSeed', 'uRot', 'uTime',
+      'uCoronaAlpha', 'uCoronaIntensity', 'uCoronaLayers', 'uStreamerCount', 'uProminenceCount',
+    ],
     needAlphaBlending: true,
   })
   material.backFaceCulling = false
   material.setColor3('uColor', Color3.White())
+  material.setColor3('uChromosphere', CHROMOSPHERE)
   material.setFloat('uActivity', 0)
   material.setFloat('uSeed', 0)
   material.setFloat('uRot', 0)
@@ -623,22 +727,54 @@ function createCoronaMaterial(scene: Scene, suffix: string, fragmentSource: stri
   material.setFloat('uCoronaAlpha', 0)
   material.setFloat('uCoronaIntensity', 1)
   material.setFloat('uCoronaLayers', 1)
+  material.setFloat('uStreamerCount', 0)
+  material.setFloat('uProminenceCount', 0)
   return material
 }
 
-function createFallbackSurfaceMaterial(scene: Scene): ShaderMaterial {
+/**
+ * 聚焦恒星的衍射星芒。
+ *
+ * 全景里点精灵已有星芒，飞近改由球体渲染之后它整个消失 —— 于是「越靠近
+ * 越不像恒星」。这一层把它补回来，叠加混合，永远不会把主体压暗。
+ */
+function createDiffractionMaterial(scene: Scene, spikeCount: number): ShaderMaterial {
+  const material = new ShaderMaterial('stellar:focus:diffraction:material', scene, {
+    vertexSource: CORONA_VERTEX, fragmentSource: starDiffractionFragmentShader,
+  }, {
+    attributes: ['position', 'uv'],
+    uniforms: [
+      'worldViewProjection', 'uColor', 'uSpikeCount', 'uDiffractionAlpha', 'uRot', 'uTime',
+      'uActivity',
+    ],
+    needAlphaBlending: true,
+  })
+  material.backFaceCulling = false
+  material.alphaMode = Constants.ALPHA_ADD
+  material.disableDepthWrite = true
+  material.setColor3('uColor', Color3.White())
+  material.setFloat('uSpikeCount', spikeCount)
+  material.setFloat('uDiffractionAlpha', 0)
+  material.setFloat('uRot', 0)
+  material.setFloat('uTime', 0)
+  material.setFloat('uActivity', 0)
+  return material
+}
+
+function createFallbackSurfaceMaterial(scene: Scene, hdrGain: number): ShaderMaterial {
   const material = new ShaderMaterial('stellar:focus:surface:fallback', scene, {
     vertexSource: FALLBACK_SURFACE_VERTEX,
     fragmentSource: FALLBACK_SURFACE_FRAGMENT,
   }, {
     attributes: ['position', 'normal'],
-    uniforms: ['worldViewProjection', 'world', 'cameraPosition', 'uColor', 'uSurfaceAlpha'],
+    uniforms: ['worldViewProjection', 'world', 'cameraPosition', 'uColor', 'uSurfaceAlpha', 'uHdrGain'],
     needAlphaBlending: true,
   })
   material.alphaMode = Constants.ALPHA_COMBINE
   material.disableDepthWrite = true
   material.setColor3('uColor', Color3.White())
   material.setFloat('uSurfaceAlpha', 0)
+  material.setFloat('uHdrGain', hdrGain)
   return material
 }
 

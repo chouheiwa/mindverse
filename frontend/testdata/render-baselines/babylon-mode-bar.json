@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "mindverse-mode-bar.v1",
+  "fixtureVersion": "strata-universe.modes.v1",
+  "rendererKind": "babylon",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "deviceScaleFactor": 1
+  },
+  "modes": {
+    "all": {
+      "ratio": 0.3252484809027778,
+      "resources": {
+        "highPlanetCount": 0,
+        "materializedPlanetCount": 0,
+        "planetVisualConstructions": 0,
+        "planetShaderCompileRequests": 0,
+        "planetUpdatesLastFrame": 0,
+        "actualRenderCount": 17,
+        "nebulaShellCount": 3,
+        "clusterRingCount": 3,
+        "wormholePointCount": 86,
+        "darkLensCount": 1,
+        "dustCount": 48,
+        "soloCount": 1,
+        "renderCostMs": 0.9000000059604645,
+        "maxRenderCostMs": 10.199999995529652
+      }
+    },
+    "worm": {
+      "ratio": 0.17674696180555555,
+      "resources": {
+        "highPlanetCount": 0,
+        "materializedPlanetCount": 0,
+        "planetVisualConstructions": 0,
+        "planetShaderCompileRequests": 0,
+        "planetUpdatesLastFrame": 0,
+        "actualRenderCount": 66,
+        "nebulaShellCount": 3,
+        "clusterRingCount": 3,
+        "wormholePointCount": 86,
+        "darkLensCount": 1,
+        "dustCount": 48,
+        "soloCount": 1,
+        "renderCostMs": 0.5,
+        "maxRenderCostMs": 10.199999995529652
+      }
+    },
+    "dark": {
+      "ratio": 0.23953993055555556,
+      "resources": {
+        "highPlanetCount": 0,
+        "materializedPlanetCount": 0,
+        "planetVisualConstructions": 0,
+        "planetShaderCompileRequests": 0,
+        "planetUpdatesLastFrame": 0,
+        "actualRenderCount": 85,
+        "nebulaShellCount": 3,
+        "clusterRingCount": 3,
+        "wormholePointCount": 86,
+        "darkLensCount": 1,
+        "dustCount": 48,
+        "soloCount": 1,
+        "renderCostMs": 1,
+        "maxRenderCostMs": 10.199999995529652
+      }
+    },
+    "nebula": {
+      "ratio": 0.17555772569444444,
+      "resources": {
+        "highPlanetCount": 0,
+        "materializedPlanetCount": 0,
+        "planetVisualConstructions": 0,
+        "planetShaderCompileRequests": 0,
+        "planetUpdatesLastFrame": 0,
+        "actualRenderCount": 103,
+        "nebulaShellCount": 3,
+        "clusterRingCount": 3,
+        "wormholePointCount": 86,
+        "darkLensCount": 1,
+        "dustCount": 48,
+        "soloCount": 1,
+        "renderCostMs": 0.7999999970197678,
+        "maxRenderCostMs": 10.199999995529652
+      }
+    },
+    "solo": {
+      "ratio": 0.17560872395833332,
+      "resources": {
+        "highPlanetCount": 0,
+        "materializedPlanetCount": 0,
+        "planetVisualConstructions": 0,
+        "planetShaderCompileRequests": 0,
+        "planetUpdatesLastFrame": 0,
+        "actualRenderCount": 121,
+        "nebulaShellCount": 3,
+        "clusterRingCount": 3,
+        "wormholePointCount": 86,
+        "darkLensCount": 1,
+        "dustCount": 48,
+        "soloCount": 1,
+        "renderCostMs": 0.7999999970197678,
+        "maxRenderCostMs": 10.199999995529652
+      }
+    },
+    "me": {
+      "ratio": 0.17555772569444444,
+      "resources": {
+        "highPlanetCount": 0,
+        "materializedPlanetCount": 0,
+        "planetVisualConstructions": 0,
+        "planetShaderCompileRequests": 0,
+        "planetUpdatesLastFrame": 0,
+        "actualRenderCount": 140,
+        "nebulaShellCount": 3,
+        "clusterRingCount": 3,
+        "wormholePointCount": 86,
+        "darkLensCount": 1,
+        "dustCount": 48,
+        "soloCount": 1,
+        "renderCostMs": 0.3999999985098839,
+        "maxRenderCostMs": 10.199999995529652
+      }
+    }
+  }
+}

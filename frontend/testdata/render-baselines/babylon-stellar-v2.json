@@ -1,0 +1,160 @@
+{
+  "schemaVersion": "babylon-stellar-baseline.v1",
+  "fixtureVersion": "strata-universe.v1",
+  "rendererKind": "babylon",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "referenceDevice": {
+    "enforceAbsoluteBudgets": true,
+    "platform": "darwin",
+    "graphicsBackend": "metal"
+  },
+  "states": {
+    "panorama": {
+      "corePixelDiameter": 4.980532876407764,
+      "haloPixelDiameter": 12.45133219101941,
+      "nonBackgroundRatio": 0.5756743827160494,
+      "luminanceVariance": 0.0024380899894943927,
+      "clippedWhiteRatio": 0,
+      "camera": {
+        "distance": 97.2,
+        "alpha": 1.0707963267948966,
+        "beta": 1.3707963267948966,
+        "target": [
+          0,
+          0,
+          0
+        ]
+      },
+      "presentation": {
+        "focusedStarKey": null,
+        "approachProgress": 0,
+        "systemReveal": 0,
+        "visibleQuestionOrbits": 0,
+        "visibleQuestionPlanets": 0,
+        "shaderFallback": false
+      }
+    },
+    "approach-midpoint": {
+      "corePixelDiameter": 73.25360496813278,
+      "haloPixelDiameter": 183.13401242033194,
+      "nonBackgroundRatio": 0.59375,
+      "luminanceVariance": 0.0050852205226037134,
+      "clippedWhiteRatio": 0,
+      "camera": {
+        "distance": 26.60015379942953,
+        "alpha": 1.0707739460948558,
+        "beta": 1.371071735954008,
+        "target": [
+          0.13272047229302253,
+          0.5282666728911685,
+          0.31765495932156923
+        ]
+      },
+      "presentation": {
+        "focusedStarKey": "star:v1:public:8ed3f6ad685b959e",
+        "approachProgress": 0.65,
+        "systemReveal": 0.21600000000000005,
+        "visibleQuestionOrbits": 2,
+        "visibleQuestionPlanets": 2,
+        "shaderFallback": false
+      }
+    },
+    "focused-star": {
+      "corePixelDiameter": 121.7848224071867,
+      "haloPixelDiameter": 304.46205601796675,
+      "nonBackgroundRatio": 0.6936875,
+      "luminanceVariance": 0.011822809021266742,
+      "clippedWhiteRatio": 0,
+      "camera": {
+        "distance": 16,
+        "alpha": 1.0707739460948558,
+        "beta": 1.371071735954008,
+        "target": [
+          0,
+          0,
+          0
+        ]
+      },
+      "presentation": {
+        "focusedStarKey": "star:v1:public:8ed3f6ad685b959e",
+        "approachProgress": 1,
+        "systemReveal": 1,
+        "visibleQuestionOrbits": 2,
+        "visibleQuestionPlanets": 2,
+        "shaderFallback": false
+      }
+    },
+    "planet-focus": {
+      "corePixelDiameter": 695.9132708982095,
+      "haloPixelDiameter": 1739.7831772455238,
+      "nonBackgroundRatio": 0.9576759259259259,
+      "luminanceVariance": 0.05087895242965244,
+      "clippedWhiteRatio": 0,
+      "camera": {
+        "distance": 2.8000000000000007,
+        "alpha": 1.1298347663534989,
+        "beta": 1.2926508898433733,
+        "target": [
+          1.56363346253651,
+          -0.8096714189883397,
+          1.144326259468641
+        ]
+      },
+      "presentation": {
+        "focusedStarKey": "star:v1:public:8ed3f6ad685b959e",
+        "approachProgress": 1,
+        "systemReveal": 1,
+        "visibleQuestionOrbits": 2,
+        "visibleQuestionPlanets": 2,
+        "shaderFallback": false
+      }
+    }
+  },
+  "performance": {
+    "medium": {
+      "fixtureVersion": "strata-universe.dense-500.v1",
+      "starCount": 500,
+      "p95FrameTime": 43,
+      "renderCostMs": 0.29999999701976776,
+      "maxRenderCostMs": 12.200000002980232,
+      "absoluteBudgetMs": 20,
+      "sampleCount": 263,
+      "warmupMs": 3000,
+      "sampleWindowMs": 10000,
+      "hardware": {
+        "platform": "MacIntel",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+        "hardwareConcurrency": 10,
+        "deviceMemory": 16,
+        "gpuVendor": "Google Inc. (Apple)",
+        "gpuRenderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M5, Unspecified Version)",
+        "graphicsBackend": "metal"
+      }
+    },
+    "low": {
+      "fixtureVersion": "strata-universe.dense-500.v1",
+      "starCount": 500,
+      "p95FrameTime": 43.1000000089407,
+      "renderCostMs": 1.5,
+      "maxRenderCostMs": 9.700000002980232,
+      "absoluteBudgetMs": 33.3,
+      "sampleCount": 262,
+      "warmupMs": 3000,
+      "sampleWindowMs": 10000,
+      "hardware": {
+        "platform": "MacIntel",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+        "hardwareConcurrency": 10,
+        "deviceMemory": 16,
+        "gpuVendor": "Google Inc. (Apple)",
+        "gpuRenderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M5, Unspecified Version)",
+        "graphicsBackend": "metal"
+      }
+    }
+  },
+  "commitSha": "dfd12138fb1a9c767aac3731366c06b9718d7845"
+}

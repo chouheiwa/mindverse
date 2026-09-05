@@ -33,6 +33,20 @@ export default defineConfig({
       },
     },
     {
+      // Runs against whichever renderer the bundle was built with, so the same
+      // scripted journey produces a comparable capture for Three and Babylon.
+      name: 'visual-parity',
+      testMatch: /(visual-parity|mode-bar)\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: {
+          args: process.platform === 'darwin'
+            ? ['--enable-gpu', '--ignore-gpu-blocklist', '--use-angle=metal']
+            : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+        },
+      },
+    },
+    {
       name: 'metal-performance',
       testMatch: /render-baseline\.spec\.ts/,
       use: {

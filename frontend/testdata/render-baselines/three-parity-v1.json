@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "mindverse-visual-parity.v1",
+  "fixtureVersion": "strata-universe.v1",
+  "rendererKind": "three",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "deviceScaleFactor": 1
+  },
+  "states": {
+    "panorama": {
+      "captured": true,
+      "cameraDistance": 97.23524780090791,
+      "selectedPlanetBounds": null,
+      "meshes": 17,
+      "textures": 13
+    },
+    "focused-star": {
+      "captured": true,
+      "cameraDistance": 16.003471677630362,
+      "selectedPlanetBounds": null,
+      "meshes": 17,
+      "textures": 13
+    },
+    "planet-focus": {
+      "captured": true,
+      "cameraDistance": 2.800598718860673,
+      "selectedPlanetBounds": {
+        "x": 601.3981445563002,
+        "y": 321.3981445563003,
+        "width": 77.20371088739961,
+        "height": 77.20371088739961
+      },
+      "meshes": 17,
+      "textures": 13
+    }
+  },
+  "commitSha": "dfd12138fb1a9c767aac3731366c06b9718d7845"
+}

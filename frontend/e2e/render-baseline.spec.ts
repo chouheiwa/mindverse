@@ -5,6 +5,11 @@ import { basename, dirname, extname, relative, resolve } from 'node:path'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
 import { parseUniverse } from '../src/domain/universe'
+import { planetWorldRadius } from '../src/starmap/gl/planetMaterials'
+import { orbitRadiusFor } from '../src/starmap/orbitGeometry'
+import { planetFocusDistance, THREE_VERTICAL_FOV } from '../src/starmap/babylon/framing'
+import { projectedSphereDiameterPixels } from '../src/starmap/babylon/planetLod'
+import { findRelativeBudgetViolations, type RenderCostByTier } from '../src/starmap/renderBudget'
 import { createStrataUniverseFixture, installStrataFixture, strataUniverseFixture } from './helpers/strataFixtureRoute'
 import {
   createPlanetRenderFixture,
@@ -15,6 +20,8 @@ import {
 
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1 } as const
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus'] as const
+/** 当前权威的 Babylon 恒星基线；capture:stellar-baseline 写的就是它。 */
+const COMMITTED_STELLAR_BASELINE = 'testdata/render-baselines/babylon-stellar-v2.json'
 type StateName = typeof STATE_NAMES[number]
 type PlanetThermal = typeof PLANET_RENDER_CASES[number]['thermal']
 
@@ -44,6 +51,26 @@ test('dense fixture is a repeatable versioned 500-star universe without content 
   expect(() => parseUniverse(universe)).not.toThrow()
 })
 
+test('planet baseline output accepts a versioned baseline as well as a candidate', () => {
+  const root = resolve(process.cwd(), 'testdata/render-baselines')
+  expect(resolvePlanetBaselineOutput(undefined)).toBeNull()
+  // The npm script compares against babylon-planets-v1.json, so the capture must
+  // be able to produce that file — refusing every non-candidate stem made the
+  // referenced baseline impossible to create.
+  for (const stem of ['babylon-planets-v1', 'babylon-planets-candidate']) {
+    const output = resolvePlanetBaselineOutput(`testdata/render-baselines/${stem}.json`)
+    if (!output) throw new Error('expected an explicit planet baseline output')
+    expect(basename(output.images.magma)).toBe(`${stem}-magma.png`)
+    expect(basename(output.images['far-flip'])).toBe(`${stem}-far-flip.png`)
+    for (const path of Object.values(output.images)) {
+      expect(relative(root, path).startsWith('..')).toBe(false)
+    }
+  }
+  for (const invalid of ['../escape.json', 'testdata/render-baselines/no-extension', 'testdata/render-baselines/.json']) {
+    expect(() => resolvePlanetBaselineOutput(invalid)).toThrow(/MINDVERSE_PLANET_BASELINE_OUT/)
+  }
+})
+
 test('planet gate fixture deterministically pins five thermal cases without user snapshots', () => {
   const first = createPlanetRenderFixture()
   const second = createPlanetRenderFixture()
@@ -58,13 +85,13 @@ test('planet gate fixture deterministically pins five thermal cases without user
 
 test('baseline and candidate outputs derive disjoint PNG paths from their JSON stems', () => {
   const root = resolve(process.cwd(), 'testdata/render-baselines')
-  const baseline = resolveBaselineOutput('testdata/render-baselines/babylon-stellar-v1.json')
+  const baseline = resolveBaselineOutput(COMMITTED_STELLAR_BASELINE)
   const candidate = resolveBaselineOutput('testdata/render-baselines/babylon-stellar-candidate.json')
   if (!baseline || !candidate) throw new Error('expected explicit baseline outputs')
   const baselineImages = Object.values(baseline.images)
   const candidateImages = Object.values(candidate.images)
 
-  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v1-${name}.png`))
+  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v2-${name}.png`))
   expect(candidateImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-candidate-${name}.png`))
   expect(baselineImages.some((path) => candidateImages.includes(path))).toBe(false)
   for (const path of [...baselineImages, ...candidateImages]) {
@@ -78,9 +105,19 @@ async function expectReady(page: Page) {
 }
 
 async function settleFrame(page: Page) {
+  const before = (await snapshot(page)).resources.actualRenderCount
   await page.evaluate(() => new Promise<void>((resolveFrame) => requestAnimationFrame(() => {
     requestAnimationFrame(() => resolveFrame())
   })))
+  if (typeof before !== 'number') return
+  // The Babylon runtime throttles idle frames to 30fps, so two animation frames
+  // are not guaranteed to contain a scene render — and the diagnostics project
+  // through a view matrix that only a render refreshes. Waiting on animation
+  // frames alone let a camera change be measured against the previous pose.
+  await expect.poll(
+    async () => (await snapshot(page)).resources.actualRenderCount ?? Number.POSITIVE_INFINITY,
+    { timeout: 10_000, intervals: [16] },
+  ).toBeGreaterThanOrEqual(before + 2)
 }
 
 async function isolateCanvasCapture(page: Page) {
@@ -275,11 +312,23 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low', en
   if (enforceAbsoluteBudgets && hardware.graphicsBackend !== 'metal') {
     throw new Error(`reference device requires measured Metal; got ${hardware.graphicsBackend}`)
   }
-  if (enforceAbsoluteBudgets) expect(p95FrameTime).toBeLessThanOrEqual(absoluteBudgetMs)
+  const renderCostMs = final.resources.renderCostMs ?? null
+  const maxRenderCostMs = final.resources.maxRenderCostMs ?? null
+  // 绝对预算约束的是渲染开销，不是调度间隔。p95FrameTime 被 30fps 空闲节流
+  // 钉在 33–43ms，与这一屏画了多少东西无关 —— 拿它比 20ms 的 medium 预算，
+  // 门禁在任何机器上都必红，等于从来没有被执行过。
+  if (enforceAbsoluteBudgets) {
+    expect(maxRenderCostMs, 'reference device must report a measured render cost').not.toBeNull()
+    expect(maxRenderCostMs!).toBeLessThanOrEqual(absoluteBudgetMs)
+  }
   return {
     fixtureVersion: fixture.fixtureVersion,
     starCount: final.stellar.starCount,
     p95FrameTime,
+    // p95FrameTime is the scheduling interval, which the deliberate 30fps idle
+    // throttle pins near 33ms whatever the scene costs. This is the work itself.
+    renderCostMs,
+    maxRenderCostMs,
     absoluteBudgetMs,
     sampleCount: samples.length,
     warmupMs: 3_000,
@@ -388,7 +437,29 @@ test('captures five deterministic thermal planets and a stable far LOD candidate
       x: star.core.x + star.core.width / 2,
       y: star.core.y + star.core.height / 2,
     })
-    expect(metrics.bodyDiameter).toBeGreaterThanOrEqual(180)
+    // 门禁不再是一个「够大就行」的地板，而是投影数学算出的预期值。
+    //
+    //   r = planetWorldRadius(answerDensity)，本 fixture 每颗行星 0 个回答 → 0.085
+    //   d = planetFocusDistance(orbitRadiusFor(orbitIndex - 1))
+    //   直径像素 = tan(asin(r/d)) · H / tan(fov/2)
+    //
+    // 校准：把 Three 的 planet-focus 参数（r = 0.1734、d = 2.8、H = 720）代进去
+    // 得 77.2 px，与 three-parity-v1 实拍主体宽度 77 px 吻合 —— 这条式子是对的。
+    // 于是本门禁改成「实测直径落在预期的 [0.85, 1.4] 倍之内」：既抓得住取景回归，
+    // 也抓得住行星半径被改大改小，比任何一个固定像素地板都严。
+    // 上界留到 1.4 是因为 bodyDiameter 量的是含大气壳（半径 ×1.095 起）的包围盒。
+    const expectedDiameter = projectedSphereDiameterPixels(
+      planetWorldRadius(0),
+      planetFocusDistance(orbitRadiusFor(renderCase.orbitIndex - 1)),
+      THREE_VERTICAL_FOV,
+      VIEWPORT.width,
+      VIEWPORT.height,
+    )
+    expect(
+      metrics.bodyDiameter,
+      `${renderCase.thermal}: expected ~${expectedDiameter.toFixed(1)}px, measured ${metrics.bodyDiameter}px`,
+    ).toBeGreaterThanOrEqual(expectedDiameter * 0.85)
+    expect(metrics.bodyDiameter).toBeLessThanOrEqual(expectedDiameter * 1.4)
     expect(metrics.dayNightContrast).toBeGreaterThanOrEqual(0.06)
     expect(metrics.atmosphereEdgeRatio, `${renderCase.thermal} bounds=${JSON.stringify(bounds)} metrics=${JSON.stringify(metrics)}`)
       .toBeGreaterThanOrEqual(0.005)
@@ -496,22 +567,14 @@ async function writeOrAttachPlanetCandidate(
   far: { farA: Buffer; farB: Buffer; farFlip: Buffer },
   testInfo: TestInfo,
 ) {
-  const value = process.env.MINDVERSE_PLANET_BASELINE_OUT
-  if (value) {
-    const root = resolve(process.cwd(), 'testdata/render-baselines')
-    const json = resolve(process.cwd(), value)
-    const pathFromRoot = relative(root, json)
-    if (extname(json) !== '.json' || pathFromRoot.startsWith('..') || !/candidate/i.test(basename(json))) {
-      throw new Error('MINDVERSE_PLANET_BASELINE_OUT must be a candidate .json inside testdata/render-baselines')
-    }
-    const directory = dirname(json)
-    const stem = basename(json, '.json')
-    await mkdir(directory, { recursive: true })
-    await writeFile(json, JSON.stringify(metrics, null, 2) + '\n')
-    for (const { thermal } of PLANET_RENDER_CASES) await writeFile(resolve(directory, `${stem}-${thermal}.png`), captures[thermal].png)
-    await writeFile(resolve(directory, `${stem}-far-a.png`), far.farA)
-    await writeFile(resolve(directory, `${stem}-far-b.png`), far.farB)
-    await writeFile(resolve(directory, `${stem}-far-flip.png`), far.farFlip)
+  const output = resolvePlanetBaselineOutput(process.env.MINDVERSE_PLANET_BASELINE_OUT)
+  if (output) {
+    await mkdir(dirname(output.json), { recursive: true })
+    await writeFile(output.json, JSON.stringify(metrics, null, 2) + '\n')
+    for (const { thermal } of PLANET_RENDER_CASES) await writeFile(output.images[thermal], captures[thermal].png)
+    await writeFile(output.images['far-a'], far.farA)
+    await writeFile(output.images['far-b'], far.farB)
+    await writeFile(output.images['far-flip'], far.farFlip)
     return
   }
   await testInfo.attach('babylon-planets-candidate.json', { body: JSON.stringify(metrics, null, 2), contentType: 'application/json' })
@@ -523,18 +586,16 @@ async function writeOrAttachPlanetCandidate(
   await testInfo.attach('babylon-planets-candidate-far-flip.png', { body: far.farFlip, contentType: 'image/png' })
 }
 
-async function assertRelativePerformance(metrics: {
-  performance: Record<'medium' | 'low', { p95FrameTime: number }>
-}) {
+async function assertRelativePerformance(metrics: { performance: RenderCostByTier }) {
   if (process.env.MINDVERSE_UPDATE_BASELINES === '1') return
-  const committedPath = resolve(process.cwd(), 'testdata/render-baselines/babylon-stellar-v1.json')
+  const committedPath = resolve(process.cwd(), COMMITTED_STELLAR_BASELINE)
   if (!existsSync(committedPath)) throw new Error('committed Babylon stellar baseline is missing')
   const committed = JSON.parse(await readFile(committedPath, 'utf8'))
-  for (const quality of ['medium', 'low'] as const) {
-    const reference = committed.performance?.[quality]?.p95FrameTime
-    if (!Number.isFinite(reference)) throw new Error(`committed ${quality} p95 baseline is missing`)
-    expect(metrics.performance[quality].p95FrameTime).toBeLessThanOrEqual(reference * 1.2)
-  }
+  // 比的是每帧真正干了多少活。p95FrameTime 被 30fps 空闲节流钉死，拿它比等于不比。
+  const violations = findRelativeBudgetViolations(metrics.performance, committed.performance ?? {})
+  expect(violations.map(({ quality, measuredMs, baselineMs, allowedMs }) =>
+    `${quality} render cost ${measuredMs.toFixed(2)}ms exceeds ${allowedMs.toFixed(2)}ms (baseline ${baselineMs.toFixed(2)}ms)`,
+  )).toEqual([])
 }
 
 async function writeOrAttachBaseline(
@@ -549,11 +610,41 @@ async function writeOrAttachBaseline(
     for (const name of STATE_NAMES) await writeFile(output.images[name], states[name].png)
     return
   }
-  await testInfo.attach('babylon-stellar-v1.json', {
+  await testInfo.attach('babylon-stellar-metrics.json', {
     body: JSON.stringify(metrics, null, 2), contentType: 'application/json',
   })
   for (const name of STATE_NAMES) {
     await testInfo.attach(`babylon-${name}.png`, { body: states[name].png, contentType: 'image/png' })
+  }
+}
+
+const PLANET_IMAGE_NAMES = [
+  ...PLANET_RENDER_CASES.map(({ thermal }) => thermal), 'far-a', 'far-b', 'far-flip',
+] as const
+
+/**
+ * Resolves where a planet capture writes. Any stem inside the baseline directory
+ * is allowed: `compare:planet-baselines` reads `babylon-planets-v1.json`, so a
+ * candidate-only rule made the very file that gate depends on impossible to
+ * produce through the supported capture path.
+ */
+export function resolvePlanetBaselineOutput(
+  value: string | undefined,
+): { json: string, images: Record<typeof PLANET_IMAGE_NAMES[number], string> } | null {
+  if (!value) return null
+  const root = resolve(process.cwd(), 'testdata/render-baselines')
+  const json = resolve(process.cwd(), value)
+  const pathFromRoot = relative(root, json)
+  if (extname(json) !== '.json' || pathFromRoot.startsWith('..') || pathFromRoot === '' || basename(json) === '.json') {
+    throw new Error('MINDVERSE_PLANET_BASELINE_OUT must be a .json file inside testdata/render-baselines')
+  }
+  const stem = basename(json, '.json')
+  const directory = dirname(json)
+  return {
+    json,
+    images: Object.fromEntries(
+      PLANET_IMAGE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]),
+    ) as Record<typeof PLANET_IMAGE_NAMES[number], string>,
   }
 }
 

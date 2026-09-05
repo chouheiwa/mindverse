@@ -1,4 +1,5 @@
-import test from 'node:test'
+// @vitest-environment node
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,10 +7,14 @@ import { join } from 'node:path'
 import {
   compareRenderBaselines,
   comparePlanetRenderBaselines,
+  compareVisualParityDocuments,
   derivePlanetPngPaths,
+  deriveParityPngPaths,
   deriveStellarPngPaths,
+  validateParityPngArtifacts,
   validateStellarPngArtifacts,
 } from './compare-render-baselines.mjs'
+import { PARITY_STATE_NAMES, describeFrame } from './frameParity.mjs'
 
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus']
 
@@ -49,10 +54,11 @@ const baseline = () => ({
   },
 })
 
-function performanceState(p95FrameTime, absoluteBudgetMs) {
+function performanceState(p95FrameTime, absoluteBudgetMs, maxRenderCostMs = absoluteBudgetMs * 0.5) {
   return {
     fixtureVersion: 'strata-universe.dense-500.v1', starCount: 500,
     p95FrameTime, absoluteBudgetMs, sampleCount: 600, warmupMs: 3_000, sampleWindowMs: 10_000,
+    renderCostMs: maxRenderCostMs * 0.8, maxRenderCostMs,
     hardware: {
       platform: 'MacIntel', userAgent: 'Playwright Chromium', hardwareConcurrency: 8,
       deviceMemory: 8, gpuVendor: 'Apple', gpuRenderer: 'ANGLE Metal Renderer', graphicsBackend: 'metal',
@@ -167,15 +173,18 @@ test('rejects non-finite camera data and invalid presentation semantics', () => 
   assert.throws(() => compareRenderBaselines(baseline(), hiddenFocusedPlanets), /focused-star.*presentation/i)
 })
 
-test('always enforces a positive p95 and the relative 20 percent budget', () => {
+test('always enforces a positive p95 and the relative 20 percent render-cost budget', () => {
   for (const p95FrameTime of [0, -1, Number.NaN]) {
     const value = candidate()
     value.performance.medium.p95FrameTime = p95FrameTime
     assert.throws(() => compareRenderBaselines(baseline(), value), /p95/i)
   }
+  // 相对回归也必须比渲染开销：p95FrameTime 被 30fps 空闲节流钉死，两侧恒等，
+  // 拿它比「基线 × 1.2」得到的是一条永远不会红的门禁。
   const relative = candidate()
-  relative.performance.medium.p95FrameTime = 19.21
-  assert.throws(() => compareRenderBaselines(baseline(), relative), /p95.*20%/i)
+  relative.performance.medium.maxRenderCostMs = baseline().performance.medium.maxRenderCostMs * 1.21
+  assert.equal(relative.performance.medium.p95FrameTime, baseline().performance.medium.p95FrameTime)
+  assert.throws(() => compareRenderBaselines(baseline(), relative), /medium render cost regressed over 20%/i)
 })
 
 test('enforces absolute budgets only for an explicit macOS Metal reference run', () => {
@@ -185,17 +194,43 @@ test('enforces absolute budgets only for an explicit macOS Metal reference run',
   ordinary.performance.medium.p95FrameTime = 25
   assert.doesNotThrow(() => compareRenderBaselines(ordinaryBaseline, ordinary))
 
+  // 参考机上超预算必须红。预算约束的是渲染开销（见下一条用例），
+  // 所以这里推的是 maxRenderCostMs，不是被节流钉住的 p95FrameTime。
   const referenceBaseline = baseline()
   referenceBaseline.referenceDevice.enforceAbsoluteBudgets = true
-  referenceBaseline.performance.medium.p95FrameTime = 20
+  referenceBaseline.performance.medium = performanceState(16, 20, 10)
   const reference = candidate()
   reference.referenceDevice.enforceAbsoluteBudgets = true
-  reference.performance.medium.p95FrameTime = 20.01
+  reference.performance.medium = performanceState(16, 20, 20.01)
   assert.throws(() => compareRenderBaselines(referenceBaseline, reference), /absolute.*medium/i)
 
   const invalidReference = candidate()
   invalidReference.referenceDevice = { enforceAbsoluteBudgets: true, platform: 'linux', graphicsBackend: 'swiftshader' }
   assert.throws(() => compareRenderBaselines(baseline(), invalidReference), /reference device/i)
+})
+
+test('measures the absolute budget against render cost, not the throttled scheduling interval', () => {
+  // p95FrameTime 是**调度间隔**：30fps 空闲节流把它钉在 33–43ms，与这一屏
+  // 到底画了多少东西无关。拿它去比「单帧渲染预算」，等于让节流策略决定
+  // 性能门禁的成败 —— medium 的 20ms 预算于是永远不可能通过，
+  // `MINDVERSE_REFERENCE_DEVICE=1` 这条路径从来没有真正跑绿过。
+  //
+  // 真正该被预算约束的是 maxRenderCostMs（最坏单帧的渲染开销），
+  // 提升报告 §5.4 用的也正是这个数（medium 11.3ms / low 10.1ms）。
+  const throttledBaseline = baseline()
+  throttledBaseline.referenceDevice.enforceAbsoluteBudgets = true
+  throttledBaseline.performance.medium = performanceState(43.0, 20, 10.0)
+  throttledBaseline.performance.low = performanceState(43.1, 33.3, 9.0)
+  const throttled = candidate()
+  throttled.referenceDevice.enforceAbsoluteBudgets = true
+  throttled.performance.medium = performanceState(43.2, 20, 11.3)
+  throttled.performance.low = performanceState(42.9, 33.3, 10.1)
+  assert.doesNotThrow(() => compareRenderBaselines(throttledBaseline, throttled))
+
+  // 但真的画超预算了，必须红。
+  const heavy = structuredClone(throttled)
+  heavy.performance.medium = performanceState(43.2, 20, 20.01)
+  assert.throws(() => compareRenderBaselines(throttledBaseline, heavy), /absolute.*medium/i)
 })
 
 test('rejects malformed performance metadata and sample windows', () => {
@@ -305,4 +340,140 @@ test('derives isolated PNG paths for all planet samples', () => {
   const paths = derivePlanetPngPaths('/tmp/babylon-planets-candidate.json')
   assert.deepEqual(Object.keys(paths), ['magma', 'desert', 'rock', 'tundra', 'ice', 'far-a', 'far-b', 'far-flip'])
   assert.equal(paths.magma, '/tmp/babylon-planets-candidate-magma.png')
+})
+
+// ── Pixel-backed cross-renderer parity ──
+
+const parityFrame = ({ width = 96, height = 54, wash = 0.09, star = null, tint = [1, 1, 1] } = {}) => {
+  const data = new Uint8Array(width * height * 4)
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let value = wash
+      if (star) {
+        const distance = Math.hypot(x - star.x, y - star.y) / star.radius
+        if (distance <= 1) value = Math.max(value, star.core * Math.pow(1 - distance, star.falloff ?? 1.6))
+      }
+      const offset = (y * width + x) * 4
+      data[offset] = Math.round(Math.min(1, value * tint[0]) * 255)
+      data[offset + 1] = Math.round(Math.min(1, value * tint[1]) * 255)
+      data[offset + 2] = Math.round(Math.min(1, value * tint[2]) * 255)
+      data[offset + 3] = 255
+    }
+  }
+  return { width, height, data }
+}
+
+const parityDescriptors = (overrides = {}) => Object.fromEntries(PARITY_STATE_NAMES.map((name, index) => [
+  name,
+  describeFrame(overrides[name] ?? parityFrame({
+    star: { x: 30 + index * 6, y: 27, radius: 14 + index * 3, core: 0.95 },
+  })),
+]))
+
+const parityDocument = (overrides = {}) => ({
+  schemaVersion: 'mindverse-visual-parity.v1',
+  fixtureVersion: 'strata-universe.v1',
+  rendererKind: 'three',
+  viewport: { width: 1280, height: 720, deviceScaleFactor: 1 },
+  states: Object.fromEntries(PARITY_STATE_NAMES.map((name) => [name, { captured: true }])),
+  ...overrides,
+})
+
+test('derives one PNG artifact path per parity state', () => {
+  const paths = deriveParityPngPaths('/tmp/three-parity-v1.json')
+  assert.deepEqual(Object.keys(paths), ['panorama', 'focused-star', 'planet-focus'])
+  assert.equal(paths.panorama, '/tmp/three-parity-v1-panorama.png')
+  assert.equal(paths['planet-focus'], '/tmp/three-parity-v1-planet-focus.png')
+})
+
+test('validates every parity PNG artifact as present, non-empty PNG data', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mindverse-parity-'))
+  const json = join(directory, 'three-parity-v1.json')
+  const paths = deriveParityPngPaths(json)
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  try {
+    await assert.rejects(validateParityPngArtifacts(json), /missing.*PNG.*panorama/i)
+    await Promise.all(Object.values(paths).map((path) => writeFile(path, signature)))
+    await validateParityPngArtifacts(json)
+    await writeFile(paths['planet-focus'], Buffer.alloc(0))
+    await assert.rejects(validateParityPngArtifacts(json), /empty.*PNG.*planet-focus/i)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('parity comparison refuses to reach a verdict without decoded pixels', () => {
+  assert.throws(
+    () => compareVisualParityDocuments(parityDocument(), parityDocument({ rendererKind: 'babylon' })),
+    /decoded frames/i,
+  )
+})
+
+test('parity comparison passes only when all three states match pixel-wise', () => {
+  const frames = { reference: parityDescriptors(), candidate: parityDescriptors() }
+  const result = compareVisualParityDocuments(
+    parityDocument(), parityDocument({ rendererKind: 'babylon' }), frames,
+  )
+  assert.equal(result.parity, true)
+  assert.deepEqual(result.states.map(({ name }) => name), PARITY_STATE_NAMES)
+})
+
+test('parity comparison reports the states whose pixels drifted', () => {
+  const frames = {
+    reference: parityDescriptors(),
+    candidate: parityDescriptors({
+      'planet-focus': parityFrame({ wash: 0, star: { x: 48, y: 27, radius: 26, core: 0.95, falloff: 0.1 } }),
+    }),
+  }
+  assert.throws(
+    () => compareVisualParityDocuments(parityDocument(), parityDocument({ rendererKind: 'babylon' }), frames),
+    /planet-focus/,
+  )
+})
+
+test('parity comparison enforces schema, fixture and viewport contracts', () => {
+  const frames = { reference: parityDescriptors(), candidate: parityDescriptors() }
+  for (const [overrides, message] of [
+    [{ schemaVersion: 'other' }, /schema/i],
+    [{ fixtureVersion: 'mismatched' }, /fixture/i],
+    [{ viewport: { width: 800, height: 600, deviceScaleFactor: 1 } }, /viewport/i],
+    [{ rendererKind: 'unknown' }, /renderer/i],
+    [{ states: { panorama: { captured: true } } }, /focused-star/],
+  ]) {
+    assert.throws(
+      () => compareVisualParityDocuments(parityDocument(), parityDocument({ rendererKind: 'babylon', ...overrides }), frames),
+      message,
+    )
+  }
+})
+
+test('legacy migration pair also gates subject size and a tighter coverage floor', () => {
+  const legacy = {
+    fixtureVersion: 'strata-universe.v1', rendererKind: 'three', viewport: { width: 1280, height: 720 },
+    selectedPlanetBounds: { x: 400, y: 200, width: 200, height: 200 },
+    nonBackgroundRatio: 0.4, firstInteractiveMs: 1_000, p95FrameTime: 10,
+  }
+  const migrated = { ...legacy, rendererKind: 'babylon' }
+  assert.equal(compareRenderBaselines(legacy, migrated).rendererKind, 'babylon')
+  assert.throws(() => compareRenderBaselines(legacy, {
+    ...migrated, selectedPlanetBounds: { x: 340, y: 140, width: 320, height: 320 },
+  }), /size/i)
+  assert.throws(() => compareRenderBaselines(legacy, {
+    ...migrated, nonBackgroundRatio: 0.28,
+  }), /non-background/i)
+})
+
+test('reports every drifted state instead of stopping at the first one', () => {
+  const value = candidate()
+  // 一次取景改动会同时波及多个状态。首个失败即抛会把「五处漂移」报成「一处」，
+  // 让人误判成孤立噪声而不是系统性变化。
+  value.states.panorama.camera.alpha = 2.5
+  value.states['focused-star'].camera.alpha = 2.5
+
+  let message = ''
+  try { compareRenderBaselines(baseline(), value) } catch (error) { message = error.message }
+
+  assert.match(message, /2 checks failed/)
+  assert.match(message, /panorama/)
+  assert.match(message, /focused-star/)
 })

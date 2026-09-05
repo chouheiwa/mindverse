@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
-import { readFreshPixelStats } from '../src/starmap/renderReadback'
-import { installStrataFixture } from './helpers/strataFixtureRoute'
+import { readFreshLuminanceProfile, readFreshPixelStats } from '../src/starmap/renderReadback'
+import { installStrataFixture, type StrataFixtureOptions } from './helpers/strataFixtureRoute'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -86,11 +86,17 @@ async function nonBackgroundRatio(page: Page): Promise<number> {
   return stats.nonBackground / stats.total
 }
 
-async function openBabylonUniverse(page: Page, query = '', reducedMotion: 'reduce' | 'no-preference' = 'reduce') {
+async function openBabylonUniverse(
+  page: Page,
+  query = '',
+  reducedMotion: 'reduce' | 'no-preference' = 'reduce',
+  fixture: StrataFixtureOptions = {},
+) {
   await installLifecycleAudit(page)
-  await installStrataFixture(page)
+  const installed = await installStrataFixture(page, fixture)
   await page.emulateMedia({ reducedMotion })
   await page.goto(`/universe.html${query}`)
+  return installed
 }
 
 async function expectReady(page: Page) {
@@ -317,7 +323,7 @@ async function holdKeyUntil(page: Page, key: string, predicate: () => Promise<bo
   }
 }
 
-test('Babylon vertical slice renders, orbits, crosses the surface and preserves cave camera pose', async ({ page }) => {
+test('Babylon vertical slice renders, orbits, crosses the surface and preserves cave camera pose', async ({ page }, testInfo) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   page.on('console', (message) => {
@@ -365,6 +371,11 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   const entryCamera = (await snapshot(page))!.scene
   await enterStrata(page, '回溯地层')
   expect(await nonBackgroundRatio(page)).toBeGreaterThanOrEqual(0.35)
+  // Evidence that entering a question lands in a strata world rather than text
+  // laid over the universe.
+  await testInfo.attach('strata-world.png', {
+    body: await canvas(page).screenshot(), contentType: 'image/png',
+  })
   const hud = page.getByRole('region', { name: '答案地层导航' })
   await hud.focus()
   await page.keyboard.down('s')
@@ -376,8 +387,21 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   expect(cave.scene.cameraTargetY).toBeCloseTo(-pose.depth + Math.sin(pose.pitch), 2)
   await holdKeyUntil(page, 'd', async () => Boolean((await snapshot(page))?.projectedBounds.answerSpecimens
     ?.some(({ room, bounds }) => room === 'main' && bounds)))
-  const target = (await snapshot(page))!.projectedBounds.answerSpecimens!
-    .find(({ room, bounds }) => room === 'main' && bounds)!.bounds!
+  await testInfo.attach('babylon-strata-cave.png', {
+    body: await page.screenshot(), contentType: 'image/png',
+  })
+  // 相机停下之前投影还在动：拿一份会动的包围盒去点，点到的是它刚才在的地方。
+  const mainSpecimen = async () => (await snapshot(page))!.projectedBounds.answerSpecimens!
+    .find(({ room, bounds }) => room === 'main' && bounds)?.bounds ?? null
+  let target = await mainSpecimen()
+  await expect.poll(async () => {
+    const next = await mainSpecimen()
+    const settled = Boolean(target && next
+      && Math.abs(target.x - next.x) < 0.5 && Math.abs(target.y - next.y) < 0.5)
+    target = next
+    return settled
+  }, { timeout: 10_000 }).toBe(true)
+  if (!target) throw new Error('no answer specimen is on screen to click')
   await canvas(page).click({ position: { x: target.x + target.width / 2, y: target.y + target.height / 2 }, force: true })
   expect((await snapshot(page))!.lifecycle.lastPick).toBe('specimen')
   await expect(page.getByRole('dialog', { name: /ANSWER SPECIMEN|固定答案/ })).toBeVisible()
@@ -517,4 +541,102 @@ test('webglcontextlost destroys the old runtime and remounts one fresh context',
   await page.getByRole('button', { name: '重试 3D' }).click()
   await expectReady(page)
   await expect.poll(async () => (await snapshot(page))?.activeContextCount).toBe(1)
+})
+
+test('an article probe is a craft in orbit that can be approached, orbited, scanned and closed', async ({ page }, testInfo) => {
+  const fixture = await openBabylonUniverse(page, '', 'no-preference', { probes: true })
+  await expectReady(page)
+  await openStar(page)
+
+  const before = await snapshot(page)
+  expect(before?.scene.probeCount).toBe(2)
+  expect(before?.scene.probeNearVisible).toBe(false)
+
+  const trigger = page.getByRole('button', { name: '检查探测器' }).first()
+  await trigger.click()
+
+  // 接近是一段真实运镜：镜头必须离开恒星系机位、落到机体旁。
+  const dialog = page.getByRole('dialog', { name: /检查探测器：/ })
+  await expect(dialog).toBeVisible({ timeout: 15_000 })
+  await expect.poll(async () => (await snapshot(page))?.scene.probeNearVisible ?? false, { timeout: 20_000 })
+    .toBe(true)
+  const arrived = (await snapshot(page))!.scene
+  expect(arrived.cameraDistance).toBeLessThan(before!.scene.cameraDistance)
+
+  // 主动旋转观察：拖动改变机位，而机体本身留在原地。
+  const bounds = await canvas(page).boundingBox()
+  if (!bounds) throw new Error('probe inspection canvas has no layout bounds')
+  await page.mouse.move(bounds.x + bounds.width * 0.3, bounds.y + bounds.height * 0.5)
+  await page.mouse.down()
+  await page.mouse.move(bounds.x + bounds.width * 0.62, bounds.y + bounds.height * 0.38, { steps: 6 })
+  await page.mouse.up()
+  await expect.poll(async () => {
+    const scene = (await snapshot(page))!.scene
+    return Math.abs((scene.cameraAlpha ?? 0) - (arrived.cameraAlpha ?? 0))
+      + Math.abs((scene.cameraBeta ?? 0) - (arrived.cameraBeta ?? 0))
+  }, { timeout: 10_000 }).toBeGreaterThan(0.05)
+
+  await page.getByRole('button', { name: '聚焦部件：天线' }).click()
+  await page.getByRole('button', { name: '开始扫描' }).click()
+  const article = page.getByRole('link', { name: '查看原文章' })
+  await expect(article).toBeVisible({ timeout: 10_000 })
+  expect(await article.getAttribute('href')).toBe(fixture.generation.universe?.probes?.[0]?.url)
+
+  await testInfo.attach('babylon-probe-inspection.png', {
+    body: await page.screenshot(), contentType: 'image/png',
+  })
+
+  await page.keyboard.press('Escape')
+  await expect(trigger).toBeFocused()
+  await expect.poll(async () => (await snapshot(page))?.scene.probeNearVisible ?? true).toBe(false)
+
+  // 重复进出不得堆积资源。
+  const memory = [(await snapshot(page))!.memory]
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    await trigger.click()
+    await expect(dialog).toBeVisible()
+    await expect.poll(async () => (await snapshot(page))?.scene.probeNearVisible ?? false, { timeout: 20_000 })
+      .toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(trigger).toBeFocused()
+    memory.push((await snapshot(page))!.memory)
+  }
+  expect(memory[2].geometries).toBeLessThanOrEqual(memory[0].geometries)
+  expect(memory[2].textures).toBeLessThanOrEqual(memory[0].textures)
+})
+
+test('the answer strata is a lit, layered world rather than a black void', async ({ page }, testInfo) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  await openStar(page)
+  await openQuestionWorkspace(page, '固定地层问题')
+  await enterStrata(page, '回溯地层')
+  await expect.poll(async () => (await snapshot(page))?.scenePhase).toMatch(/strata-(free|snapped)/)
+  await page.getByRole('region', { name: '答案地层导航' }).focus()
+  await holdKeyUntil(page, 's', async () => ((await snapshot(page))?.scene.strataPose?.depth ?? 0) > 3)
+
+  // 1) 宇宙退场：星图那一层必须整体关掉，不是「叠在宇宙上的文字」。
+  const inside = (await snapshot(page))!
+  expect(inside.scene.planetCount).toBeGreaterThanOrEqual(0)
+  expect(inside.scenePhase).toMatch(/strata-(free|snapped)/)
+
+  // 2) 洞窟必须有东西可看。全黑的地层世界只是一个 HUD。
+  const lit = await nonBackgroundRatio(page)
+  await testInfo.attach('babylon-strata-lit.png', {
+    body: await page.screenshot(), contentType: 'image/png',
+  })
+  process.stdout.write(`[strata] nonBackground ${lit.toFixed(4)}\n`)
+  expect(lit).toBeGreaterThan(0.35)
+
+  // 3) 纵向年代层：岩壁必须在竖直方向上明暗交替，而不是一条单调渐变。
+  //    修复前实测剖面 0.0529,0.0536,…,0.0616 —— 单调、落差 0.0087、零次穿越。
+  const bands = (await canvas(page).evaluate(readFreshLuminanceProfile, 12)).bands
+  process.stdout.write(`[strata] bands ${bands.map((value) => value.toFixed(4)).join(',')}\n`)
+  expect(Math.max(...bands)).toBeGreaterThan(0.09)
+  const mean = bands.reduce((sum, value) => sum + value, 0) / bands.length
+  let crossings = 0
+  for (let index = 1; index < bands.length; index += 1) {
+    if ((bands[index - 1]! - mean) * (bands[index]! - mean) < 0) crossings += 1
+  }
+  expect(crossings).toBeGreaterThanOrEqual(3)
 })

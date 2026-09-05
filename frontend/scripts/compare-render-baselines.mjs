@@ -1,9 +1,18 @@
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { decodePng } from './framePixels.mjs'
+import {
+  PARITY_STATE_NAMES,
+  compareFrameDescriptors,
+  compareVisualParitySets,
+  describeFrame,
+  formatDeviation,
+} from './frameParity.mjs'
 
 export const STELLAR_BASELINE_SCHEMA = 'babylon-stellar-baseline.v1'
 export const PLANET_BASELINE_SCHEMA = 'babylon-planets-baseline.v1'
+export const VISUAL_PARITY_SCHEMA = 'mindverse-visual-parity.v1'
 export const STELLAR_STATE_NAMES = Object.freeze([
   'panorama', 'approach-midpoint', 'focused-star', 'planet-focus',
 ])
@@ -32,13 +41,17 @@ function ratio(value, label) {
   return result
 }
 
-function validateViewport(viewport) {
+function validateViewportShape(viewport) {
   if (!viewport
     || !Number.isInteger(viewport.width) || viewport.width <= 0
     || !Number.isInteger(viewport.height) || viewport.height <= 0
     || !Number.isFinite(viewport.deviceScaleFactor) || viewport.deviceScaleFactor <= 0) {
     throw new Error('render baseline: invalid viewport')
   }
+}
+
+function validateViewport(viewport) {
+  validateViewportShape(viewport)
   if (viewport.width !== STELLAR_VIEWPORT.width
     || viewport.height !== STELLAR_VIEWPORT.height
     || viewport.deviceScaleFactor !== STELLAR_VIEWPORT.deviceScaleFactor) {
@@ -179,6 +192,9 @@ function validatePerformanceState(quality, state) {
   if (!state) throw new Error(`render baseline: missing ${quality} performance state`)
   positive(state.p95FrameTime, `${quality} p95`)
   positive(state.absoluteBudgetMs, `${quality} absolute performance budget`)
+  // 绝对预算比对的是这两个数，所以它们必须存在且有限 —— 缺了就不能默默跳过。
+  positive(state.renderCostMs, `${quality} render cost`)
+  positive(state.maxRenderCostMs, `${quality} max render cost`)
   if (Math.abs(state.absoluteBudgetMs - ABSOLUTE_BUDGETS[quality]) > 1e-6) {
     throw new Error(`render baseline: invalid ${quality} absolute performance budget`)
   }
@@ -205,20 +221,47 @@ function validatePerformanceState(quality, state) {
   }
 }
 
-function validatePerformance(baseline, candidate) {
-  for (const quality of PERFORMANCE_QUALITIES) {
+/**
+ * 收集式比对：逐项跑，把**所有**失败攒起来再一次抛出。
+ * 首个失败即抛会把一次波及多处的漂移报成孤零零一处，让人误判成噪声。
+ * 只有一处失败时原样透传，既有用例断言的精确文案因此不变。
+ */
+function runAll(checks) {
+  const failures = []
+  for (const check of checks) {
+    try { check() } catch (error) { failures.push(error.message) }
+  }
+  if (failures.length === 1) throw new Error(failures[0])
+  if (failures.length > 1) {
+    throw new Error(`render baseline: ${failures.length} checks failed\n- ${failures.join('\n- ')}`)
+  }
+}
+
+function performanceChecks(baseline, candidate) {
+  return PERFORMANCE_QUALITIES.map((quality) => () => {
     const reference = baseline.performance?.[quality]
     const measured = candidate.performance?.[quality]
     validatePerformanceState(quality, reference)
     validatePerformanceState(quality, measured)
-    if (measured.p95FrameTime > reference.p95FrameTime * 1.2) {
-      throw new Error(`render baseline: ${quality} p95 regressed over 20%`)
-    }
+    // 预算和回归约束的都是**渲染开销**，不是调度间隔：30fps 空闲节流把
+    // p95FrameTime 钉在 33–43ms，与这一屏画了多少东西无关。拿它比 20ms 绝对
+    // 预算永远红，拿它比「基线 × 1.2」则两侧恒等、永远绿——两头都不是门禁。
     if (candidate.referenceDevice.enforceAbsoluteBudgets
-      && measured.p95FrameTime > ABSOLUTE_BUDGETS[quality]) {
-      throw new Error(`render baseline: absolute ${quality} p95 budget exceeded`)
+      && measured.maxRenderCostMs > ABSOLUTE_BUDGETS[quality]) {
+      throw new Error(`render baseline: absolute ${quality} render cost budget exceeded`)
     }
-  }
+    if (measured.maxRenderCostMs > reference.maxRenderCostMs * 1.2) {
+      throw new Error(`render baseline: ${quality} render cost regressed over 20%`)
+    }
+  })
+}
+
+function stateChecks(baseline, candidate) {
+  return STELLAR_STATE_NAMES.map((name) => () => {
+    validateState(name, baseline.states?.[name])
+    validateState(name, candidate.states?.[name])
+    compareState(name, baseline.states[name], candidate.states[name])
+  })
 }
 
 export function compareRenderBaselines(baseline, candidate) {
@@ -246,12 +289,7 @@ export function compareRenderBaselines(baseline, candidate) {
   }
   validateReferenceDevice(baseline.referenceDevice)
   validateReferenceDevice(candidate.referenceDevice)
-  for (const name of STELLAR_STATE_NAMES) {
-    validateState(name, baseline.states?.[name])
-    validateState(name, candidate.states?.[name])
-    compareState(name, baseline.states[name], candidate.states[name])
-  }
-  validatePerformance(baseline, candidate)
+  runAll([...stateChecks(baseline, candidate), ...performanceChecks(baseline, candidate)])
   return { rendererKind: candidate.rendererKind, states: [...STELLAR_STATE_NAMES] }
 }
 
@@ -265,6 +303,96 @@ export function derivePlanetPngPaths(jsonPath) {
   const stem = basename(jsonPath, '.json')
   const directory = dirname(jsonPath)
   return Object.fromEntries(PLANET_IMAGE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]))
+}
+
+export function deriveParityPngPaths(jsonPath) {
+  const stem = basename(jsonPath, '.json')
+  const directory = dirname(jsonPath)
+  return Object.fromEntries(PARITY_STATE_NAMES.map((name) => [name, resolve(directory, `${stem}-${name}.png`)]))
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+export async function validateParityPngArtifacts(jsonPath) {
+  const paths = deriveParityPngPaths(jsonPath)
+  for (const name of PARITY_STATE_NAMES) {
+    let png
+    try { png = await readFile(paths[name]) } catch { throw new Error(`visual parity: missing PNG artifact ${name}`) }
+    if (png.length === 0) throw new Error(`visual parity: empty PNG artifact ${name}`)
+    if (png.length < PNG_SIGNATURE.length || !png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+      throw new Error(`visual parity: invalid PNG signature for ${name}`)
+    }
+  }
+  return paths
+}
+
+/** Reads and describes one PNG so a verdict is always derived from pixels, never from prose. */
+export async function readFrameDescriptor(path, label) {
+  let png
+  try { png = await readFile(path) } catch { throw new Error(`visual parity: cannot read ${label} at ${path}`) }
+  if (png.length === 0) throw new Error(`visual parity: ${label} is an empty file`)
+  return describeFrame(decodePng(png))
+}
+
+export async function readParityFrames(jsonPath) {
+  const paths = await validateParityPngArtifacts(jsonPath)
+  const entries = await Promise.all(PARITY_STATE_NAMES.map(async (name) =>
+    [name, await readFrameDescriptor(paths[name], `${basename(jsonPath, '.json')} ${name}`)]))
+  return Object.fromEntries(entries)
+}
+
+function validateParityDocument(document, label) {
+  if (!document || typeof document !== 'object') throw new Error(`visual parity: ${label} document is not an object`)
+  if (document.schemaVersion !== VISUAL_PARITY_SCHEMA) {
+    throw new Error(`visual parity: schema must be ${VISUAL_PARITY_SCHEMA} (${label})`)
+  }
+  if (document.rendererKind !== 'three' && document.rendererKind !== 'babylon') {
+    throw new Error(`visual parity: unknown renderer kind in ${label}`)
+  }
+  if (typeof document.fixtureVersion !== 'string' || document.fixtureVersion.length === 0) {
+    throw new Error(`visual parity: ${label} fixture version is missing`)
+  }
+  validateViewportShape(document.viewport)
+  for (const name of PARITY_STATE_NAMES) {
+    if (!document.states?.[name]) throw new Error(`visual parity: ${label} never captured ${name}`)
+  }
+}
+
+/**
+ * Cross-renderer verdict. `frames` must carry decoded descriptors for both
+ * sides — without pixels this throws instead of quietly reporting parity,
+ * because a metadata-only pass is exactly the hole this gate exists to close.
+ */
+export function compareVisualParityDocuments(reference, candidate, frames, options = {}) {
+  validateParityDocument(reference, 'reference')
+  validateParityDocument(candidate, 'candidate')
+  if (reference.fixtureVersion !== candidate.fixtureVersion) throw new Error('visual parity: fixture mismatch')
+  if (reference.viewport.width !== candidate.viewport.width
+    || reference.viewport.height !== candidate.viewport.height
+    || reference.viewport.deviceScaleFactor !== candidate.viewport.deviceScaleFactor) {
+    throw new Error('visual parity: viewport mismatch')
+  }
+  if (!frames?.reference || !frames?.candidate) {
+    throw new Error('visual parity: refusing to compare without decoded frames for both sides')
+  }
+  const result = compareVisualParitySets(frames.reference, frames.candidate, options)
+  if (!result.parity) {
+    const detail = result.states
+      .filter(({ parity }) => !parity)
+      .map(({ name, deviations }) => `  ${name}:\n${deviations.map((item) => `    - ${formatDeviation(item)}`).join('\n')}`)
+      .join('\n')
+    throw new Error(
+      `visual parity: ${candidate.rendererKind} has not caught up with ${reference.rendererKind} in `
+      + `${result.failedStates.join(', ')}\n${detail}`,
+    )
+  }
+  return {
+    referenceKind: reference.rendererKind,
+    rendererKind: candidate.rendererKind,
+    states: result.states,
+    parity: true,
+    failedStates: [],
+  }
 }
 
 function validatePlanetSample(name, sample) {
@@ -391,11 +519,28 @@ function compareLegacyMigrationPair(baseline, candidate) {
   if (centerDrift > Math.min(baseline.viewport.width, baseline.viewport.height) * 0.1) {
     throw new Error('render baseline: selected object center drift exceeds 10%')
   }
-  if (Math.abs(finite(candidate.nonBackgroundRatio, 'non-background ratio')
-    - finite(baseline.nonBackgroundRatio, 'non-background ratio')) > 0.2) {
-    throw new Error('render baseline: non-background ratio drift exceeds 20%')
+  // Centre drift alone lets a subject grow to three times its size and still pass,
+  // which is precisely how the Babylon planet-focus framing slipped through.
+  for (const axis of ['width', 'height']) {
+    const reference = positive(left[axis], `baseline selected object ${axis}`)
+    const measured = positive(right[axis], `candidate selected object ${axis}`)
+    if (Math.abs(measured / reference - 1) > 0.25) {
+      throw new Error(`render baseline: selected object ${axis} size drift exceeds 25%`)
+    }
+  }
+  const baselineCoverage = finite(baseline.nonBackgroundRatio, 'non-background ratio')
+  const candidateCoverage = finite(candidate.nonBackgroundRatio, 'non-background ratio')
+  if (Math.abs(candidateCoverage - baselineCoverage) > 0.05) {
+    throw new Error('render baseline: non-background ratio drift exceeds 0.05')
+  }
+  if (baselineCoverage > 0 && candidateCoverage / baselineCoverage < 0.75) {
+    throw new Error('render baseline: non-background ratio fell below 75% of the baseline')
   }
   return { rendererKind: candidate.rendererKind, states: [], centerDrift }
+}
+
+export function deriveLegacyPngPath(jsonPath) {
+  return resolve(dirname(jsonPath), `${basename(jsonPath, '.json')}.png`)
 }
 
 async function main() {
@@ -405,6 +550,20 @@ async function main() {
     readFile(resolve(baselinePath), 'utf8').then(JSON.parse),
     readFile(resolve(candidatePath), 'utf8').then(JSON.parse),
   ])
+  if (baseline.schemaVersion === VISUAL_PARITY_SCHEMA || candidate.schemaVersion === VISUAL_PARITY_SCHEMA) {
+    const [referenceFrames, candidateFrames] = await Promise.all([
+      readParityFrames(resolve(baselinePath)),
+      readParityFrames(resolve(candidatePath)),
+    ])
+    const parity = compareVisualParityDocuments(baseline, candidate, {
+      reference: referenceFrames, candidate: candidateFrames,
+    })
+    process.stdout.write(
+      `visual parity verified: ${parity.rendererKind} matches ${parity.referenceKind}; `
+      + `states ${parity.states.map(({ name }) => name).join(', ')}\n`,
+    )
+    return
+  }
   if (baseline.schemaVersion === PLANET_BASELINE_SCHEMA || candidate.schemaVersion === PLANET_BASELINE_SCHEMA) {
     await Promise.all([
       validatePlanetPngArtifacts(resolve(baselinePath)),
@@ -421,6 +580,22 @@ async function main() {
     ])
   }
   const result = compareRenderBaselines(baseline, candidate)
+  if (baseline.schemaVersion === undefined && candidate.schemaVersion === undefined) {
+    // The legacy pair is a single planet-focus frame. Its scalars alone cannot
+    // see a lost background, a missing bloom skirt or a recoloured star, so the
+    // committed PNGs are the real subject of this comparison.
+    const [referenceFrame, candidateFrame] = await Promise.all([
+      readFrameDescriptor(deriveLegacyPngPath(resolve(baselinePath)), `${baseline.rendererKind} planet-focus`),
+      readFrameDescriptor(deriveLegacyPngPath(resolve(candidatePath)), `${candidate.rendererKind} planet-focus`),
+    ])
+    const frames = compareFrameDescriptors(referenceFrame, candidateFrame)
+    if (!frames.parity) {
+      throw new Error(
+        `render baseline: ${candidate.rendererKind} planet-focus pixels have not caught up with `
+        + `${baseline.rendererKind}\n${frames.deviations.map((item) => `  - ${formatDeviation(item)}`).join('\n')}`,
+      )
+    }
+  }
   process.stdout.write(`render baselines verified: ${result.rendererKind}; states ${result.states.join(', ')}\n`)
 }
 

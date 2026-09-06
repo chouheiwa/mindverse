@@ -496,3 +496,175 @@ low 7.1 → 9.7（预算 33.3）。**新的相对门禁真的会拦**：12.2 > 9
 | `vitest run` | ✅ **94 文件 / 960 用例**（953 + 6 renderBudget + 1 净增） |
 | `npm run compare:stellar-baselines` | ✅ 绿 |
 | `npm run compare:visual-parity` | 🔴 10 项，逐项已申报（§13.1） |
+
+---
+
+## 15. 提交后续查（批次 8）
+
+commit `1bee2e1` 之后继续把四条 `compare:*` 门禁逐条真跑，又查出三处缺陷。
+其中两处与前四处**同族**：门禁量错了对象，或者从来没有被真正执行过。
+
+### 15.1 缺陷五：`compare:planet-baselines` 从建立起就没跑通过（已修）
+
+`package.json` 里这条命令读 `testdata/render-baselines/babylon-planets-v1.json`，
+而这个文件**从未提交过**，脚本每次都以 ENOENT 崩掉。2026-09-04 的
+`docs/implementation/2026-09-04-visual-parity-gate.md` §2.5 已经写明原因：那一批
+放宽了 `resolvePlanetBaselineOutput` 让版本化基线名可以产出，但
+「本批次未替用户采集，以免碰到工作树里已有的 `babylon-planets-candidate*`」，
+并留下了确切的采集命令。
+
+代价不只是「少一条比对」：`comparePlanetRenderBaselines` 会对**两个文档**都跑
+`validatePlanetSample` / `validateMaterialSeparation` / `validateFarSample` 这些
+**绝对**校验（昼夜对比度下限、大气边缘区间、bloom 上限、五种热型材质必须可区分、
+远景必须降到 low LOD 且光照方向翻转）。基线缺失让这些绝对校验也一次都没执行过。
+
+**修法**：按 09-04 文档给的命令采集，输出到 v1 路径，全程不碰受保护的
+`babylon-planets-candidate*`：
+
+```bash
+MINDVERSE_REFERENCE_DEVICE=1 \
+MINDVERSE_PLANET_BASELINE_OUT=testdata/render-baselines/babylon-planets-v1.json \
+npm run test:e2e:performance -- --grep 'thermal planets' --workers=1
+```
+
+产出 `babylon-planets-v1.json` + 8 张 PNG（magma/desert/rock/tundra/ice/far-a/far-b/far-flip），
+`npm run compare:planet-baselines` 由**崩溃转绿**：
+`render baselines verified: babylon; states magma, desert, rock, tundra, ice, far`。
+
+**证明它承重**：把 `rock` 的均色整体推 +0.145（漂移 0.251 > 阈值 0.18），
+门禁 exit=1，报 `planet baseline: rock mean color drift exceeded tolerance`。
+
+顺带把基线读取收进 `readBaselineDocument()`：文件缺失或 JSON 损坏时报
+`render baseline: baseline file <name> is missing — capture it before comparing`，
+不再甩 node 的 ENOENT 堆栈让人以为脚本坏了。两条用例覆盖。
+
+### 15.2 缺陷六：减弱动效门禁量的是测试框架的墙钟（已修）
+
+`e2e/babylon-gate.spec.ts` 的 `Reduced Motion reaches the same stable focused state
+without a long flight` 在**并行满载时约 40% 概率红**，报 `expected < 500, received 1875`。
+文件顶部是 `test.describe.configure({ mode: 'serial' })`，所以它一红，后面 11 条
+全部 `did not run` —— 表面看像「功能套件塌了」。
+
+原断言：
+
+```ts
+const start = performance.now()            // ← Node 测试进程的时钟
+await canvas(page).click(...)              // ← 一次 CDP 往返
+await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+expect(performance.now() - start).toBeLessThan(500)
+```
+
+`performance.now()` 跑在 Playwright 的 Node 进程里，量到的是**测试框架跑完一轮
+轮询要多久**——包含 CDP 往返和 `expect.poll` 的间隔。这与 §12/§13.2 里
+`p95FrameTime` 顶替 `maxRenderCostMs` 是同一个错误：**拿一个被别的东西支配的量
+去代表被测对象**。
+
+修掉墙钟后暴露出**真正的病根**是竞态，不是慢：改成断言飞行时长后实测到 **954ms**，
+即 `cameraFlightDuration` 的**非**减弱分支（减弱是 `min(120, 1100) = 120ms`）。
+`page.emulateMedia({ reducedMotion: 'reduce' })` 改的是媒体查询，渲染器要等
+`Universe.tsx:315` 的 change 事件才跟上；测试没等确认就点了下去。监听器抢赢 →
+120ms → 墙钟小 → 绿；抢输 → 954ms 飞行 → 墙钟 1875ms → 报「太慢」。
+**产品是对的，订阅路径存在且工作**。
+
+**修法**（两处，都不放宽任何阈值）：
+
+1. 诊断补两个只在 `VITE_E2E_DIAGNOSTICS=1` 下存在的字段：
+   `stellar.approachDurationMs`（最近一次飞行的**计划**时长，飞行结束后保留）
+   与 `stellar.reducedMotion`（渲染器**当前**是否处于减弱动效）。
+2. 断言改成确定性事实，且比原来**更严**——原用例从不检查正常路径是否真的播了长飞行：
+
+```ts
+await page.emulateMedia({ reducedMotion: 'reduce' })
+await expect.poll(async () => (await snapshot(page))!.stellar.reducedMotion).toBe(true)
+...
+expect(normal.stellar.approachDurationMs).toBeGreaterThanOrEqual(900)
+expect(reduced.stellar.approachDurationMs).toBeLessThanOrEqual(120)
+```
+
+三轮全量功能回归 **21/21 × 3**，且三轮耗时都是 2.3m（此前失败轮只跑 54s 就中断）。
+
+### 15.3 缺陷七：`metal-performance` 与自己抢 GPU（已修一半）
+
+`playwright.config.ts` 是 `fullyParallel: true`，`metal-performance` 实测
+`Running 6 tests using 5 workers`。渲染开销正是这个文件的**被测量本身**，
+让 5 个 Chromium 同时画图去量它，红的是并发不是代码：实测 2/5 轮红，
+`low render cost 11.80~12.40ms exceeds 11.64ms`。
+
+`capture:planet-candidate` 早就用 `--workers=1` 表达过同一意图，只是没落到配置里。
+给 `e2e/render-baseline.spec.ts` 加 `test.describe.configure({ mode: 'serial' })`
+（与 `babylon-gate.spec.ts` 同一约定），`Running 6 tests using 1 worker`。
+**不动 1.2 倍容差。**
+
+### 15.4 未修，需要你定：`maxRenderCostMs` 是全时段最大值
+
+串行化把发生率从 2/5 降到 1/4，**没有消除**。查到根因：
+
+`src/starmap/babylon/runtime.ts:146` 的 `maxRenderCostMs` 是
+`Math.max(this.maxRenderCostMs, cost)`，**全程只增不减，没有任何 reset**。
+它包含渲染器启动的头几帧——着色器编译、纹理上传、管线预热。
+
+对照 v2 基线自己的数字：
+
+| 档 | `renderCostMs`（最近一帧） | `maxRenderCostMs`（全时段峰值） | 绝对预算 |
+|---|---|---|---|
+| medium | 0.30ms | 12.20ms | 20ms |
+| low | 1.50ms | 9.70ms | 33.3ms |
+
+稳态每帧不到 2ms，而门禁比的是 9.7~12.2ms 的**冷启动尖峰**，容差 20%。
+两次冷启动的尖峰差 25% 完全正常，所以这条门禁会持续假红。
+v1→v2 也印证：medium 峰值 9.4→12.2（+30%），同期「最近一帧」1.1→0.3（**降 73%**）。
+
+**这不是可以自行决定的修法**，因为它改的是门禁语义并且要重新采集基线，
+落在你派工里「严禁放宽恢复门禁」的保留区。三个选项：
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| A（推荐） | 加 `resetRenderCostPeak()`，在 3s 预热之后清零，让峰值只覆盖 10s 采样窗 | 需要采 v3 基线；数值会显著变小 |
+| B | 保持全时段最大值 | 接受约 25% 假红率 |
+| C | 改用渲染开销的 p95 而非 max | 同样需要新基线，且 p95 ≤ max，严格意义上是放宽 |
+
+A 与我此前把门禁从 `p95FrameTime` 改到 `maxRenderCostMs` 是同一类修正——
+**让门禁量它本来就想量的东西**（稳态渲染开销，而不是冷启动编译）。但它需要
+一条新基线，所以停在这里等你拍板。
+
+### 15.5 已核实为陈旧、非回归：`compare:render-baselines`
+
+这条比 `three-question-7.json` 与 `babylon-question-7.json`，报
+`selected object width size drift exceeds 25%`（宽度 77.2px vs 221.8px，超 187%）。
+
+已核实**不是本次改动引入**：拿 HEAD 版本脚本跑，报同样的错。两个文件的
+`commitSha` 都是 `7eac10a`，是**同一次垂直切片提交里一起冻结的**；用 `7eac10a`
+当时的脚本跑，它是**绿的**（`center drift 10.10px`）——那时只比中心不比尺寸。
+尺寸闸是 `317f918` 才加的（见 09-04 文档 §2.4），加完没有重采，此后恒红。
+
+更关键：**产出这对文件的采集入口已经不存在了**。`MINDVERSE_BASELINE_OUT` 现在
+写的是 stellar schema（四状态 + 分档 performance），不是这个带
+`selectedPlanetBounds` 的 `strata-universe.v1` 单帧 schema。也就是说这条门禁
+**没有任何再生路径**。
+
+它的「187% 漂移」说的是垂直切片时期的 Babylon，那份代码早就不在了。当前代码的
+同一问题由继任者 `compare:visual-parity` 用**现采**的帧回答，而它的 10 项里
+**planet-focus 没有 `subject:radius` 越界**——即当前 Babylon 的主体尺寸已在
+Three 的 22% 容差内。**「187%」是陈旧采集的产物，不是活的回归。**
+
+处置同样留给你定：（a）显式退役这条命令与两份孤儿基线，在文档里写明由
+`compare:visual-parity` 继任；（b）保持红并在文档里标注「按构造即陈旧」。
+我没有自行删除任何门禁。
+
+### 15.6 批次 8 全量复验
+
+| 检查 | 结果 |
+|---|---|
+| `oxlint` | ✅ |
+| `tsc -b` / `tsc --noEmit -p tsconfig.e2e.json` | ✅ |
+| `vitest run` | ✅ **94 文件 / 962 用例**（960 + 2 条基线读取用例） |
+| `playwright --project=swiftshader-functional` | ✅ **21/21 × 3 轮** |
+| `playwright --project=visual-parity` | ✅ 4/4 |
+| `playwright --project=metal-performance` | 🔴 1/4 轮红，唯一红项即 §15.4 |
+| `npm run compare:stellar-baselines` | ✅ 绿 |
+| `npm run compare:planet-baselines` | ✅ **由崩溃转绿**（§15.1） |
+| `npm run compare:visual-parity` | 🔴 10 项，与 §13.1 逐条一致，非新增 |
+| `npm run compare:render-baselines` | 🔴 陈旧，已核实非回归（§15.5） |
+
+**blocker = 0**：§15.4 与 §15.5 都是门禁自身的测量口径问题，不是产品回归；
+两者都需要你在「重采基线 / 退役门禁」上拍板，我没有动任何容差。

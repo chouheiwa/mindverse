@@ -102,6 +102,12 @@ export interface StellarDiagnosticsSnapshot {
   hoverProgress: number
   focusedStarKey: string | null
   approachProgress: number
+  /** 最近一次接近飞行的**计划**时长。减弱动效下是 120ms，正常是 900–1300ms。
+   *  它是确定性事实，不受机器负载影响；用墙钟去量「有没有播长飞行」量的是测试框架。 */
+  approachDurationMs: number
+  /** 渲染器**当前**是否处于减弱动效。`emulateMedia` 改的是媒体查询，渲染器要等
+   *  change 事件才跟上；没有这个确认点，测试就会在切换生效前抢先点击。 */
+  reducedMotion: boolean
   systemReveal: number
   visibleQuestionOrbits: number
   visibleQuestionPlanets: number
@@ -239,6 +245,8 @@ export function installE2EDiagnostics(
           hoverProgress: 0,
           focusedStarKey: null,
           approachProgress: 0,
+          approachDurationMs: 0,
+          reducedMotion: false,
           systemReveal: 0,
           visibleQuestionOrbits: 0,
           visibleQuestionPlanets: 0,

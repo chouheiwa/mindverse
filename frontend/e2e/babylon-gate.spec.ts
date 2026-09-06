@@ -273,16 +273,20 @@ test('Reduced Motion reaches the same stable focused state without a long flight
   await page.keyboard.press('Escape')
   await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBeNull()
   await page.emulateMedia({ reducedMotion: 'reduce' })
+  // 等渲染器真的收到 media change，否则会在切换生效前就点下去，飞行仍按 900ms+ 播。
+  await expect.poll(async () => (await snapshot(page))!.stellar.reducedMotion).toBe(true)
   const reducedStar = await firstProjectedStar(page)
   const reducedCenter = {
     x: reducedStar.core.x + reducedStar.core.width / 2,
     y: reducedStar.core.y + reducedStar.core.height / 2,
   }
-  const start = performance.now()
   await canvas(page).click({ position: reducedCenter, force: true })
   await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
   const reduced = (await snapshot(page))!
-  expect(performance.now() - start).toBeLessThan(500)
+  // 断言飞行本身的时长，不是测试进程跑完一轮轮询的墙钟：后者混进了 CDP 往返
+  // 与 expect.poll 的间隔，机器一忙就假红，产品再快也救不回来。
+  expect(normal.stellar.approachDurationMs).toBeGreaterThanOrEqual(900)
+  expect(reduced.stellar.approachDurationMs).toBeLessThanOrEqual(120)
   expect(reduced.stellar.focusedStarKey).toBe(normal.stellar.focusedStarKey)
   expect(reduced.stellar.systemReveal).toBe(normal.stellar.systemReveal)
   expect(reduced.scene.cameraDistance).toBeCloseTo(normal.scene.cameraDistance, 3)

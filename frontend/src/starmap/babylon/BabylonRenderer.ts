@@ -282,6 +282,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private hoverProgress = 0
   private pressedProgress = 0
   private activeFlight: Readonly<{ flight: CameraFlight; elapsedMs: number; startedAt: number }> | null = null
+  /** 最近一次接近飞行的计划时长，飞行结束后仍保留，供 E2E 判定减弱动效是否真的跳过了长飞行。 */
+  private lastFlightDurationMs = 0
   private presentation: StarPresentation = describeStarPresentation({ phase: 'panorama' })
   private lastLayerPresentation: StarPresentation | null = null
   private lastLayerHoverKey: string | null = null
@@ -1407,6 +1409,8 @@ export class BabylonRenderer implements MindverseRenderer {
       hoverProgress: this.hoverProgress,
       focusedStarKey: this.focusedStar ? starIdentity(this.focusedStar.s) : null,
       approachProgress,
+      approachDurationMs: this.lastFlightDurationMs,
+      reducedMotion: this.reducedMotion,
       systemReveal: this.presentation.systemReveal,
       visibleQuestionOrbits: [...this.visualByQuestion.values()].filter(({ orbit }) => orbit.isEnabled() && orbit.alpha > 0).length,
       visibleQuestionPlanets: [...this.visualByQuestion.values()].filter(({ visual }) => visual.activeMesh.isEnabled()).length,
@@ -1942,10 +1946,12 @@ export class BabylonRenderer implements MindverseRenderer {
       })
       if (result.kind === 'started') {
         this.activeFlight = Object.freeze({ flight: result.flight, elapsedMs: 0, startedAt: performance.now() })
+        this.lastFlightDurationMs = result.flight.durationMs
         this.presentation = describeStarPresentation({ phase: 'approach', approachProgress: 0 })
         this.recordDiagnosticCameraSample()
       } else if (result.kind === 'noop') {
         this.activeFlight = null
+        this.lastFlightDurationMs = 0
         this.camera.setTarget(target)
         this.camera.radius = framing.radius
         this.presentation = describeStarPresentation({ phase: 'star-focus' })

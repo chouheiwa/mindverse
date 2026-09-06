@@ -18,6 +18,11 @@ import {
   PLANET_RENDER_CASES,
 } from './helpers/planetFixtureRoute'
 
+// 渲染开销是这个文件的被测量本身，不能和别的 Chromium 一起抢 GPU：并行 5 worker 时
+// low 档实测在 11.8~12.4ms 之间跳，撞穿 11.64ms 的相对预算，红的是并发不是代码。
+// （`capture:planet-candidate` 早就靠 `--workers=1` 表达了同一意图，这里把它落到配置里。）
+test.describe.configure({ mode: 'serial' })
+
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1 } as const
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus'] as const
 /** 当前权威的 Babylon 恒星基线；capture:stellar-baseline 写的就是它。 */

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   compareRenderBaselines,
+  readBaselineDocument,
   comparePlanetRenderBaselines,
   compareVisualParityDocuments,
   derivePlanetPngPaths,
@@ -476,4 +477,30 @@ test('reports every drifted state instead of stopping at the first one', () => {
   assert.match(message, /2 checks failed/)
   assert.match(message, /panorama/)
   assert.match(message, /focused-star/)
+})
+
+test('names the missing baseline file instead of surfacing a raw ENOENT', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'baseline-missing-'))
+  try {
+    await assert.rejects(
+      () => readBaselineDocument(join(dir, 'babylon-planets-v1.json'), 'baseline'),
+      /baseline file babylon-planets-v1\.json is missing/,
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('names the unreadable baseline file when its JSON is corrupt', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'baseline-corrupt-'))
+  try {
+    const path = join(dir, 'candidate.json')
+    await writeFile(path, '{ not json')
+    await assert.rejects(
+      () => readBaselineDocument(path, 'candidate'),
+      /candidate file candidate\.json is not valid JSON/,
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

@@ -543,12 +543,30 @@ export function deriveLegacyPngPath(jsonPath) {
   return resolve(dirname(jsonPath), `${basename(jsonPath, '.json')}.png`)
 }
 
+/**
+ * 基线/候选文档的唯一读取口。缺文件和坏 JSON 都是人为可修的操作错误，
+ * 报出 node 的 ENOENT 堆栈只会让人以为脚本自己坏了。
+ */
+export async function readBaselineDocument(path, label) {
+  let raw
+  try {
+    raw = await readFile(resolve(path), 'utf8')
+  } catch {
+    throw new Error(`render baseline: ${label} file ${basename(path)} is missing — capture it before comparing`)
+  }
+  try {
+    return JSON.parse(raw)
+  } catch {
+    throw new Error(`render baseline: ${label} file ${basename(path)} is not valid JSON`)
+  }
+}
+
 async function main() {
   const [baselinePath, candidatePath] = process.argv.slice(2)
   if (!baselinePath || !candidatePath) throw new Error('usage: compare-render-baselines <baseline.json> <candidate.json>')
   const [baseline, candidate] = await Promise.all([
-    readFile(resolve(baselinePath), 'utf8').then(JSON.parse),
-    readFile(resolve(candidatePath), 'utf8').then(JSON.parse),
+    readBaselineDocument(baselinePath, 'baseline'),
+    readBaselineDocument(candidatePath, 'candidate'),
   ])
   if (baseline.schemaVersion === VISUAL_PARITY_SCHEMA || candidate.schemaVersion === VISUAL_PARITY_SCHEMA) {
     const [referenceFrames, candidateFrames] = await Promise.all([

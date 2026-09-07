@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "mindverse-visual-parity-expected.v1",
+  "referenceKind": "three",
+  "rendererKind": "babylon",
+  "capturedAgainst": "docs/implementation/2026-09-05-independent-final-audit.md §13.1",
+  "rule": "门禁断言实测越界集合与本清单**完全相等**。多一项说明出现新漂移，少一项说明有人修好了却没更新清单，两种情况都必须红。容差本身仍由 scripts/frameParity.mjs 判定，本文件不放宽任何数值。",
+  "causes": {
+    "procedural-noise": "星云/星场/尘埃是各自渲染器独立生成的程序化内容，逐像素结构量本就不同，不可归零。",
+    "chirality-mirror": "Babylon 是左手系而共享几何按 Three 的右手系编写，整幅宇宙水平镜像。planet-focus 的 subject:centroid 参考 [0.4012, 0.2779] vs 候选 [0.5779, 0.2784]，是关于 x≈0.4896 的干净镜像。唯一修法是 scene.useRightHandedSystem = true，被派工明令禁止（需先完全证明三次地层 pick 稳定）。",
+    "deliberate-uplift": "toneBand:highlight 的偏离是提升批次刻意做的取舍，见 docs/implementation/2026-09-05-cinematic-uplift.md §7，并已被用例锁定。"
+  },
+  "expected": {
+    "panorama": [
+      "structure:tileMax",
+      "structure:tileRms",
+      "subject:centroid",
+      "subject:radius"
+    ],
+    "focused-star": [
+      "structure:tileMax"
+    ],
+    "planet-focus": [
+      "structure:tileMax",
+      "structure:tileRms",
+      "subject:centroid",
+      "coverage",
+      "toneBand:highlight"
+    ]
+  }
+}

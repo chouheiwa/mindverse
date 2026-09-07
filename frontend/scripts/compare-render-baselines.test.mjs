@@ -8,6 +8,7 @@ import {
   compareRenderBaselines,
   readBaselineDocument,
   comparePlanetRenderBaselines,
+  reconcileExpectedParityFailures,
   compareVisualParityDocuments,
   derivePlanetPngPaths,
   deriveParityPngPaths,
@@ -55,11 +56,13 @@ const baseline = () => ({
   },
 })
 
-function performanceState(p95FrameTime, absoluteBudgetMs, maxRenderCostMs = absoluteBudgetMs * 0.5) {
+function performanceState(p95FrameTime, absoluteBudgetMs, p95RenderCostMs = absoluteBudgetMs * 0.5) {
   return {
     fixtureVersion: 'strata-universe.dense-500.v1', starCount: 500,
     p95FrameTime, absoluteBudgetMs, sampleCount: 600, warmupMs: 3_000, sampleWindowMs: 10_000,
-    renderCostMs: maxRenderCostMs * 0.8, maxRenderCostMs,
+    // 峰值刻意给成 p95 的 2 倍：判定看的是 p95，峰值只是随采集带着的记录。
+    renderCostMs: p95RenderCostMs * 0.8, p95RenderCostMs, maxRenderCostMs: p95RenderCostMs * 2,
+    firstInteractiveMs: 500,
     hardware: {
       platform: 'MacIntel', userAgent: 'Playwright Chromium', hardwareConcurrency: 8,
       deviceMemory: 8, gpuVendor: 'Apple', gpuRenderer: 'ANGLE Metal Renderer', graphicsBackend: 'metal',
@@ -182,10 +185,17 @@ test('always enforces a positive p95 and the relative 20 percent render-cost bud
   }
   // 相对回归也必须比渲染开销：p95FrameTime 被 30fps 空闲节流钉死，两侧恒等，
   // 拿它比「基线 × 1.2」得到的是一条永远不会红的门禁。
+  //
+  // medium 基线的 p95 是 10ms，远高于 0.5ms 噪声下限，所以这里由 ×1.2 规则接管。
   const relative = candidate()
-  relative.performance.medium.maxRenderCostMs = baseline().performance.medium.maxRenderCostMs * 1.21
+  relative.performance.medium.p95RenderCostMs = baseline().performance.medium.p95RenderCostMs * 1.21
   assert.equal(relative.performance.medium.p95FrameTime, baseline().performance.medium.p95FrameTime)
   assert.throws(() => compareRenderBaselines(baseline(), relative), /medium render cost regressed over 20%/i)
+
+  // 峰值单独跳到 40 倍不改变判定 —— 那是单帧抖动，不是渲染开销回归。
+  const spike = candidate()
+  spike.performance.medium.maxRenderCostMs = baseline().performance.medium.p95RenderCostMs * 40
+  assert.doesNotThrow(() => compareRenderBaselines(baseline(), spike))
 })
 
 test('enforces absolute budgets only for an explicit macOS Metal reference run', () => {
@@ -247,17 +257,6 @@ test('rejects malformed performance metadata and sample windows', () => {
     mutate(value)
     assert.throws(() => compareRenderBaselines(baseline(), value), /performance|sample|star count|hardware/i)
   }
-})
-
-test('keeps the checked-in legacy migration comparison executable', () => {
-  const legacy = {
-    fixtureVersion: 'strata-universe.v1', rendererKind: 'three', viewport: { width: 1280, height: 720 },
-    selectedPlanetBounds: { x: 400, y: 200, width: 200, height: 200 },
-    nonBackgroundRatio: 0.4, firstInteractiveMs: 1_000, p95FrameTime: 10,
-  }
-  const migrated = { ...legacy, rendererKind: 'babylon' }
-  assert.equal(compareRenderBaselines(legacy, migrated).rendererKind, 'babylon')
-  assert.throws(() => compareRenderBaselines(legacy, { ...migrated, p95FrameTime: 12.01 }), /p95.*20%/i)
 })
 
 test('validates every derived stellar PNG artifact as present, non-empty PNG data', async () => {
@@ -448,22 +447,6 @@ test('parity comparison enforces schema, fixture and viewport contracts', () => 
   }
 })
 
-test('legacy migration pair also gates subject size and a tighter coverage floor', () => {
-  const legacy = {
-    fixtureVersion: 'strata-universe.v1', rendererKind: 'three', viewport: { width: 1280, height: 720 },
-    selectedPlanetBounds: { x: 400, y: 200, width: 200, height: 200 },
-    nonBackgroundRatio: 0.4, firstInteractiveMs: 1_000, p95FrameTime: 10,
-  }
-  const migrated = { ...legacy, rendererKind: 'babylon' }
-  assert.equal(compareRenderBaselines(legacy, migrated).rendererKind, 'babylon')
-  assert.throws(() => compareRenderBaselines(legacy, {
-    ...migrated, selectedPlanetBounds: { x: 340, y: 140, width: 320, height: 320 },
-  }), /size/i)
-  assert.throws(() => compareRenderBaselines(legacy, {
-    ...migrated, nonBackgroundRatio: 0.28,
-  }), /non-background/i)
-})
-
 test('reports every drifted state instead of stopping at the first one', () => {
   const value = candidate()
   // 一次取景改动会同时波及多个状态。首个失败即抛会把「五处漂移」报成「一处」，
@@ -503,4 +486,127 @@ test('names the unreadable baseline file when its JSON is corrupt', async () => 
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+const parityStates = (entries) => entries.map(([name, metrics]) => ({
+  name,
+  parity: metrics.length === 0,
+  deviations: metrics.map((metric) => ({ metric, reference: 0, candidate: 1, delta: 1, allowed: 0.1 })),
+}))
+
+test('accepts exactly the documented parity failures and nothing else', () => {
+  const states = parityStates([
+    ['panorama', ['structure:tileMax', 'subject:centroid']],
+    ['focused-star', []],
+    ['planet-focus', ['coverage']],
+  ])
+  const manifest = {
+    panorama: ['structure:tileMax', 'subject:centroid'],
+    'planet-focus': ['coverage'],
+  }
+  assert.deepEqual(reconcileExpectedParityFailures(states, manifest), { unexpected: [], resolved: [] })
+})
+
+test('goes red on a drift that is not on the manifest', () => {
+  const states = parityStates([
+    ['panorama', ['structure:tileMax', 'chroma']],
+    ['focused-star', []],
+    ['planet-focus', []],
+  ])
+  const manifest = { panorama: ['structure:tileMax'] }
+  assert.deepEqual(reconcileExpectedParityFailures(states, manifest), {
+    unexpected: ['panorama/chroma'],
+    resolved: [],
+  })
+})
+
+test('goes red when a documented failure is fixed but left on the manifest', () => {
+  const states = parityStates([['panorama', []], ['focused-star', []], ['planet-focus', []]])
+  const manifest = { panorama: ['structure:tileMax'] }
+  assert.deepEqual(reconcileExpectedParityFailures(states, manifest), {
+    unexpected: [],
+    resolved: ['panorama/structure:tileMax'],
+  })
+})
+
+test('reports an unexpected drift in a state the manifest never mentions', () => {
+  const states = parityStates([['panorama', []], ['focused-star', ['coverage']], ['planet-focus', []]])
+  assert.deepEqual(reconcileExpectedParityFailures(states, {}), {
+    unexpected: ['focused-star/coverage'],
+    resolved: [],
+  })
+})
+
+test('refuses the retired 2026-09-02 single-frame pair with a message that names its successor', () => {
+  const legacy = {
+    fixtureVersion: 'strata-universe.v1', rendererKind: 'three', viewport: { width: 1280, height: 720 },
+    selectedPlanetBounds: { x: 400, y: 200, width: 200, height: 200 },
+    nonBackgroundRatio: 0.4, firstInteractiveMs: 1_000, p95FrameTime: 10,
+  }
+  assert.throws(
+    () => compareRenderBaselines(legacy, { ...legacy, rendererKind: 'babylon' }),
+    /retired.*compare:visual-parity/is,
+  )
+})
+
+test('the CLI budget judges the p95 of the window and tolerates timer quantisation', () => {
+  // 与 src/starmap/renderBudget.ts 同口径：p95 而非峰值，且带 0.5ms 噪声下限。
+  // 两侧口径不一致的话，同一份采集在 Playwright 里绿、在命令行里红。
+  const withCost = (state, p95, max) => ({ ...state, p95RenderCostMs: p95, maxRenderCostMs: max })
+  const reference = performanceState(43.0, 20, 1.2)
+  const measured = performanceState(43.1, 20, 1.2)
+  const baselineDoc = {
+    ...baseline(),
+    performance: {
+      medium: withCost(reference, 1.2, 1.8),
+      low: withCost(performanceState(43.1, 33.3, 1.2), 1.2, 1.8),
+    },
+  }
+  const near = {
+    ...candidate(),
+    performance: {
+      // 单帧抖动把峰值顶到 40，p95 只动一个量化步：不得判红。
+      medium: withCost(measured, 1.6, 40),
+      low: withCost(performanceState(43.1, 33.3, 1.2), 1.5, 38),
+    },
+  }
+  assert.doesNotThrow(() => compareRenderBaselines(baselineDoc, near))
+
+  const regressed = {
+    ...near,
+    performance: { ...near.performance, medium: withCost(measured, 2.4, 2.6) },
+  }
+  assert.throws(() => compareRenderBaselines(baselineDoc, regressed), /medium render cost regressed/i)
+})
+
+test('the CLI holds a first-interactive ceiling in place of the retired legacy pair', () => {
+  const withStartup = (state, p95, ms) => ({
+    ...state, p95RenderCostMs: p95, maxRenderCostMs: p95 * 2, firstInteractiveMs: ms,
+  })
+  const baselineDoc = {
+    ...baseline(),
+    performance: {
+      medium: withStartup(performanceState(43.0, 20, 1.2), 1.2, 500),
+      low: withStartup(performanceState(43.1, 33.3, 1.2), 1.2, 800),
+    },
+  }
+  // 日常负载抖动（800 → 1700ms）不得判红：相对比对在这个量上分辨不出真回归。
+  const jittery = {
+    ...candidate(),
+    performance: {
+      medium: withStartup(performanceState(43.1, 20, 1.2), 1.2, 1_700),
+      low: withStartup(performanceState(43.1, 33.3, 1.2), 1.2, 800),
+    },
+  }
+  assert.doesNotThrow(() => compareRenderBaselines(baselineDoc, jittery))
+
+  // 首屏卡住则必须红。
+  const stalled = {
+    ...candidate(),
+    performance: {
+      medium: withStartup(performanceState(43.1, 20, 1.2), 1.2, 3_400),
+      low: withStartup(performanceState(43.1, 33.3, 1.2), 1.2, 800),
+    },
+  }
+  assert.throws(() => compareRenderBaselines(baselineDoc, stalled), /medium first interactive exceeds/i)
 })

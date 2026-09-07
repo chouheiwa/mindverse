@@ -10,6 +10,12 @@ import {
   formatDeviation,
 } from './frameParity.mjs'
 
+// 与 src/starmap/renderBudget.ts 同值。两处都判定同一份采集，口径不能分叉；
+// 那里有完整的取舍说明（为什么是 p95、为什么要噪声下限）。
+const RELATIVE_BUDGET_TOLERANCE = 1.2
+const RELATIVE_BUDGET_NOISE_FLOOR_MS = 0.5
+const STARTUP_CEILING_MS = 3_000
+
 export const STELLAR_BASELINE_SCHEMA = 'babylon-stellar-baseline.v1'
 export const PLANET_BASELINE_SCHEMA = 'babylon-planets-baseline.v1'
 export const VISUAL_PARITY_SCHEMA = 'mindverse-visual-parity.v1'
@@ -195,6 +201,9 @@ function validatePerformanceState(quality, state) {
   // 绝对预算比对的是这两个数，所以它们必须存在且有限 —— 缺了就不能默默跳过。
   positive(state.renderCostMs, `${quality} render cost`)
   positive(state.maxRenderCostMs, `${quality} max render cost`)
+  // 判定用的是 p95 和首屏，缺了就不能默默跳过 —— 那正是门禁形同虚设的老路。
+  positive(state.p95RenderCostMs, `${quality} p95 render cost`)
+  positive(state.firstInteractiveMs, `${quality} first interactive`)
   if (Math.abs(state.absoluteBudgetMs - ABSOLUTE_BUDGETS[quality]) > 1e-6) {
     throw new Error(`render baseline: invalid ${quality} absolute performance budget`)
   }
@@ -246,12 +255,23 @@ function performanceChecks(baseline, candidate) {
     // 预算和回归约束的都是**渲染开销**，不是调度间隔：30fps 空闲节流把
     // p95FrameTime 钉在 33–43ms，与这一屏画了多少东西无关。拿它比 20ms 绝对
     // 预算永远红，拿它比「基线 × 1.2」则两侧恒等、永远绿——两头都不是门禁。
+    //
+    // 用采样窗的 p95 而不是峰值：峰值是全时段极值，单帧 GC 或合成器抖动就能
+    // 支配它。口径必须和 src/starmap/renderBudget.ts 一致，否则同一份采集会在
+    // Playwright 里绿、在命令行里红。
     if (candidate.referenceDevice.enforceAbsoluteBudgets
-      && measured.maxRenderCostMs > ABSOLUTE_BUDGETS[quality]) {
+      && measured.p95RenderCostMs > ABSOLUTE_BUDGETS[quality]) {
       throw new Error(`render baseline: absolute ${quality} render cost budget exceeded`)
     }
-    if (measured.maxRenderCostMs > reference.maxRenderCostMs * 1.2) {
+    const allowedCost = Math.max(
+      reference.p95RenderCostMs * RELATIVE_BUDGET_TOLERANCE,
+      reference.p95RenderCostMs + RELATIVE_BUDGET_NOISE_FLOOR_MS,
+    )
+    if (measured.p95RenderCostMs > allowedCost) {
       throw new Error(`render baseline: ${quality} render cost regressed over 20%`)
+    }
+    if (measured.firstInteractiveMs > STARTUP_CEILING_MS) {
+      throw new Error(`render baseline: ${quality} first interactive exceeds the startup ceiling`)
     }
   })
 }
@@ -266,7 +286,14 @@ function stateChecks(baseline, candidate) {
 
 export function compareRenderBaselines(baseline, candidate) {
   if (baseline.schemaVersion === undefined && candidate.schemaVersion === undefined) {
-    return compareLegacyMigrationPair(baseline, candidate)
+    // 2026-09-02 的 three/babylon 单帧对已退役：它冻结于垂直切片时期，尺寸闸是
+    // 后来才加的且此后没有采集入口，判定说的是一份早已不存在的代码。跨渲染器
+    // 取景由 compare:visual-parity 用现采的帧回答，首屏可交互搬进了 stellar 基线。
+    // 见 docs/implementation/2026-09-05-independent-final-audit.md §15.5。
+    throw new Error(
+      'render baseline: the 2026-09-02 three/babylon single-frame pair is retired; '
+      + 'use compare:visual-parity for cross-renderer framing',
+    )
   }
   if (baseline.schemaVersion !== STELLAR_BASELINE_SCHEMA
     || candidate.schemaVersion !== STELLAR_BASELINE_SCHEMA) {
@@ -363,7 +390,30 @@ function validateParityDocument(document, label) {
  * sides — without pixels this throws instead of quietly reporting parity,
  * because a metadata-only pass is exactly the hole this gate exists to close.
  */
-export function compareVisualParityDocuments(reference, candidate, frames, options = {}) {
+export const EXPECTED_PARITY_FILE = 'visual-parity-expected.json'
+
+/** 读取并校验预期失败清单。缺文件或结构不对都必须炸：静默跳过等于把门禁关掉。 */
+export async function readExpectedParityFailures(path) {
+  const document = await readBaselineDocument(path, 'expected-failures manifest')
+  if (document.schemaVersion !== 'mindverse-visual-parity-expected.v1') {
+    throw new Error('visual parity: expected-failures manifest schema must be mindverse-visual-parity-expected.v1')
+  }
+  const expected = document.expected
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) {
+    throw new Error('visual parity: expected-failures manifest has no `expected` map')
+  }
+  for (const [name, metrics] of Object.entries(expected)) {
+    if (!PARITY_STATE_NAMES.includes(name)) {
+      throw new Error(`visual parity: expected-failures manifest names unknown state ${name}`)
+    }
+    if (!Array.isArray(metrics) || metrics.some((metric) => typeof metric !== 'string')) {
+      throw new Error(`visual parity: expected-failures manifest entry ${name} must be a string array`)
+    }
+  }
+  return { expected, count: Object.values(expected).flat().length }
+}
+
+export function compareVisualParityDocuments(reference, candidate, frames, options = {}, expectedFailures = null) {
   validateParityDocument(reference, 'reference')
   validateParityDocument(candidate, 'candidate')
   if (reference.fixtureVersion !== candidate.fixtureVersion) throw new Error('visual parity: fixture mismatch')
@@ -376,6 +426,28 @@ export function compareVisualParityDocuments(reference, candidate, frames, optio
     throw new Error('visual parity: refusing to compare without decoded frames for both sides')
   }
   const result = compareVisualParitySets(frames.reference, frames.candidate, options)
+  if (expectedFailures) {
+    const { unexpected, resolved } = reconcileExpectedParityFailures(result.states, expectedFailures)
+    const detail = result.states
+      .filter(({ parity }) => !parity)
+      .map(({ name, deviations }) => `  ${name}:\n${deviations.map((item) => `    - ${formatDeviation(item)}`).join('\n')}`)
+      .join('\n')
+    if (unexpected.length > 0 || resolved.length > 0) {
+      throw new Error(
+        `visual parity: divergence set no longer matches ${EXPECTED_PARITY_FILE}\n`
+        + (unexpected.length > 0 ? `  new, undeclared: ${unexpected.join(', ')}\n` : '')
+        + (resolved.length > 0 ? `  declared but no longer failing (remove from the manifest): ${resolved.join(', ')}\n` : '')
+        + detail,
+      )
+    }
+    return {
+      referenceKind: reference.rendererKind,
+      rendererKind: candidate.rendererKind,
+      states: result.states,
+      parity: result.parity,
+      failedStates: result.failedStates,
+    }
+  }
   if (!result.parity) {
     const detail = result.states
       .filter(({ parity }) => !parity)
@@ -392,6 +464,31 @@ export function compareVisualParityDocuments(reference, candidate, frames, optio
     states: result.states,
     parity: true,
     failedStates: [],
+  }
+}
+
+/**
+ * 把实测越界集合与「预期失败清单」对账。
+ *
+ * 「永远红 + 靠文档解释为什么可以红」的门禁有个隐蔽的失效方式：**新增一项越界
+ * 不会改变它的颜色**。改成对账之后，多一项（unexpected）和少一项（resolved）
+ * 都必须让门禁变红——前者是新漂移，后者说明有人修好了却没更新清单。
+ *
+ * 这不放宽任何容差：容差仍由 frameParity 判定，清单只决定哪些**已判定越界**的
+ * 项目是已经申报过的。
+ */
+export function reconcileExpectedParityFailures(states, manifest) {
+  const actual = new Set()
+  for (const state of states) {
+    for (const { metric } of state.deviations ?? []) actual.add(`${state.name}/${metric}`)
+  }
+  const expected = new Set()
+  for (const [name, metrics] of Object.entries(manifest ?? {})) {
+    for (const metric of metrics) expected.add(`${name}/${metric}`)
+  }
+  return {
+    unexpected: [...actual].filter((key) => !expected.has(key)).sort(),
+    resolved: [...expected].filter((key) => !actual.has(key)).sort(),
   }
 }
 
@@ -495,54 +592,6 @@ export async function validatePlanetPngArtifacts(jsonPath) {
   return paths
 }
 
-function compareLegacyMigrationPair(baseline, candidate) {
-  if (baseline.rendererKind !== 'three' || candidate.rendererKind !== 'babylon') {
-    throw new Error('render baseline: expected a Three baseline and Babylon candidate')
-  }
-  if (baseline.fixtureVersion !== candidate.fixtureVersion) throw new Error('render baseline: fixture mismatch')
-  if (baseline.viewport?.width !== candidate.viewport?.width || baseline.viewport?.height !== candidate.viewport?.height) {
-    throw new Error('render baseline: viewport mismatch')
-  }
-  if (finite(candidate.p95FrameTime, 'p95') > finite(baseline.p95FrameTime, 'p95') * 1.2) {
-    throw new Error('render baseline: p95 frame time regressed over 20%')
-  }
-  if (finite(candidate.firstInteractiveMs, 'interactive') > finite(baseline.firstInteractiveMs, 'interactive') * 1.3) {
-    throw new Error('render baseline: first interactive time regressed over 30%')
-  }
-  const left = baseline.selectedPlanetBounds
-  const right = candidate.selectedPlanetBounds
-  if (!left || !right) throw new Error('render baseline: selected object bounds missing')
-  const centerDrift = Math.hypot(
-    right.x + right.width / 2 - left.x - left.width / 2,
-    right.y + right.height / 2 - left.y - left.height / 2,
-  )
-  if (centerDrift > Math.min(baseline.viewport.width, baseline.viewport.height) * 0.1) {
-    throw new Error('render baseline: selected object center drift exceeds 10%')
-  }
-  // Centre drift alone lets a subject grow to three times its size and still pass,
-  // which is precisely how the Babylon planet-focus framing slipped through.
-  for (const axis of ['width', 'height']) {
-    const reference = positive(left[axis], `baseline selected object ${axis}`)
-    const measured = positive(right[axis], `candidate selected object ${axis}`)
-    if (Math.abs(measured / reference - 1) > 0.25) {
-      throw new Error(`render baseline: selected object ${axis} size drift exceeds 25%`)
-    }
-  }
-  const baselineCoverage = finite(baseline.nonBackgroundRatio, 'non-background ratio')
-  const candidateCoverage = finite(candidate.nonBackgroundRatio, 'non-background ratio')
-  if (Math.abs(candidateCoverage - baselineCoverage) > 0.05) {
-    throw new Error('render baseline: non-background ratio drift exceeds 0.05')
-  }
-  if (baselineCoverage > 0 && candidateCoverage / baselineCoverage < 0.75) {
-    throw new Error('render baseline: non-background ratio fell below 75% of the baseline')
-  }
-  return { rendererKind: candidate.rendererKind, states: [], centerDrift }
-}
-
-export function deriveLegacyPngPath(jsonPath) {
-  return resolve(dirname(jsonPath), `${basename(jsonPath, '.json')}.png`)
-}
-
 /**
  * 基线/候选文档的唯一读取口。缺文件和坏 JSON 都是人为可修的操作错误，
  * 报出 node 的 ENOENT 堆栈只会让人以为脚本自己坏了。
@@ -573,12 +622,14 @@ async function main() {
       readParityFrames(resolve(baselinePath)),
       readParityFrames(resolve(candidatePath)),
     ])
+    const manifest = await readExpectedParityFailures(resolve(dirname(baselinePath), EXPECTED_PARITY_FILE))
     const parity = compareVisualParityDocuments(baseline, candidate, {
       reference: referenceFrames, candidate: candidateFrames,
-    })
+    }, {}, manifest.expected)
     process.stdout.write(
-      `visual parity verified: ${parity.rendererKind} matches ${parity.referenceKind}; `
-      + `states ${parity.states.map(({ name }) => name).join(', ')}\n`,
+      `visual parity verified: ${parity.rendererKind} vs ${parity.referenceKind}; `
+      + `states ${parity.states.map(({ name }) => name).join(', ')}; `
+      + `${manifest.count} declared divergences unchanged\n`,
     )
     return
   }
@@ -598,22 +649,6 @@ async function main() {
     ])
   }
   const result = compareRenderBaselines(baseline, candidate)
-  if (baseline.schemaVersion === undefined && candidate.schemaVersion === undefined) {
-    // The legacy pair is a single planet-focus frame. Its scalars alone cannot
-    // see a lost background, a missing bloom skirt or a recoloured star, so the
-    // committed PNGs are the real subject of this comparison.
-    const [referenceFrame, candidateFrame] = await Promise.all([
-      readFrameDescriptor(deriveLegacyPngPath(resolve(baselinePath)), `${baseline.rendererKind} planet-focus`),
-      readFrameDescriptor(deriveLegacyPngPath(resolve(candidatePath)), `${candidate.rendererKind} planet-focus`),
-    ])
-    const frames = compareFrameDescriptors(referenceFrame, candidateFrame)
-    if (!frames.parity) {
-      throw new Error(
-        `render baseline: ${candidate.rendererKind} planet-focus pixels have not caught up with `
-        + `${baseline.rendererKind}\n${frames.deviations.map((item) => `  - ${formatDeviation(item)}`).join('\n')}`,
-      )
-    }
-  }
   process.stdout.write(`render baselines verified: ${result.rendererKind}; states ${result.states.join(', ')}\n`)
 }
 

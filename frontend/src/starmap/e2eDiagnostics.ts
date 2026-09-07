@@ -61,6 +61,12 @@ export interface RenderSnapshot {
   p95FrameTime: number | null
   renderReady: boolean
   frameTimes: number[]
+  /**
+   * 逐帧渲染开销，与 frameTimes 一一对齐。
+   * 峰值（maxRenderCostMs）是极值统计，单帧抖动就能支配它；要在采样窗上算出
+   * 抗噪的分位数，就必须留下整条序列。
+   */
+  renderCosts: number[]
   frameTimestampsMs: number[]
   frameSequences: number[]
   frames: {
@@ -124,12 +130,16 @@ interface E2EDiagnosticsApi {
   setApproachProgress(progress: number | null): boolean
   preparePlanetCapture(): boolean
   flipFarPlanetCapture(): boolean
+  /** 清零渲染开销峰值，返回是否真的落到了渲染器上。见 runtime.resetRenderCostPeak。 */
+  resetRenderCostPeak(): boolean
 }
 
 interface FrameSample {
   duration: number
   timestampMs: number
   sequence: number
+  /** 这一帧花在 scene.render 里的时间。见 renderCosts 字段的说明。 */
+  renderCostMs: number
 }
 
 interface ActiveDiagnostics {
@@ -161,6 +171,7 @@ export interface E2EDiagnosticsDetails {
   readonly setApproachProgress?: (progress: number | null) => boolean
   readonly preparePlanetCapture?: () => boolean
   readonly flipFarPlanetCapture?: () => boolean
+  readonly resetRenderCostPeak?: () => boolean
 }
 
 declare global {
@@ -206,18 +217,21 @@ export function installE2EDiagnostics(
   const api: E2EDiagnosticsApi = Object.freeze({
     preparePlanetCapture: (): boolean => state.details.preparePlanetCapture?.() ?? false,
     flipFarPlanetCapture: (): boolean => state.details.flipFarPlanetCapture?.() ?? false,
+    resetRenderCostPeak: (): boolean => state.details.resetRenderCostPeak?.() ?? false,
     setApproachProgress: (progress: number | null): boolean => {
       if (progress !== null && (!Number.isFinite(progress) || progress < 0 || progress > 1)) return false
       return state.details.setApproachProgress?.(progress) ?? false
     },
     snapshot: (): RenderSnapshot => {
       const frameTimes = new Array<number>(state.length)
+      const renderCosts = new Array<number>(state.length)
       const frameTimestampsMs = new Array<number>(state.length)
       const frameSequences = new Array<number>(state.length)
       for (let logicalIndex = 0; logicalIndex < state.length; logicalIndex += 1) {
         const sample = state.samples[(state.head + logicalIndex) % E2E_FRAME_CAPACITY]
         if (sample === null) throw new Error('E2E frame ring invariant violated')
         frameTimes[logicalIndex] = sample.duration
+        renderCosts[logicalIndex] = sample.renderCostMs
         frameTimestampsMs[logicalIndex] = sample.timestampMs
         frameSequences[logicalIndex] = sample.sequence
       }
@@ -256,6 +270,7 @@ export function installE2EDiagnostics(
         p95FrameTime: p95FrameTime(frameTimes),
         renderReady: state.renderReady,
         frameTimes,
+        renderCosts,
         frameTimestampsMs,
         frameSequences,
         frames: {
@@ -303,13 +318,16 @@ export function recordE2EFrame(
   duration: number,
   probeNearOpacity = 0,
   timestampMs = performance.now(),
+  renderCostMs = 0,
 ): void {
   if (active?.owner !== owner) return
   active.renderReady = true
   const monotonicTimestamp = active.lastTimestampMs === null
     ? timestampMs
     : Math.max(active.lastTimestampMs, timestampMs)
-  const sample: FrameSample = { duration, timestampMs: monotonicTimestamp, sequence: active.nextSequence }
+  const sample: FrameSample = {
+    duration, timestampMs: monotonicTimestamp, sequence: active.nextSequence, renderCostMs,
+  }
   if (active.length < E2E_FRAME_CAPACITY) {
     active.samples[(active.head + active.length) % E2E_FRAME_CAPACITY] = sample
     active.length += 1

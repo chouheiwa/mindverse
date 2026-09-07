@@ -534,6 +534,11 @@ export class BabylonRenderer implements MindverseRenderer {
             setApproachProgress: (progress) => this.setDiagnosticApproachProgress(progress),
             preparePlanetCapture: () => this.prepareDiagnosticPlanetCapture(),
             flipFarPlanetCapture: () => this.flipDiagnosticFarPlanetCapture(),
+            resetRenderCostPeak: () => {
+              if (this.destroyed) return false
+              this.runtime.resetRenderCostPeak()
+              return true
+            },
           },
         )
       }
@@ -1321,7 +1326,11 @@ export class BabylonRenderer implements MindverseRenderer {
       this.camera.target.copyFrom(this.currentStarPosition(this.focusedStar))
     }
     this.applyProbeInspectionCamera()
-    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') recordE2EFrame(this, deltaTime)
+    if (import.meta.env.VITE_E2E_DIAGNOSTICS === '1') {
+      // 这里跑在 scene.render 之前，所以带的是上一帧的开销 —— 在 260 个样本的
+      // 序列上错开一帧不影响分位数，而这是唯一能拿到逐帧开销的时机。
+      recordE2EFrame(this, deltaTime, 0, performance.now(), this.runtime.diagnostics().lastRenderCostMs)
+    }
   }
 
   private diagnosticPhase(): RenderSnapshot['scenePhase'] {

@@ -201,6 +201,28 @@ describe('BabylonRuntime render cost metering', () => {
     expect(runtime.diagnostics().maxRenderCostMs).toBeCloseTo(7, 6)
   })
 
+  test('resetRenderCostPeak drops the startup spike and re-measures from the next frame', () => {
+    // 冷启动的着色器编译/纹理上传会把峰值顶到远高于稳态。预算想约束的是稳态，
+    // 所以采样窗开始前必须能把峰值清零，否则比的是两次冷启动尖峰。
+    let cost = 40
+    const harness = fakePorts({ get renderCostMs() { return cost } } as never)
+    const runtime = new BabylonRuntime(harness.ports, { isAnimating: () => true })
+    runtime.start()
+
+    harness.frame(0)
+    expect(runtime.diagnostics().maxRenderCostMs).toBeCloseTo(40, 6)
+
+    runtime.resetRenderCostPeak()
+    expect(runtime.diagnostics().maxRenderCostMs).toBe(0)
+
+    cost = 3
+    harness.frame(100)
+    harness.frame(200)
+    expect(runtime.diagnostics().maxRenderCostMs).toBeCloseTo(3, 6)
+    // 清零只影响峰值，不影响已经渲染过多少帧。
+    expect(runtime.diagnostics().actualRenders).toBe(3)
+  })
+
   test('keeps the cost at zero when the throttle skips a frame', () => {
     const harness = fakePorts({ renderCostMs: 4 })
     const runtime = new BabylonRuntime(harness.ports, { isAnimating: () => false })

@@ -108,6 +108,15 @@ export class BabylonRuntime {
     this.disposeAll()
   }
 
+  /**
+   * 把渲染开销峰值清零。冷启动的着色器编译与纹理上传会留下一个远高于稳态的
+   * 尖峰；预算约束的是稳态，所以采样窗开始前要能把它甩掉。只影响峰值统计，
+   * 不动帧计数、不动渲染循环。
+   */
+  resetRenderCostPeak(): void {
+    this.maxRenderCostMs = 0
+  }
+
   diagnostics(): Readonly<{
     renderLoops: number
     listeners: number

@@ -9,7 +9,11 @@ import { planetWorldRadius } from '../src/starmap/gl/planetMaterials'
 import { orbitRadiusFor } from '../src/starmap/orbitGeometry'
 import { planetFocusDistance, THREE_VERTICAL_FOV } from '../src/starmap/babylon/framing'
 import { projectedSphereDiameterPixels } from '../src/starmap/babylon/planetLod'
-import { findRelativeBudgetViolations, type RenderCostByTier } from '../src/starmap/renderBudget'
+import {
+  findRelativeBudgetViolations,
+  findStartupCeilingViolations,
+  type RenderCostByTier,
+} from '../src/starmap/renderBudget'
 import { createStrataUniverseFixture, installStrataFixture, strataUniverseFixture } from './helpers/strataFixtureRoute'
 import {
   createPlanetRenderFixture,
@@ -26,7 +30,7 @@ test.describe.configure({ mode: 'serial' })
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1 } as const
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus'] as const
 /** 当前权威的 Babylon 恒星基线；capture:stellar-baseline 写的就是它。 */
-const COMMITTED_STELLAR_BASELINE = 'testdata/render-baselines/babylon-stellar-v2.json'
+const COMMITTED_STELLAR_BASELINE = 'testdata/render-baselines/babylon-stellar-v3.json'
 type StateName = typeof STATE_NAMES[number]
 type PlanetThermal = typeof PLANET_RENDER_CASES[number]['thermal']
 
@@ -96,7 +100,7 @@ test('baseline and candidate outputs derive disjoint PNG paths from their JSON s
   const baselineImages = Object.values(baseline.images)
   const candidateImages = Object.values(candidate.images)
 
-  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v2-${name}.png`))
+  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v3-${name}.png`))
   expect(candidateImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-candidate-${name}.png`))
   expect(baselineImages.some((path) => candidateImages.includes(path))).toBe(false)
   for (const path of [...baselineImages, ...candidateImages]) {
@@ -305,12 +309,21 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low', en
   await expect.poll(async () => (await snapshot(page)).quality).toBe(quality)
   await page.waitForTimeout(3_000) // Required fixed performance warm-up window.
   const warm = await snapshot(page)
+  // 峰值在运行时里是只增不减的，预热期的着色器编译与纹理上传会留下一个远高于
+  // 稳态的尖峰。预算约束的是稳态渲染开销，所以采样窗开始前必须把它甩掉，
+  // 否则比的是两次冷启动尖峰，20% 容差下必然假红。
+  expect(await page.evaluate(() => window.__MINDVERSE_E2E__?.resetRenderCostPeak() ?? false)).toBe(true)
   await page.waitForTimeout(10_000) // Required fixed performance sampling window.
   const final = await snapshot(page)
   const offset = Math.max(0, warm.frames.nextSequence - final.frames.firstSequence)
   const samples = final.frameTimes.slice(offset)
   const sorted = [...samples].sort((left, right) => left - right)
   const p95FrameTime = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? Number.POSITIVE_INFINITY
+  // 与 p95FrameTime 取同一个窗口切片：逐帧开销序列和帧时间序列是一一对齐的。
+  const costSamples = final.renderCosts.slice(offset)
+  const sortedCosts = [...costSamples].sort((left, right) => left - right)
+  const p95RenderCostMs = sortedCosts[Math.max(0, Math.ceil(sortedCosts.length * 0.95) - 1)]
+    ?? Number.POSITIVE_INFINITY
   const absoluteBudgetMs = quality === 'medium' ? 20 : 33.3
   expect(samples.length).toBeGreaterThan(0)
   const hardware = await hardwareMetadata(page)
@@ -322,9 +335,12 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low', en
   // 绝对预算约束的是渲染开销，不是调度间隔。p95FrameTime 被 30fps 空闲节流
   // 钉在 33–43ms，与这一屏画了多少东西无关 —— 拿它比 20ms 的 medium 预算，
   // 门禁在任何机器上都必红，等于从来没有被执行过。
+  //
+  // 判据用采样窗的 p95 而不是峰值：峰值是极值统计，单帧 GC 或合成器抖动就能
+  // 支配它。绝对预算问的是「这一屏正常情况下画得起吗」，不是「有没有过一帧倒霉」。
   if (enforceAbsoluteBudgets) {
-    expect(maxRenderCostMs, 'reference device must report a measured render cost').not.toBeNull()
-    expect(maxRenderCostMs!).toBeLessThanOrEqual(absoluteBudgetMs)
+    expect(costSamples.length, 'reference device must report per-frame render costs').toBeGreaterThan(0)
+    expect(p95RenderCostMs).toBeLessThanOrEqual(absoluteBudgetMs)
   }
   return {
     fixtureVersion: fixture.fixtureVersion,
@@ -332,6 +348,10 @@ async function measureDensePerformance(page: Page, quality: 'medium' | 'low', en
     p95FrameTime,
     // p95FrameTime is the scheduling interval, which the deliberate 30fps idle
     // throttle pins near 33ms whatever the scene costs. This is the work itself.
+    p95RenderCostMs,
+    // 首屏可交互：首帧被记录时的页内 performance.now()，即相对导航起点的毫秒数。
+    // 页内测量，不含 CDP 往返。
+    firstInteractiveMs: final.frames.firstTimestampMs,
     renderCostMs,
     maxRenderCostMs,
     absoluteBudgetMs,
@@ -600,6 +620,13 @@ async function assertRelativePerformance(metrics: { performance: RenderCostByTie
   const violations = findRelativeBudgetViolations(metrics.performance, committed.performance ?? {})
   expect(violations.map(({ quality, measuredMs, baselineMs, allowedMs }) =>
     `${quality} render cost ${measuredMs.toFixed(2)}ms exceeds ${allowedMs.toFixed(2)}ms (baseline ${baselineMs.toFixed(2)}ms)`,
+  )).toEqual([])
+  // 首屏可交互原本只在已退役的 legacy 对里被闸（审计报告 §15.5），搬到这里继续
+  // 生效。判据是绝对天花板而不是相对基线：首屏随机器负载波动逾两倍，相对比对
+  // 分辨不出真回归，理由见 renderBudget.ts 的 STARTUP_CEILING_MS。
+  const startup = findStartupCeilingViolations(metrics.performance)
+  expect(startup.map(({ quality, measuredMs, allowedMs }) =>
+    `${quality} first interactive ${measuredMs.toFixed(0)}ms exceeds the ${allowedMs.toFixed(0)}ms ceiling`,
   )).toEqual([])
 }
 

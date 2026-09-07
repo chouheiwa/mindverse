@@ -30,13 +30,17 @@ test('accepts every production quality tier and rejects unrelated input', () => 
   expect(forcedE2EQuality('?e2eQuality=ultra')).toBeNull()
 })
 
+let resetPeakCalls = 0
+
 function installDiagnostics() {
+  resetPeakCalls = 0
   const owner = {}
   installE2EDiagnostics(owner, 'medium', () => ({ geometries: 9, textures: 3 }), () => ({
     planetCount: 512, probeCount: 300, probeNearVisible: true, firstStarX: 320, firstStarY: 180,
     cameraDistance: 16, targetDistance: 4.5,
   }), {
     rendererKind: 'babylon',
+    resetRenderCostPeak: () => { resetPeakCalls += 1; return true },
     activeContextCount: () => 1,
     scenePhase: () => 'strata-free',
     projectedBounds: () => ({ selectedPlanet: { x: 100, y: 80, width: 220, height: 220 } }),
@@ -247,4 +251,40 @@ test('retains a complete post-warm 30-second window after startup samples alread
   expect(samples).toHaveLength(final.frames.nextSequence - warm.frames.nextSequence)
   expect(samples).toHaveLength(windowSamples)
   expect(final.frames.lastTimestampMs! - warm.frames.lastTimestampMs!).toBe(30_000)
+})
+
+test('resetRenderCostPeak reaches the renderer and reports whether it landed', () => {
+  const owner = installDiagnostics()
+  expect(window.__MINDVERSE_E2E__!.resetRenderCostPeak()).toBe(true)
+  expect(resetPeakCalls).toBe(1)
+  removeE2EDiagnostics(owner)
+})
+
+test('resetRenderCostPeak reports false when the renderer does not provide one', () => {
+  const owner = {}
+  installE2EDiagnostics(owner, 'high', () => ({ geometries: 0, textures: 0 }), () => ({
+    planetCount: 0, starCount: 0, probeCount: 0, probeNearVisible: false,
+    firstStarX: null, firstStarY: null, cameraDistance: 1, targetDistance: 1,
+  }))
+  expect(window.__MINDVERSE_E2E__!.resetRenderCostPeak()).toBe(false)
+  removeE2EDiagnostics(owner)
+})
+
+test('carries a per-frame render cost series aligned with the frame time series', () => {
+  const owner = installDiagnostics()
+  // 峰值是极值统计：单帧抖动就能支配它。要在采样窗上算 p95，就必须留下逐帧序列。
+  recordE2EFrame(owner, 16, 0, 0, 0.8)
+  recordE2EFrame(owner, 16, 0, 16, 40)
+  recordE2EFrame(owner, 16, 0, 32, 1.1)
+  const shot = window.__MINDVERSE_E2E__!.snapshot()
+  expect(shot.renderCosts).toEqual([0.8, 40, 1.1])
+  expect(shot.renderCosts.length).toBe(shot.frameTimes.length)
+  removeE2EDiagnostics(owner)
+})
+
+test('defaults the render cost to zero for renderers that do not report one', () => {
+  const owner = installDiagnostics()
+  recordE2EFrame(owner, 16)
+  expect(window.__MINDVERSE_E2E__!.snapshot().renderCosts).toEqual([0])
+  removeE2EDiagnostics(owner)
 })

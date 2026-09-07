@@ -668,3 +668,118 @@ Three 的 22% 容差内。**「187%」是陈旧采集的产物，不是活的回
 
 **blocker = 0**：§15.4 与 §15.5 都是门禁自身的测量口径问题，不是产品回归；
 两者都需要你在「重采基线 / 退役门禁」上拍板，我没有动任何容差。
+
+---
+
+## 16. 批次 9：把 §13.3 / §15.4 / §15.5 三项待定全部落地
+
+### 16.1 §15.4 渲染开销：从「全时段峰值」改到「采样窗 p95」
+
+分两步，第一步不够，第二步才把根因除干净。
+
+**第一步——峰值只覆盖采样窗。** `runtime.ts` 新增 `resetRenderCostPeak()`，
+在 3s 预热之后、10s 采样窗开始之前清零。效果立竿见影：
+
+| 档 | 冷启动全时段峰值 | 稳态峰值 |
+|---|---|---|
+| medium | 12.20ms | 1.50ms |
+| low | 9.70ms | 1.20ms |
+
+**原来 87% 的「预算」花在着色器编译和纹理上传上。**
+
+**第二步——峰值本身就是错的估计量。** 量级降到 1~2ms 后离散度反而更大：
+同机连采五次，medium 1.30~2.00、low 1.20~2.00，离散度 54~67%，远超 20% 容差。
+`max` 是极值统计，260 个样本里任意一帧的 GC、合成器抖动或 OS 调度都能支配它。
+
+所以记录**逐帧开销序列**（`RenderSnapshot.renderCosts`，与 `frameTimes` 一一对齐），
+在采样窗切片上取 p95。仍不够：p95 连采五次是 medium 1.20~1.60、low 1.20~1.60，
+离散度 33%。查到最后一层原因是 **Chrome 把 `performance.now()` 量化到 0.1ms**，
+在 1.4ms 量级上一个量化步就是 7%，三个步顶穿 20% —— **这时门禁判的是计时器
+分辨率，不是代码**。
+
+因此允许上限取 `max(基线 × 1.2, 基线 + 0.5ms)`。噪声下限只在亚毫秒量级起作用：
+基线一旦超过 2.5ms，相对规则重新接管（2.5 × 1.2 = 3.0 = 2.5 + 0.5），
+**对有意义的量级不产生任何放宽**。同一手法 `comparePlanetSample` 里早已用过
+（`max(0.015, |ref| × 0.5)`）。
+
+新基线 `babylon-stellar-v3.json`（v1/v2 保留不动）。基线不取单次运气：先连采
+七次拿到分布（medium 1.00~1.50、low 0.90~1.60），再取一次达到样本中位的采集
+提升为基线，medium/low 均为 1.50ms，允许上限 2.00ms。**五轮全量 6/6 通过。**
+
+`scripts/compare-render-baselines.mjs` 同步改到同一口径 —— 两处判定的是同一份
+采集，口径分叉会让同一次采集「在 Playwright 里绿、在命令行里红」。
+
+### 16.2 §15.5 退役 legacy 对，但先把它唯一独有的检查搬走
+
+`compare:render-baselines`、`three-question-7.*`、`babylon-question-7.*`
+与 `compareLegacyMigrationPair` / `deriveLegacyPngPath` 一并删除。传入无
+`schemaVersion` 的文档现在报明确的退役信息并指向继任者 `compare:visual-parity`，
+有用例锁定这条文案。
+
+**退役前先查了它独有的覆盖**：`firstInteractiveMs` 只在这条路径里被闸，别处没有。
+直接删会静默丢掉首屏门禁，所以搬进 stellar 基线：取 `frames.firstTimestampMs`，
+即**页内** `performance.now()` 的首帧时刻（不含 CDP 往返，避免重犯 §15.2 的错）。
+
+**但没有照抄它的「相对基线 30%」**，因为照抄立刻就红了：实测
+`low first interactive 1705ms exceeds 1100ms (baseline 800ms)`。同机首屏在
+492~1705ms 之间随内存压力波动逾两倍 —— legacy 那对基线是同一次会话里前后脚采
+的，而这里比的是几天前提交的基线与此刻的实测，任何相对容差都只会得到一条随
+运气变色的门禁。
+
+改成**绝对天花板 3000ms**。它闸住的是「首屏卡住」那一类真回归
+（`ef19b54 eliminate panorama startup stalls` 正是这一类；本批次也实测到一次
+`universe-root` 卡在 `loading` 超过 120s 的内存压力故障），代价是分辨不出温和
+退化。**这是这个量能诚实承诺的上限**，写在 `STARTUP_CEILING_MS` 的注释里。
+
+### 16.3 §13.3 视觉追平：从「永远红」改到预期失败清单
+
+新增 `testdata/render-baselines/visual-parity-expected.json`
+（`mindverse-visual-parity-expected.v1`），写死当前 10 项越界，并逐项记明成因
+（程序化噪声 / 手性镜像 / 提升批次刻意取舍）。
+
+`reconcileExpectedParityFailures()` 做集合对账，**两侧都必须红**：
+
+- `unexpected`：实测越界但清单没有 → 新漂移
+- `resolved`：清单有但实测已不越界 → 有人修好了却没更新清单
+
+**容差一分未动**，仍由 `scripts/frameParity.mjs` 判定；清单只决定哪些**已判定
+越界**的项目是申报过的。清单文件缺失或 schema 不对直接抛错，不静默跳过。
+
+实证两侧承重：从清单删掉 `focused-star/structure:tileMax` →
+`new, undeclared: focused-star/structure:tileMax`，exit=1；
+往清单加一条不存在的 `focused-star/chroma` →
+`declared but no longer failing (remove from the manifest): focused-star/chroma`，exit=1。
+
+`compare:visual-parity` 由**永远红转绿**：
+`10 declared divergences unchanged`。
+
+### 16.4 批次 9 全量复验
+
+| 检查 | 结果 |
+|---|---|
+| `oxlint` | ✅ |
+| `tsc -b` / `tsc --noEmit -p tsconfig.e2e.json` | ✅ |
+| `vitest run` | ✅ **94 文件 / 983 用例**（962 + 21） |
+| `playwright --project=swiftshader-functional` | ✅ **21/21 × 3 轮** |
+| `playwright --project=metal-performance` | ✅ **6/6 × 5 轮** |
+| `playwright --project=visual-parity` | ✅ 4/4 |
+| `npm run compare:stellar-baselines` | ✅ 绿（v3 基线） |
+| `npm run compare:planet-baselines` | ✅ 绿 |
+| `npm run compare:visual-parity` | ✅ **由永远红转绿**，10 项申报未变 |
+| `npm run compare:render-baselines` | 已退役，命令不再存在 |
+
+**四条 `compare:*` 门禁现在全部可执行、全部有再生路径、全部会因真回归变红。**
+
+### 16.5 本批次动过的用户脏文件
+
+`babylon-stellar-candidate.*` 是 p95 字段引入前采的，schema 已过时，
+由 `verify:stellar-baseline` 重新生成。**原件已备份**至
+`<scratchpad>/stale-candidate-backup/`。`babylon-planets-candidate*`、
+`data/snapshots` 的删除项、`*.corrupt`、`frontend/coverage` 全程未动。
+
+### 16.6 需要知道的环境事实
+
+本批次后半段机器可用内存降到约 5GB／24GB（用户的 Chrome 占大头），期间实测到
+两次与代码无关的故障：一次 `universe-root` 卡在 `loading` 超时 120s，一次行星
+采集点击落空。清空负载后同一测试 10.9s 通过。**所有性能数字都是在这台机器上
+采的，换机器需要重采基线。**

@@ -4,7 +4,6 @@ import { pathToFileURL } from 'node:url'
 import { decodePng } from './framePixels.mjs'
 import {
   PARITY_STATE_NAMES,
-  compareFrameDescriptors,
   compareVisualParitySets,
   describeFrame,
   formatDeviation,

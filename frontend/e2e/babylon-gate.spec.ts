@@ -297,7 +297,10 @@ async function openQuestionWorkspace(page: Page, title: string) {
   const laneButton = page.getByRole('button', { name: new RegExp(title) })
   await laneButton.click()
   await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
-  await expect.poll(async () => (await snapshot(page))?.scenePhase).toBe('strata-free')
+  // 俯冲 900ms + 穿越 700ms。SwiftShader 下一帧要上百毫秒，同样的动画要跑好几秒 ——
+  // 慢的是软件渲染，不是产品，所以这里给足超时而不是把动画改短。
+  await expect.poll(async () => (await snapshot(page))?.scenePhase, { timeout: 30_000 })
+    .toBe('strata-free')
 }
 
 /**
@@ -309,7 +312,8 @@ async function openQuestionWorkspace(page: Page, title: string) {
 async function enterStrata(page: Page, evidenceLabel: '回溯地层' | '当前可观测表层') {
   const trigger = page.getByRole('button', { name: '打开答案地层' })
   if (await trigger.isVisible().catch(() => false)) await trigger.click()
-  await expect.poll(async () => (await snapshot(page))?.scenePhase).toBe('strata-free')
+  await expect.poll(async () => (await snapshot(page))?.scenePhase, { timeout: 30_000 })
+    .toBe('strata-free')
   await expect(page.getByRole('region', { name: '答案地层导航' })).toContainText(evidenceLabel)
 }
 

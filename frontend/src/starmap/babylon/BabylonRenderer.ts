@@ -214,10 +214,6 @@ export function elapsedRenderDelta(previousNow: number | null, now: number): num
   return Math.min(50, Math.max(0, now - previousNow))
 }
 
-export function advanceTransitionElapsed(elapsed: number, previousRenderedAt: number, renderedAt: number): number {
-  return elapsed + elapsedRenderDelta(previousRenderedAt, renderedAt)
-}
-
 function mobileDevice(): boolean {
   return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 }
@@ -1597,6 +1593,14 @@ export class BabylonRenderer implements MindverseRenderer {
     })
   }
 
+  /** 选中行星的世界包围球半径。相机半径与它同一套单位，descriptor.radius 不是。 */
+  private selectedPlanetWorldRadius(): number {
+    const mesh = this.selectedVisual?.visual.activeMesh
+    if (!mesh) return 0.25
+    const radius = mesh.getBoundingInfo().boundingSphere.radiusWorld
+    return Number.isFinite(radius) && radius > 0 ? radius : 0.25
+  }
+
   private applyStrataPose(pose: Readonly<{ depth: number; yaw: number; pitch: number }>): void {
     if (this.destroyed) return
     if (this.universeVisible) {
@@ -1666,19 +1670,27 @@ export class BabylonRenderer implements MindverseRenderer {
     const endTarget = phase === 'surface-approach'
       ? selectedPosition
       : phase === 'exit' ? new Vector3(0, -0.35, 1) : new Vector3(0, -1, 1)
+    // 行程按**行星实际世界半径**定，不用 descriptor.radius —— 后者与相机半径
+    // 不是一套单位（实测行星焦点相机在 1.2，而 descriptor.radius 是 1.4），
+    // 拿它算终点会得到 1.200 → 1.148 的 4% 位移：代码在动，眼睛看不出在动。
+    const planetRadius = this.selectedPlanetWorldRadius()
     const endRadius = phase === 'surface-approach'
-      ? Math.max(0.7, (this.selectedVisual?.descriptor.radius ?? 0.7) * 0.82)
-      : 0.9
-    const duration = this.reducedMotion ? 0 : phase === 'surface-approach' ? 720 : 560
+      // 俯冲到贴着大气层外沿，把行星压满画面。
+      ? Math.min(startRadius, Math.max(planetRadius * 1.9, planetRadius + 0.05))
+      // 穿过表面进到内部 —— 这一段的终点是过程量，落地姿态由 finishEntry 覆盖。
+      : phase === 'exit' ? 0.9 : Math.max(0.05, planetRadius * 0.25)
+    const duration = this.reducedMotion ? 0 : phase === 'surface-approach' ? 900 : 700
+    const startedAt = performance.now()
     let elapsed = 0
-    let lastRenderedAt = performance.now()
     let cancelled = false
     const observer = this.scene.onBeforeRenderObservable.add(() => {
       if (cancelled || this.destroyed) return
       try {
         const renderedAt = performance.now()
-        elapsed = advanceTransitionElapsed(elapsed, lastRenderedAt, renderedAt)
-        if (Number.isFinite(renderedAt)) lastRenderedAt = renderedAt
+        // 按墙钟推进，不按帧间隔累加：慢硬件上一帧要几百毫秒，逐帧累加会被
+        // 50ms 的上限钉住，720ms 的动画实测跑成 2.6 秒还没完。与相机飞行同一套
+        // 理由，复用同一个函数（它同时限制单帧跳变，不会因卡顿而瞬移）。
+        elapsed = flightElapsedMs(startedAt, renderedAt, duration, elapsed)
         const progress = duration === 0 ? 1 : Math.min(1, elapsed / duration)
         const eased = progress * progress * (3 - 2 * progress)
         this.camera.setTarget(Vector3.Lerp(startTarget, endTarget, eased))

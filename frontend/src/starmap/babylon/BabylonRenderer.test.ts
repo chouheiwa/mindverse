@@ -2,7 +2,6 @@ import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imagePro
 import { describe, expect, test } from 'vitest'
 import {
   BABYLON_BLOOM_THRESHOLD,
-  advanceTransitionElapsed,
   babylonBloomPolicy,
   cappedDevicePixelRatio,
   configurePlanetImageProcessing,
@@ -88,16 +87,21 @@ describe('Babylon planet rendering policy', () => {
     expect(elapsedRenderDelta(1_000, Number.NaN)).toBe(0)
   })
 
-  test('advances a 60 Hz transition by rendered wall time when its source RAF runs at 120 Hz', () => {
-    const sourceRafDelta = 1_000 / 120
-    const renderedAt = [0, sourceRafDelta * 2, sourceRafDelta * 4, sourceRafDelta * 6]
+  test('a slow renderer must not stretch a transition into slow motion', () => {
+    // 旧口径按帧间隔累加、单帧上限 50ms：一帧 300ms 的软件渲染下，900ms 的
+    // 大气层进入实测跑成 2.6 秒还没完 —— 看上去就是「卡住了」。
+    // 新口径锚在墙钟上，只限制单帧跳变，同样的帧率下 4 帧就走完。
+    const duration = 900
     let elapsed = 0
-    for (let index = 1; index < renderedAt.length; index += 1) {
-      elapsed = advanceTransitionElapsed(elapsed, renderedAt[index - 1], renderedAt[index])
+    let frames = 0
+    for (let now = 300; elapsed < duration; now += 300) {
+      elapsed = flightElapsedMs(0, now, duration, elapsed)
+      frames += 1
+      expect(frames).toBeLessThan(20)
     }
 
-    expect(elapsed).toBeCloseTo(50)
-    expect(elapsed).not.toBeCloseTo(sourceRafDelta * 3)
+    expect(frames).toBeLessThanOrEqual(8)
+    expect(elapsed).toBe(duration)
   })
 
   test('uses KHR PBR Neutral, dithering and a bloom threshold above ordinary surface output', () => {

@@ -7,9 +7,10 @@ import { makeStars, renderDim, type StarLayer } from './gl/stars'
 import { makeBodies, type BodyLayer, type PlanetDatum } from './gl/bodies'
 import { starData, starWorldPosition, type StarDatum } from './gl/starData'
 import { makeDust, type DustLayer } from './gl/dust'
-import { makeRings, type RingLayer } from './gl/rings'
+import { makeRings, RING_GAIN, type RingLayer } from './gl/rings'
 import { makeOverlay3D, type Overlay3D } from './gl/overlay3d'
 import { Labels } from './gl/labels'
+import { clusterRingOpacity } from './clusterRingVisibility'
 import { FOV, nebulaFocusGain, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
@@ -795,6 +796,9 @@ export class Renderer implements MindverseRenderer {
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)
     this.rings?.setUniform('uFar', far)
+    // 星群结构环是全景尺度的信号，推进到单个恒星系后只剩遮挡 —— 靠近时退场。
+    // 与 Babylon 共用同一条规则，两个构建必须画出同一套环。
+    this.rings?.setUniform('uGain', RING_GAIN * clusterRingOpacity(this.dist, this.R * 1.62))
     // 星云按方向采样，亮度与距离无关 —— 飞进一个恒星系之后，画面上只剩
     // 几个天体，星云就成了压倒性的奶白底。它是背景，靠近时必须退场。
     const nearK = 0.22 + 0.78 * smooth(this.dist, this.R * 0.35, this.R * 1.1)

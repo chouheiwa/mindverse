@@ -48,6 +48,8 @@ export interface RenderSnapshot {
     /** Time spent inside one scene render, as opposed to the scheduling interval. */
     nebulaShellCount?: number
     clusterRingCount?: number
+    /** 星群环实际增益。缩放淡出只能从这里观测，帧描述子看不见。 */
+    clusterRingGain?: number
     wormholePointCount?: number
     darkLensCount?: number
     dustCount?: number

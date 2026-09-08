@@ -43,6 +43,9 @@ void main() {
 }
 `
 
+/** 环的基础增益。缩放淡出是乘在它上面的，见 clusterRingVisibility。 */
+export const RING_GAIN = 0.24
+
 export interface RingLayer {
   object: THREE.LineSegments
   setUniform(name: string, value: number): void
@@ -97,7 +100,7 @@ function makeRingsScoped(u: Universe, scope: ResourceScope): RingLayer | null {
       uConverge: { value: 0 },
       uNear: { value: 1 },
       uFar: { value: 4000 },
-      uGain: { value: 0.24 },
+      uGain: { value: RING_GAIN },
     },
     vertexShader: VERT,
     fragmentShader: FRAG,

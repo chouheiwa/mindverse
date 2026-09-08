@@ -644,3 +644,28 @@ test('the answer strata is a lit, layered world rather than a black void', async
   }
   expect(crossings).toBeGreaterThanOrEqual(3)
 })
+
+test('cluster structure rings leave the frame as the camera zooms in from panorama', async ({ page }) => {
+  // 基础语料只有一颗坐在质心上的星，半径 0 画不出环 —— 必须用 500 星的密集语料。
+  await openBabylonUniverse(page, '', 'reduce', { denseStars: true })
+  await expectReady(page)
+
+  // 全景机位：环是「这是个星系」最强的结构信号，必须满亮。
+  const panorama = (await snapshot(page))!
+  expect(panorama.resources.clusterRingCount).toBeGreaterThan(0)
+  expect(panorama.resources.clusterRingGain).toBeGreaterThan(0.2)
+
+  // 滚轮推进。环是全景尺度的东西，推近之后只剩遮挡，必须退场。
+  // 断言的是实际交给材质的增益 —— 帧描述子在这个量级上看不见它。
+  await canvas(page).hover({ position: { x: 200, y: 200 } })
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const current = (await snapshot(page))!
+    if (current.resources.clusterRingGain === 0) break
+    await page.mouse.wheel(0, -600)
+  }
+  const zoomed = (await snapshot(page))!
+  expect(zoomed.scene.cameraDistance).toBeLessThan(panorama.scene.cameraDistance)
+  expect(zoomed.resources.clusterRingGain).toBe(0)
+  // 环本身没有被销毁，只是不显示 —— 退回全景要能原样回来。
+  expect(zoomed.resources.clusterRingCount).toBe(panorama.resources.clusterRingCount)
+})

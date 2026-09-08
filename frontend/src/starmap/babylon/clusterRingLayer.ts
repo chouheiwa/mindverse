@@ -17,7 +17,8 @@ import { clusterAxis, orbitRing } from '../projection'
 // 公转半径上，透视由 3D 投影自己给出。全部星群的全部环合成一个批次。
 
 const SAMPLES = 96
-const GAIN = 0.24
+/** 环的基础增益。缩放淡出是乘在它上面的，见 clusterRingVisibility。 */
+export const CLUSTER_RING_GAIN = 0.24
 
 const VERTEX = /* glsl */ `
 precision highp float;
@@ -70,6 +71,8 @@ export function ringRadiiForCluster(cluster: Cluster, stars: readonly RingStar[]
 
 export interface ClusterRingLayerDiagnostics {
   readonly ringCount: number
+  /** 实际交给材质的增益。缩放淡出只体现在这里 —— 帧描述子看不见它。 */
+  readonly gain: number
   readonly batchCount: number
   readonly vertexCount: number
   readonly dimensions: readonly number[]
@@ -82,6 +85,7 @@ export class ClusterRingLayer {
   private readonly geometry: Geometry | null = null
   private readonly groups: Int32Array
   private readonly modeDimensions: Float32Array
+  private gainValue = CLUSTER_RING_GAIN
   private readonly dimensions: Float32Array
   private readonly ringCountValue: number
   private focusedCluster: number | null = null
@@ -139,12 +143,14 @@ export class ClusterRingLayer {
     this.material.disableDepthWrite = true
     this.material.setFloat('uNear', 1)
     this.material.setFloat('uFar', 4000)
-    this.material.setFloat('uGain', GAIN)
+    this.material.setFloat('uGain', CLUSTER_RING_GAIN)
     this.mesh.material = this.material
   }
 
   setUniform(name: string, value: number): void {
-    if (!this.disposed) this.material?.setFloat(name, value)
+    if (this.disposed) return
+    this.material?.setFloat(name, value)
+    if (name === 'uGain') this.gainValue = value
   }
 
   setMode(mode: Mode, universe: Universe, wormIndex: number): void {
@@ -169,6 +175,7 @@ export class ClusterRingLayer {
   diagnostics(): ClusterRingLayerDiagnostics {
     return Object.freeze({
       ringCount: this.ringCountValue,
+      gain: this.gainValue,
       batchCount: this.disposed || !this.mesh ? 0 : 1,
       vertexCount: this.groups.length,
       dimensions: Array.from(this.dimensions),

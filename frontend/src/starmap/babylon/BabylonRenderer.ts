@@ -20,6 +20,7 @@ import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPi
 import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
+import { clusterRingOpacity } from '../clusterRingVisibility'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot, type StellarDiagnosticsSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
 import { starIdentity } from '../starIdentity'
@@ -71,7 +72,7 @@ import { babylonUpliftTier } from './visualUplift'
 import { babylonCinematicGrade, spaceFogWindow } from './cinematicGrade'
 import { cameraDamping } from './interactionFeedback'
 import { nebulaPaletteRgb } from '../nebulaPalette'
-import { ClusterRingLayer } from './clusterRingLayer'
+import { CLUSTER_RING_GAIN, ClusterRingLayer } from './clusterRingLayer'
 import { OverlayLayer } from './overlayLayer'
 import { LabelLayer } from './labelLayer'
 import { LabelStrategyCache } from '../labelVisibility'
@@ -522,6 +523,7 @@ export class BabylonRenderer implements MindverseRenderer {
               actualRenderCount: this.runtime.diagnostics().actualRenders,
               nebulaShellCount: this.nebula?.diagnostics().shellCount ?? 0,
               clusterRingCount: this.rings?.diagnostics().ringCount ?? 0,
+              clusterRingGain: this.rings?.diagnostics().gain ?? 0,
               wormholePointCount: this.overlay?.diagnostics().wormholePointCount ?? 0,
               darkLensCount: this.overlay?.diagnostics().darkLensCount ?? 0,
               dustCount: this.dust?.diagnostics().dustCount ?? 0,
@@ -1135,6 +1137,11 @@ export class BabylonRenderer implements MindverseRenderer {
       layer?.setUniform('uNear', near)
       layer?.setUniform('uFar', far)
     }
+    // 星群结构环是全景尺度的信号，推进到单个恒星系后只剩遮挡 —— 靠近时退场。
+    this.rings?.setUniform(
+      'uGain',
+      CLUSTER_RING_GAIN * clusterRingOpacity(this.camera.radius, this.overviewRadius),
+    )
     this.overlay?.setUniform('uT', this.motionTime())
     this.overlay?.setUniform('uProjScale', projectionScale)
     this.drawLabels(radius, near, far)

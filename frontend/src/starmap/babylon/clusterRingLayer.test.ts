@@ -2,7 +2,12 @@ import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { describe, expect, it } from 'vitest'
 import type { Universe } from '../../types'
-import { ClusterRingLayer, ringRadiiForCluster, type RingStar } from './clusterRingLayer'
+import {
+  CLUSTER_RING_GAIN,
+  ClusterRingLayer,
+  ringRadiiForCluster,
+  type RingStar,
+} from './clusterRingLayer'
 
 const universe = (): Universe => ({
   clusters: [
@@ -90,5 +95,20 @@ describe('ClusterRingLayer', () => {
     expect(scene.meshes.length).toBe(0)
     expect(scene.materials.length).toBe(0)
     expect(() => layer.dispose()).not.toThrow()
+  })
+})
+
+describe('the zoom fade must be observable, because the parity descriptors cannot see it', () => {
+  it('reports the gain actually handed to the material', () => {
+    const { engine, layer } = setup()
+    expect(layer.diagnostics().gain).toBeCloseTo(CLUSTER_RING_GAIN, 6)
+
+    layer.setUniform('uGain', CLUSTER_RING_GAIN * 0.5)
+    expect(layer.diagnostics().gain).toBeCloseTo(CLUSTER_RING_GAIN * 0.5, 6)
+
+    layer.setUniform('uGain', 0)
+    expect(layer.diagnostics().gain).toBe(0)
+    layer.dispose()
+    engine.dispose()
   })
 })

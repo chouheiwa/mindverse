@@ -109,9 +109,17 @@ function validatePresentation(name, presentation) {
     && (presentation.approachProgress !== 1 || presentation.systemReveal !== 1)) {
     throw new Error(`render baseline: invalid ${name} presentation`)
   }
-  if (name !== 'panorama'
-    && (presentation.visibleQuestionOrbits <= 0 || presentation.visibleQuestionPlanets <= 0)) {
+  if (name !== 'panorama' && presentation.visibleQuestionPlanets <= 0) {
     throw new Error(`render baseline: invalid ${name} presentation`)
+  }
+  // 轨道椭圆按状态分：接近与恒星聚焦必须画得出来（丢了就是回归），而 planet-focus
+  // 是**地表阶段**，宇宙家具必须退场（画出来就是回归到轨道视角）。分状态比原来
+  // 那条「非全景一律要有轨道」更具体，两个方向的回归都闸得住。
+  if ((name === 'approach-midpoint' || name === 'focused-star') && presentation.visibleQuestionOrbits <= 0) {
+    throw new Error(`render baseline: invalid ${name} presentation`)
+  }
+  if (name === 'planet-focus' && presentation.visibleQuestionOrbits !== 0) {
+    throw new Error('render baseline: planet-focus must not show orbit paths')
   }
 }
 

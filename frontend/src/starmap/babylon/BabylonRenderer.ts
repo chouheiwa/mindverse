@@ -20,6 +20,7 @@ import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPi
 import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
+import { backdropGain } from '../backdropVisibility'
 import { clusterRingOpacity } from '../clusterRingVisibility'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot, type StellarDiagnosticsSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
@@ -299,6 +300,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
   private destroyed = false
   private universeVisible = true
+  /** 上一帧的宇宙背景增益。地表阶段必须是 0 —— 这是「没有宇宙视角」的判据。 */
+  private backdropGainValue = 1
   private workspaceOpen = false
   private reducedMotion: boolean
   private planetExitPending = false
@@ -526,6 +529,7 @@ export class BabylonRenderer implements MindverseRenderer {
               soloCount: this.dust?.diagnostics().soloCount ?? 0,
               starfieldPointCount: this.starfield?.diagnostics().pointCount ?? 0,
               starfieldShellCount: this.starfield?.diagnostics().batchCount ?? 0,
+              backdropGain: this.backdropGainValue,
               renderCostMs: this.runtime.diagnostics().lastRenderCostMs,
               maxRenderCostMs: this.runtime.diagnostics().maxRenderCostMs,
             }),
@@ -1116,7 +1120,12 @@ export class BabylonRenderer implements MindverseRenderer {
     // 空间雾：远处按分档收进来，于是同一屏里「远」和「近」分得开。
     const { near, far } = spaceFogWindow(radius, originDistance, babylonUpliftTier(this.quality))
     const nearK = 0.22 + 0.78 * smoothStep(this.camera.radius, radius * 0.35, radius * 1.1)
-    const focusRetreat = this.focusedStar || this.selected ? NEBULA_FOCUS_GAIN : 1
+    // 进到一颗问题行星就是地表阶段：星空、星云、尘埃全部退场，不留余晖。
+    // 留一点就还是「一颗球飘在宇宙里」，那不是地表。
+    const focusRetreat = backdropGain(this.diagnosticPhase() === 'universe'
+      ? (this.selected ? 'planet-focus' : this.focusedStar ? 'star-focus' : 'panorama')
+      : 'strata')
+    this.backdropGainValue = focusRetreat
     const modeGain = this.mode === 'all' ? 1 : 0.48
     this.nebula?.setDim(modeGain * nearK * focusRetreat)
     this.nebula?.update(this.motionTime() * 0.001)
@@ -1136,7 +1145,7 @@ export class BabylonRenderer implements MindverseRenderer {
     // 星群结构环是全景尺度的信号，推进到单个恒星系后只剩遮挡 —— 靠近时退场。
     this.rings?.setUniform(
       'uGain',
-      CLUSTER_RING_GAIN * clusterRingOpacity(this.camera.radius, this.overviewRadius),
+      CLUSTER_RING_GAIN * focusRetreat * clusterRingOpacity(this.camera.radius, this.overviewRadius),
     )
     this.overlay?.setUniform('uT', this.motionTime())
     this.overlay?.setUniform('uProjScale', projectionScale)
@@ -1183,6 +1192,15 @@ export class BabylonRenderer implements MindverseRenderer {
    */
   private drawLabels(radius: number, near: number, far: number): void {
     if (!this.labels) return
+    // 地表阶段没有星群名与恒星名 —— 那是宇宙导航信息，站在行星上不成立。
+    if (this.backdropGainValue <= 0) {
+      this.labels.draw({
+        clusters: [], stars: [], near, far, tooClose: radius * 0.2,
+        project: () => ({ x: 0, y: 0, depth: -1, distance: 0 }),
+        projectStar: () => ({ x: 0, y: 0, depth: -1, distance: 1, radiusPx: 0 }),
+      })
+      return
+    }
     const rect = this.canvas.getBoundingClientRect()
     const renderHeight = Math.max(1, this.engine.getRenderHeight())
     const projectionScale = renderHeight * 0.5 / Math.tan(this.camera.fov * 0.5)
@@ -2509,9 +2527,6 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
 }
-
-/** 进入恒星系后背景额外退让，与 gl/scene.ts 的 nebulaFocusGain 同值。 */
-const NEBULA_FOCUS_GAIN = 0.38
 
 function smoothStep(value: number, low: number, high: number): number {
   const t = Math.min(1, Math.max(0, (value - low) / Math.max(1e-6, high - low)))

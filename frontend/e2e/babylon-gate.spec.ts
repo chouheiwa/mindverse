@@ -689,3 +689,24 @@ test('cluster structure rings leave the frame as the camera zooms in from panora
   // 环本身没有被销毁，只是不显示 —— 退回全景要能原样回来。
   expect(zoomed.resources.clusterRingCount).toBe(panorama.resources.clusterRingCount)
 })
+
+test('the planet stage has no universe left in it', async ({ page }) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  await openStar(page)
+
+  // 恒星系阶段：宇宙还在，只是退让。
+  const atStar = (await snapshot(page))!
+  expect(atStar.resources.backdropGain).toBeGreaterThan(0)
+
+  await openQuestionWorkspace(page, '固定地层问题')
+  await backToWorkspace(page, '固定地层问题')
+
+  // 地表阶段：星空、星云、尘埃、星群环、轨道椭圆、星群名全部不在。
+  // 留一点余晖就还是「一颗球飘在宇宙里」，那不是地表。
+  const atPlanet = (await snapshot(page))!
+  expect(atPlanet.scenePhase).toBe('universe')
+  expect(atPlanet.planet.selectedQuestionId).toBe('question:7')
+  expect(atPlanet.resources.backdropGain).toBe(0)
+  expect(atPlanet.stellar.visibleQuestionOrbits).toBe(0)
+})

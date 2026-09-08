@@ -35,7 +35,8 @@ function state(name, overrides = {}) {
       focusedStarKey: focused,
       approachProgress,
       systemReveal,
-      visibleQuestionOrbits: name === 'panorama' ? 0 : 2,
+      // planet-focus 是地表阶段，没有轨道椭圆；全景还没进系统，同样没有。
+      visibleQuestionOrbits: name === 'panorama' || name === 'planet-focus' ? 0 : 2,
       visibleQuestionPlanets: name === 'panorama' ? 0 : 2,
       shaderFallback: false,
     },
@@ -609,4 +610,21 @@ test('the CLI holds a first-interactive ceiling in place of the retired legacy p
     },
   }
   assert.throws(() => compareRenderBaselines(baselineDoc, stalled), /medium first interactive exceeds/i)
+})
+
+test('planet-focus is the surface stage: orbits must be gone, and the other states must keep them', () => {
+  // 旧规则是「非全景状态必须有可见轨道」，与地表阶段冲突。换成分状态的规则
+  // 不是放宽：它同时闸住「轨道意外丢失」和「轨道意外回到地表」，比原来更具体。
+  const withOrbits = (name, orbits) => {
+    const document = candidate()
+    document.states[name].presentation = { ...document.states[name].presentation, visibleQuestionOrbits: orbits }
+    return document
+  }
+  for (const name of ['approach-midpoint', 'focused-star']) {
+    assert.throws(() => compareRenderBaselines(baseline(), withOrbits(name, 0)),
+      new RegExp(`invalid ${name} presentation`, 'i'))
+  }
+  assert.throws(() => compareRenderBaselines(baseline(), withOrbits('planet-focus', 2)),
+    /planet-focus must not show orbit paths/i)
+  assert.doesNotThrow(() => compareRenderBaselines(baseline(), withOrbits('planet-focus', 0)))
 })

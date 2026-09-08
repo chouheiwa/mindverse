@@ -64,14 +64,16 @@ describe('Babylon orbit presentation states', () => {
     })).toEqual({ reveal: 0.06, visible: true, pickable: true })
   })
 
-  test('planet focus emphasizes its path and leaves sibling paths as context', () => {
+  test('planet focus is the surface stage: no orbit paths at all', () => {
+    // 进到一颗行星就是地表。轨道椭圆是宇宙家具，回答的是「我在系统的哪里」——
+    // 站在地表上时这个问题不成立，画出来就还是轨道视角。
     const state = {
       phase: 'planet-focus' as const,
       focusedOwnerKey: 'star:a',
       selectedQuestionId: 'question:2',
     }
-    expect(questionOrbitAlpha({ ...state, ownerKey: 'star:a', questionId: 'question:2' }))
-      .toBeGreaterThan(questionOrbitAlpha({ ...state, ownerKey: 'star:a', questionId: 'question:1' }))
+    expect(questionOrbitAlpha({ ...state, ownerKey: 'star:a', questionId: 'question:2' })).toBe(0)
+    expect(questionOrbitAlpha({ ...state, ownerKey: 'star:a', questionId: 'question:1' })).toBe(0)
     expect(questionOrbitAlpha({ ...state, ownerKey: 'star:b', questionId: 'question:3' })).toBe(0)
   })
 

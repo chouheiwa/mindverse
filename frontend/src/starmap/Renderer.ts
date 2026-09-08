@@ -10,8 +10,9 @@ import { makeDust, type DustLayer } from './gl/dust'
 import { makeRings, RING_GAIN, type RingLayer } from './gl/rings'
 import { makeOverlay3D, type Overlay3D } from './gl/overlay3d'
 import { Labels } from './gl/labels'
+import { backdropGain } from './backdropVisibility'
 import { clusterRingOpacity } from './clusterRingVisibility'
-import { FOV, nebulaFocusGain, nebulaPalette, sceneRadius } from './gl/scene'
+import { FOV, nebulaPalette, sceneRadius } from './gl/scene'
 import { detectQuality, type Quality } from './quality'
 import { findQuestionPlanet, planetPickVisible } from './planetVisibility'
 import { measureFrameTiming, resumeRenderClock } from './renderClock'
@@ -793,16 +794,22 @@ export class Renderer implements MindverseRenderer {
       this.lastProbeConvergence = conv
     }
     this.applyProbeInspectionCamera()
+    // 进到一颗问题行星就是地表阶段：背景全部退场，不留余晖 —— 与 Babylon 共用
+    // 同一条规则，两个构建不能长得不一样。
+    const focusRetreat = backdropGain(
+      this.selected ? 'planet-focus' : this.focusedStar ? 'star-focus' : 'panorama',
+    )
     this.rings?.setUniform('uConverge', conv)
     this.rings?.setUniform('uNear', near)
     this.rings?.setUniform('uFar', far)
     // 星群结构环是全景尺度的信号，推进到单个恒星系后只剩遮挡 —— 靠近时退场。
     // 与 Babylon 共用同一条规则，两个构建必须画出同一套环。
-    this.rings?.setUniform('uGain', RING_GAIN * clusterRingOpacity(this.dist, this.R * 1.62))
+    this.rings?.setUniform(
+      'uGain', RING_GAIN * focusRetreat * clusterRingOpacity(this.dist, this.R * 1.62),
+    )
     // 星云按方向采样，亮度与距离无关 —— 飞进一个恒星系之后，画面上只剩
     // 几个天体，星云就成了压倒性的奶白底。它是背景，靠近时必须退场。
     const nearK = 0.22 + 0.78 * smooth(this.dist, this.R * 0.35, this.R * 1.1)
-    const focusRetreat = nebulaFocusGain(Boolean(this.focusedStar || this.selected))
     this.nebula.setDim((this.mode === 'all' ? 1 : 0.48) * nearK * focusRetreat)
     this.nebula.update(A * 0.001, this.camera)
 

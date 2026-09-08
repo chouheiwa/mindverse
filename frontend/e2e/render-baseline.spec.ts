@@ -30,7 +30,7 @@ test.describe.configure({ mode: 'serial' })
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1 } as const
 const STATE_NAMES = ['panorama', 'approach-midpoint', 'focused-star', 'planet-focus'] as const
 /** 当前权威的 Babylon 恒星基线；capture:stellar-baseline 写的就是它。 */
-const COMMITTED_STELLAR_BASELINE = 'testdata/render-baselines/babylon-stellar-v3.json'
+const COMMITTED_STELLAR_BASELINE = 'testdata/render-baselines/babylon-stellar-v4.json'
 type StateName = typeof STATE_NAMES[number]
 type PlanetThermal = typeof PLANET_RENDER_CASES[number]['thermal']
 
@@ -100,7 +100,7 @@ test('baseline and candidate outputs derive disjoint PNG paths from their JSON s
   const baselineImages = Object.values(baseline.images)
   const candidateImages = Object.values(candidate.images)
 
-  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v3-${name}.png`))
+  expect(baselineImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-v4-${name}.png`))
   expect(candidateImages.map((path) => basename(path))).toEqual(STATE_NAMES.map((name) => `babylon-stellar-candidate-${name}.png`))
   expect(baselineImages.some((path) => candidateImages.includes(path))).toBe(false)
   for (const path of [...baselineImages, ...candidateImages]) {

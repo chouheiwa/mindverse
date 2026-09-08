@@ -56,11 +56,12 @@ export function selectDominantClusterIds(
 
 /** Question paths unfold only after the user enters their parent star system. */
 export function questionOrbitAlpha(state: OwnedOrbit): number {
-  if (state.phase === 'panorama' || state.phase === 'strata') return 0
+  // planet-focus 是**地表阶段**：轨道椭圆是宇宙家具，回答的是「我在系统的
+  // 哪里」，站在地表上时这个问题不成立 —— 画出来就还是轨道视角。
+  if (state.phase === 'panorama' || state.phase === 'strata' || state.phase === 'planet-focus') return 0
   if (state.ownerKey !== state.focusedOwnerKey) return 0
   if (state.phase === 'approach') return 0.34 * reveal(state.systemReveal)
-  if (state.phase === 'star-focus') return 0.34
-  return state.questionId === state.selectedQuestionId ? 0.92 : 0.08
+  return 0.34
 }
 
 export function questionPlanetPresentation(state: OwnedOrbit): Readonly<{

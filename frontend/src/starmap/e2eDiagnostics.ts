@@ -56,6 +56,8 @@ export interface RenderSnapshot {
     soloCount?: number
     starfieldPointCount?: number
     starfieldShellCount?: number
+    /** 宇宙背景增益。地表阶段必须是 0。 */
+    backdropGain?: number
     renderCostMs?: number
     maxRenderCostMs?: number
   }

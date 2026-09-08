@@ -9,10 +9,18 @@ const cluster = (g: number, n: number): Cluster => ({
 })
 
 describe('visibleClusterLabels', () => {
-  test('uses stable population ordering and caps panorama at seven', () => {
+  test('names every cluster, biggest first, without mutating the source', () => {
+    // 星群名是导航信息：没有名字的星群，用户根本不知道那是什么。
+    // 这里只定**顺序**（规模降序，同规模按原序稳定）—— 屏幕装不下时由
+    // labelPainter 的去重叠淘汰后来者，而不是预先砍掉名单。
     const input = [cluster(0, 4), cluster(1, 9), cluster(2, 9), cluster(3, 8), cluster(4, 7), cluster(5, 6), cluster(6, 5), cluster(7, 3)]
-    expect(visibleClusterLabels(input, null).map((c) => c.g)).toEqual([1, 2, 3, 4, 5, 6, 0])
+    expect(visibleClusterLabels(input, null).map((c) => c.g)).toEqual([1, 2, 3, 4, 5, 6, 0, 7])
     expect(input.map((c) => c.g)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  })
+
+  test('keeps naming every cluster however many there are', () => {
+    const many = Array.from({ length: 40 }, (_, index) => cluster(index, 40 - index))
+    expect(visibleClusterLabels(many, null)).toHaveLength(40)
   })
 
   test('shows all five clusters and only the focused cluster when focused', () => {

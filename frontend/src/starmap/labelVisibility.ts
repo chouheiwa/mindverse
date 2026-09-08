@@ -10,10 +10,13 @@ export interface StarLabelVisibility {
 
 export function visibleClusterLabels(clusters: readonly Cluster[], focusCluster: number | null): Cluster[] {
   if (focusCluster !== null) return clusters.filter((cluster) => cluster.g === focusCluster)
+  // 每个星群都要有名字：一屏没有名字的光点，用户根本认不出那是什么。
+  // 这里只定**顺序**（规模降序，同规模按原序稳定）。屏幕装不下时由
+  // labelPainter 的去重叠淘汰后来者 —— 让大的先占住位置，而不是预先砍名单：
+  // 一个星群有没有资格拿到名字，不该取决于它排第几。
   return clusters
     .map((cluster, index) => ({ cluster, index }))
     .sort((a, b) => b.cluster.n - a.cluster.n || a.index - b.index)
-    .slice(0, 7)
     .map(({ cluster }) => cluster)
 }
 

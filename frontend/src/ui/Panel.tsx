@@ -84,7 +84,8 @@ function SemanticEntries({ index, star, onEnterQuestion, onInspectProbe, persona
               <button ref={(node) => {
                 if (node) questionActions.current.set(question.id, node)
                 else questionActions.current.delete(question.id)
-              }} type="button" onClick={(event) => onEnterQuestion(question.id, event.currentTarget)}>进入问题行星</button>
+              }} type="button" data-focus-return={`question-entry:${question.id}`}
+                onClick={(event) => onEnterQuestion(question.id, event.currentTarget)}>进入问题行星</button>
               <a href={question.url} target="_blank" rel="noopener noreferrer" aria-label="查看知乎原问题">原问题 ↗</a>
             </div>
           </li>

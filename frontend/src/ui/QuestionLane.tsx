@@ -15,6 +15,7 @@ export function QuestionLane({ planets, selectedId, onSelect }: {
             {planets.map((planet) => (
               <li key={planet.question.id}>
                 <button type="button" className={selectedId === planet.question.id ? 'is-selected' : ''}
+                  data-focus-return={`lane:${planet.question.id}`}
                   aria-pressed={selectedId === planet.question.id}
                   aria-label={`轨道 ${planet.orbitIndex}，${planet.question.title}，${planet.answerCount} 个回答`}
                   onClick={(event) => onSelect(planet, event.currentTarget)}>

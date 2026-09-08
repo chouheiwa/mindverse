@@ -292,18 +292,32 @@ test('Reduced Motion reaches the same stable focused state without a long flight
   expect(reduced.scene.cameraDistance).toBeCloseTo(normal.scene.cameraDistance, 3)
 })
 
+/** 进入问题行星。这一步会一路飞进大气层落到地层 —— 工作台在地层背后。 */
 async function openQuestionWorkspace(page: Page, title: string) {
   const laneButton = page.getByRole('button', { name: new RegExp(title) })
   await laneButton.click()
   await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
-  await expect(page.getByRole('heading', { name: title })).toBeVisible()
+  await expect.poll(async () => (await snapshot(page))?.scenePhase).toBe('strata-free')
 }
 
+/**
+ * 落在地层里。
+ *
+ * 进入行星会自动飞进去，所以多数情况下这里不需要点任何东西；从工作台退回来
+ * 之后再次进入时，「打开答案地层」按钮仍在，点它即可。两种起点都要能用。
+ */
 async function enterStrata(page: Page, evidenceLabel: '回溯地层' | '当前可观测表层') {
   const trigger = page.getByRole('button', { name: '打开答案地层' })
-  await trigger.click()
+  if (await trigger.isVisible().catch(() => false)) await trigger.click()
   await expect.poll(async () => (await snapshot(page))?.scenePhase).toBe('strata-free')
   await expect(page.getByRole('region', { name: '答案地层导航' })).toContainText(evidenceLabel)
+}
+
+/** 退回行星表面，才看得到问题工作台。 */
+async function backToWorkspace(page: Page, title: string) {
+  await page.getByRole('button', { name: '返回行星表面' }).click()
+  await expect.poll(async () => (await snapshot(page))?.scenePhase).toBe('universe')
+  await expect(page.getByRole('heading', { name: title })).toBeVisible()
 }
 
 async function exitStrata(page: Page) {
@@ -359,6 +373,8 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
   await expect.poll(async () => (await snapshot(page))?.resources.planetUpdatesLastFrame).toBe(2)
   expect((await snapshot(page))!.resources.planetVisualConstructions).toBe(2)
   await openQuestionWorkspace(page, '固定地层问题')
+  // 进入行星直落地质，工作台的近景舞台要退回表面才在。
+  await backToWorkspace(page, '固定地层问题')
 
   const selectedBefore = (await snapshot(page))!.projectedBounds.selectedPlanet!
   expect(Math.min(selectedBefore.width, selectedBefore.height)).toBeGreaterThanOrEqual(720 * 0.24)

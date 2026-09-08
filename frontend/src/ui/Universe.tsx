@@ -48,6 +48,8 @@ export function PrivateUniverseView() {
   const cardRef = useRef<HTMLDivElement>(null)
   const cardSizeRef = useRef({ width: 332, height: 180 })
   const focusReturnRef = useRef<HTMLButtonElement | null>(null)
+  /** 来路按钮的 data-focus-return 标记，用于它被重新挂载后找回。 */
+  const focusReturnKeyRef = useRef<string | null>(null)
   const panelFocusReturnRef = useRef<HTMLElement | null>(null)
   const focusCardFromLaneRef = useRef(false)
   const [genesisDone, setGenesisDone] = useState(reduceMotion())
@@ -380,9 +382,32 @@ export function PrivateUniverseView() {
     setQuestionEntry(selected)
   }, [setPlanet, setQuestionEntry])
 
-  const restoreLaneFocus = useCallback(() => {
-    requestAnimationFrame(() => (focusReturnRef.current ?? canvasRef.current)?.focus())
+  /**
+   * 焦点归还目标。
+   *
+   * 存的是 DOM 节点，而进入答案地层会把来路那一整块卸载掉 —— 对已经脱离文档的
+   * 节点调 `.focus()` 什么也不会发生，焦点会掉回 <body>，键盘用户就此断线。
+   * 所以设置时一并记住它的 `data-focus-return` 标记，节点失联时按标记找回
+   * 重新挂载的那一个。两条来路（航道轨道按钮 / 面板入口按钮）各回各的。
+   */
+  const rememberQuestionReturn = useCallback((trigger: HTMLButtonElement | null) => {
+    focusReturnRef.current = trigger
+    focusReturnKeyRef.current = trigger?.getAttribute('data-focus-return') ?? null
   }, [])
+
+  const questionReturnTarget = useCallback((): HTMLElement | null => {
+    const stored = focusReturnRef.current
+    if (stored?.isConnected) return stored
+    const key = focusReturnKeyRef.current
+    const live = key
+      ? document.querySelector<HTMLButtonElement>(`[data-focus-return="${CSS.escape(key)}"]`)
+      : null
+    return live ?? canvasRef.current
+  }, [])
+
+  const restoreLaneFocus = useCallback(() => {
+    requestAnimationFrame(() => questionReturnTarget()?.focus())
+  }, [questionReturnTarget])
 
   const closePlanet = useCallback(() => {
     setPlanet(null)
@@ -392,7 +417,7 @@ export function PrivateUniverseView() {
 
   const selectQuestionFromLane = useCallback((datum: QuestionPlanetDatum, trigger: HTMLButtonElement) => {
     const alreadySelected = planet?.question.id === datum.question.id
-    focusReturnRef.current = trigger
+    rememberQuestionReturn(trigger)
     focusCardFromLaneRef.current = true
     setQuestionEntry(null)
     const selected = rendererRef.current?.selectQuestionPlanet(datum.starId, datum.question.id)
@@ -404,17 +429,17 @@ export function PrivateUniverseView() {
         cardRef.current?.querySelector<HTMLButtonElement>('[data-question-primary]')?.focus()
       })
     }
-  }, [planet?.question.id, setQuestionEntry])
+  }, [planet?.question.id, rememberQuestionReturn, setQuestionEntry])
 
   const enterQuestionFromPanel = useCallback((questionId: string, trigger: HTMLButtonElement) => {
     if (!star || !('id' in star) || typeof star.id !== 'string') return
     const selected = rendererRef.current?.selectQuestionPlanet(star.id, questionId)
     if (!selected) return
-    focusReturnRef.current = trigger
+    rememberQuestionReturn(trigger)
     focusCardFromLaneRef.current = false
     setPlanet(null)
     setQuestionEntry(selected)
-  }, [setPlanet, setQuestionEntry, star])
+  }, [rememberQuestionReturn, setPlanet, setQuestionEntry, star])
 
   const leaveQuestionEntry = useCallback(() => {
     setQuestionEntry(null)
@@ -436,6 +461,29 @@ export function PrivateUniverseView() {
     rendererRef.current?.enterStrata({ token, questionId, scene })
   }, [questionEntry, strataState, universeIndex])
 
+  /**
+   * 进了行星就一路飞进大气层，落到答案地层 —— 不再要求再点一次「打开答案地层」。
+   *
+   * renderer.enterStrata 自己会 cancelFlight('strata') 并从当前机位起手，所以
+   * 「逼近行星 → 穿过大气层 → 地层」是一条连续动画，不是两段拼接。回答少的
+   * 问题也照样进去：地层会以 surface-only 开启并显示「深层已阻断」，而不是
+   * 把人晾在宇宙视角。免责声明在 StrataHud 里有自己的一份，不会丢。
+   *
+   * 每颗行星只自动进入一次：退出地层时 questionEntry 仍在，靠这个 ref 记住
+   * 已经进过，否则用户会被一直拉回地层、永远出不来。
+   */
+  const autoEnteredQuestionRef = useRef<string | null>(null)
+  useEffect(() => {
+    const questionId = questionEntry?.question.id ?? null
+    if (!questionId) {
+      autoEnteredQuestionRef.current = null
+      return
+    }
+    if (autoEnteredQuestionRef.current === questionId) return
+    autoEnteredQuestionRef.current = questionId
+    enterStrata(questionId)
+  }, [enterStrata, questionEntry])
+
   const moveStrata = useCallback((intent: Parameters<MindverseRenderer['moveStrata']>[0]) => {
     rendererRef.current?.moveStrata(intent)
   }, [])
@@ -455,8 +503,8 @@ export function PrivateUniverseView() {
   }, [])
 
   const getQuestionReturnFocus = useCallback(
-    () => focusReturnRef.current ?? canvasRef.current,
-    [],
+    () => questionReturnTarget(),
+    [questionReturnTarget],
   )
 
   const panelOpen = star !== null || mode !== 'all'

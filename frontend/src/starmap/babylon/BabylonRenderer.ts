@@ -21,6 +21,14 @@ import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
 import { backdropGain } from '../backdropVisibility'
+import { PlanetSky } from './planetSky'
+import { PlanetSurfaceWorld } from './planetSurfaceWorld'
+import { createPlanetTerrainSource } from './planetTerrainSource'
+import {
+  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceSkyVisible, surfaceWalkEnabled,
+  surfaceWorldVisible, type SurfaceStageState,
+} from './surfaceStage'
+import { standAt, surfaceFrame, walkSurface, type SurfacePose } from './surfaceCamera'
 import { clusterRingOpacity } from '../clusterRingVisibility'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot, type StellarDiagnosticsSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
@@ -226,6 +234,9 @@ interface PlanetVisualRecord {
   readonly orbit: LinesMesh
 }
 
+/** 轨道俯冲到站立的时长。与大气层穿越同量级，让落地有过程感。 */
+const SURFACE_DESCENT_MS = 1100
+
 export class BabylonRenderer implements MindverseRenderer {
   private readonly runtime: BabylonRuntime
   private readonly callbacks: RendererCallbacks
@@ -300,6 +311,20 @@ export class BabylonRenderer implements MindverseRenderer {
   private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
   private destroyed = false
   private universeVisible = true
+  // ── 可环绕地表 ──
+  private surfaceStage: SurfaceStageState = IDLE_SURFACE_STAGE
+  private surfaceWorld: PlanetSurfaceWorld | null = null
+  private surfaceSky: PlanetSky | null = null
+  private surfaceRoot: TransformNode | null = null
+  private surfacePose: SurfacePose | null = null
+  /** 地表世界的行星基准半径（世界单位）。 */
+  private surfaceRadius = 1
+  private surfaceDisplacement = 0
+  private surfaceField: import('./terrainField').PlanetTerrainField | null = null
+  /** 俯冲的起点机位与起飞时刻。落地后不再使用。 */
+  private surfaceDescent: Readonly<{
+    startedAt: number; elapsed: number; from: Vector3; fromTarget: Vector3
+  }> | null = null
   /** 上一帧的宇宙背景增益。地表阶段必须是 0 —— 这是「没有宇宙视角」的判据。 */
   private backdropGainValue = 1
   private workspaceOpen = false
@@ -530,6 +555,7 @@ export class BabylonRenderer implements MindverseRenderer {
               starfieldPointCount: this.starfield?.diagnostics().pointCount ?? 0,
               starfieldShellCount: this.starfield?.diagnostics().batchCount ?? 0,
               backdropGain: this.backdropGainValue,
+              surfaceStage: this.surfaceStageDiagnostics(),
               renderCostMs: this.runtime.diagnostics().lastRenderCostMs,
               maxRenderCostMs: this.runtime.diagnostics().maxRenderCostMs,
             }),
@@ -588,6 +614,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.starfield = null
     this.dust?.dispose()
     this.dust = null
+    this.disposeSurfaceWorld()
     this.rings?.dispose()
     this.rings = null
     this.overlay?.dispose()
@@ -1150,6 +1177,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.overlay?.setUniform('uT', this.motionTime())
     this.overlay?.setUniform('uProjScale', projectionScale)
     this.drawLabels(radius, near, far)
+    this.updatePlanetSurface()
     this.probeLayer?.update({
       elapsedMs: this.motionTime(),
       projectionScale,
@@ -1653,6 +1681,194 @@ export class BabylonRenderer implements MindverseRenderer {
     this.scene.fogColor = new Color3(fog.color[0], fog.color[1], fog.color[2])
     const guide = this.caveGuideLight
     if (guide) guide.position.y = strataGuideLight(depth, babylonUpliftTier(this.quality)).y
+  }
+
+  /**
+   * 进入可环绕地表：宇宙退场，脚下换成这颗行星的真实地形。
+   *
+   * 落点取当前相机方向在行星上的投影 —— 你从哪个方向飞下去，就落在那一面，
+   * 而不是每次都落在同一个「默认点」。
+   */
+  enterPlanetSurface(questionId: string): boolean {
+    if (this.destroyed || !this.selectedVisual) return false
+    if (this.selectedVisual.datum.question.id !== questionId) return false
+    const { field, displacement } = createPlanetTerrainSource(
+      this.selectedVisual.descriptor, this.quality,
+    )
+    const centre = this.selectedVisual.visual.activeMesh.position
+    const camera = this.camera.globalPosition
+    const away = new Vector3(camera.x - centre.x, camera.y - centre.y, camera.z - centre.z)
+    const landing: readonly [number, number, number] = away.lengthSquared() > 1e-9
+      ? [away.x / away.length(), away.y / away.length(), away.z / away.length()]
+      : [0, 1, 0]
+
+    this.disposeSurfaceWorld()
+    const root = new TransformNode('planet-surface-root', this.scene)
+    root.position.copyFrom(centre)
+    this.surfaceRoot = root
+    this.surfaceRadius = this.selectedPlanetWorldRadius()
+    this.surfaceDisplacement = displacement
+    this.surfaceWorld = new PlanetSurfaceWorld(this.scene, root, {
+      field,
+      radius: this.surfaceRadius,
+      displacement,
+      resolution: this.quality === 'high' ? 8 : this.quality === 'medium' ? 6 : 4,
+      skirtDepth: 0.02,
+      maxDepth: this.quality === 'low' ? 4 : 5,
+      detailAngle: 0.35,
+      budget: this.quality === 'high' ? 400 : 240,
+    })
+    this.surfaceSky = new PlanetSky(this.scene, root, {
+      radius: this.surfaceRadius * 6,
+      thermal: this.selectedVisual.descriptor.thermal,
+    })
+    this.surfaceField = field
+    // 站在落点上，眼高按行星半径取比例，换一颗大小不同的行星观感一致。
+    this.surfacePose = standAt(landing, this.surfaceRadius * 0.012)
+    this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
+      kind: 'enter', questionId, landing,
+    })
+    // 俯冲的起点就是此刻的机位 —— 从你飞过来的地方一路落下去，不做瞬移。
+    this.surfaceDescent = Object.freeze({
+      startedAt: performance.now(),
+      elapsed: 0,
+      from: this.camera.globalPosition.clone(),
+      fromTarget: this.camera.target.clone(),
+    })
+    this.applySurfaceVisibility()
+    return true
+  }
+
+  /** 离开地表回到轨道。俯冲途中也必须能退，否则会卡在半空。 */
+  exitPlanetSurface(): void {
+    if (this.surfaceStage.phase === 'idle') return
+    this.surfaceStage = advanceSurfaceStage(this.surfaceStage, { kind: 'exit' })
+    this.disposeSurfaceWorld()
+    this.applySurfaceVisibility()
+  }
+
+  /** 行走输入。只有站稳之后才接受 —— 俯冲途中或下潜中走会同时跑两套相机。 */
+  walkPlanetSurface(input: Readonly<{
+    forward: number; strafe: number; turn: number; tilt: number
+  }>): boolean {
+    if (!surfaceWalkEnabled(this.surfaceStage) || !this.surfacePose) return false
+    this.surfacePose = walkSurface(this.surfacePose, input)
+    return true
+  }
+
+  surfaceStageDiagnostics(): Readonly<{
+    phase: SurfaceStageState['phase']
+    descent: number
+    chunkCount: number
+    meshCount: number
+    builtThisUpdate: number
+    vertexCount: number
+    skyVisible: boolean
+    groundRadius: number
+  }> {
+    const world = this.surfaceWorld?.diagnostics()
+    const frame = this.surfacePose && this.surfaceField
+      ? surfaceFrame(this.surfacePose, this.surfaceField, this.surfaceRadius, this.surfaceDisplacement)
+      : null
+    return Object.freeze({
+      phase: this.surfaceStage.phase,
+      descent: this.surfaceStage.descent,
+      chunkCount: world?.chunkCount ?? 0,
+      meshCount: world?.meshCount ?? 0,
+      builtThisUpdate: world?.builtThisUpdate ?? 0,
+      vertexCount: world?.vertexCount ?? 0,
+      skyVisible: surfaceSkyVisible(this.surfaceStage),
+      groundRadius: frame?.groundRadius ?? 0,
+    })
+  }
+
+  private applySurfaceVisibility(): void {
+    const present = surfaceWorldVisible(this.surfaceStage)
+    this.surfaceRoot?.setEnabled(present)
+    this.surfaceSky?.setDim(surfaceSkyVisible(this.surfaceStage) ? 1 : 0)
+    // 站在地表上时宇宙必须整个退场 —— 这个阶段没有轨道视角。
+    if (present) this.universeRoot.setEnabled(false)
+    else if (this.universeVisible) this.universeRoot.setEnabled(true)
+  }
+
+  private disposeSurfaceWorld(): void {
+    this.surfaceWorld?.dispose()
+    this.surfaceWorld = null
+    this.surfaceSky?.dispose()
+    this.surfaceSky = null
+    this.surfaceRoot?.dispose(false, false)
+    this.surfaceRoot = null
+    this.surfacePose = null
+    this.surfaceField = null
+  }
+
+  /** 每帧驱动地表：块的增删、天空、相机。 */
+  private updatePlanetSurface(): void {
+    const pose = this.surfacePose
+    const field = this.surfaceField
+    if (!pose || !field || !surfaceWorldVisible(this.surfaceStage)) return
+    const frame = surfaceFrame(pose, field, this.surfaceRadius, this.surfaceDisplacement)
+    const radius = Math.hypot(frame.position[0], frame.position[1], frame.position[2])
+    // cameraRadius 是**行星半径的倍数**，不是世界距离 —— 分块 LOD 按它判角直径。
+    this.surfaceWorld?.update(pose.direction, radius / Math.max(1e-6, this.surfaceRadius))
+    const root = this.surfaceRoot
+    if (!root) return
+    const landed = new Vector3(
+      root.position.x + frame.position[0],
+      root.position.y + frame.position[1],
+      root.position.z + frame.position[2],
+    )
+    const landedTarget = new Vector3(
+      root.position.x + frame.target[0],
+      root.position.y + frame.target[1],
+      root.position.z + frame.target[2],
+    )
+
+    // 俯冲：从进入时的机位插值到站立机位。墙钟驱动（与相机飞行同一套理由：
+    // 慢硬件上按帧累加会把俯冲拖成慢动作），走完再宣告落地。
+    const descent = this.surfaceDescent
+    if (descent && this.surfaceStage.phase === 'descending') {
+      const elapsed = flightElapsedMs(
+        descent.startedAt, performance.now(), SURFACE_DESCENT_MS, descent.elapsed,
+      )
+      this.surfaceDescent = Object.freeze({ ...descent, elapsed })
+      const progress = SURFACE_DESCENT_MS <= 0 || this.reducedMotion
+        ? 1
+        : Math.min(1, elapsed / SURFACE_DESCENT_MS)
+      const eased = progress * progress * (3 - 2 * progress)
+      this.camera.setPosition(Vector3.Lerp(descent.from, landed, eased))
+      this.camera.setTarget(Vector3.Lerp(descent.fromTarget, landedTarget, eased))
+      // upVector 必须整体赋值：ArcRotateCamera 的 setter 会重建 _upToYMatrix 缓存，
+      // 原地 .set() 绕过 setter，缓存保持 undefined，真引擎上抛
+      // "Cannot read properties of undefined (reading 'm')" 并整页掉进文本降级。
+      this.camera.upVector = new Vector3(frame.up[0], frame.up[1], frame.up[2])
+      this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
+        kind: 'descend', token: this.surfaceStage.token, progress,
+      })
+      if (progress >= 1) {
+        this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
+          kind: 'landed', token: this.surfaceStage.token,
+        })
+        this.surfaceDescent = null
+      }
+    } else {
+      this.camera.upVector = new Vector3(frame.up[0], frame.up[1], frame.up[2])
+      this.camera.setTarget(landedTarget)
+      this.camera.setPosition(landed)
+    }
+    this.surfaceSky?.setSun(this.surfaceSunDirection())
+  }
+
+  /** 恒星相对这颗行星的方向，用来给天空定太阳位置。 */
+  private surfaceSunDirection(): readonly [number, number, number] {
+    const root = this.surfaceRoot
+    if (!root || !this.focusedStar) return [0, 1, 0]
+    const star = this.currentStarPosition(this.focusedStar)
+    const dx = star.x - root.position.x
+    const dy = star.y - root.position.y
+    const dz = star.z - root.position.z
+    const length = Math.hypot(dx, dy, dz)
+    return length > 1e-6 ? [dx / length, dy / length, dz / length] : [0, 1, 0]
   }
 
   private setUniverseVisible(visible: boolean): void {

@@ -115,6 +115,18 @@ export interface MindverseRenderer {
   focusProbePart(part: ProbePart | null): void
   exitProbeInspection(): void
   skipGenesis(): void
+  /**
+   * 进入可环绕地表。**可选能力**：Three 渲染器没有 CPU 地形，不实现它。
+   * 调用方拿不到这个方法时应退回「直接进答案地层」的旧路径，而不是报错。
+   */
+  enterPlanetSurface?(questionId: string): boolean
+  /** 离开地表回到轨道。俯冲途中也必须能退。 */
+  exitPlanetSurface?(): void
+  /** 地表行走输入。返回 false 表示当前阶段不接受（俯冲中或下潜中）。 */
+  walkPlanetSurface?(input: Readonly<{
+    forward: number; strafe: number; turn: number; tilt: number
+  }>): boolean
+
   enterStrata(request: StrataRequest): void
   moveStrata(input: StrataMoveIntent): void
   pickStrataAt(clientX: number, clientY: number): void

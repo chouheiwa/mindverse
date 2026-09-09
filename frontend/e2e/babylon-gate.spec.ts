@@ -299,8 +299,9 @@ async function openQuestionWorkspace(page: Page, title: string) {
   await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
   // 俯冲 900ms + 穿越 700ms。SwiftShader 下一帧要上百毫秒，同样的动画要跑好几秒 ——
   // 慢的是软件渲染，不是产品，所以这里给足超时而不是把动画改短。
-  await expect.poll(async () => (await snapshot(page))?.scenePhase, { timeout: 30_000 })
-    .toBe('strata-free')
+  await expect.poll(
+    async () => (await snapshot(page))?.resources.surfaceStage?.phase, { timeout: 30_000 },
+  ).toBe('walking')
 }
 
 /**
@@ -319,8 +320,6 @@ async function enterStrata(page: Page, evidenceLabel: '回溯地层' | '当前�
 
 /** 退回行星表面，才看得到问题工作台。 */
 async function backToWorkspace(page: Page, title: string) {
-  await page.getByRole('button', { name: '返回行星表面' }).click()
-  await expect.poll(async () => (await snapshot(page))?.scenePhase).toBe('universe')
   await expect(page.getByRole('heading', { name: title })).toBeVisible()
 }
 
@@ -710,3 +709,4 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   expect(atPlanet.resources.backdropGain).toBe(0)
   expect(atPlanet.stellar.visibleQuestionOrbits).toBe(0)
 })
+

@@ -481,7 +481,10 @@ export function PrivateUniverseView() {
     }
     if (autoEnteredQuestionRef.current === questionId) return
     autoEnteredQuestionRef.current = questionId
-    enterStrata(questionId)
+    // 先站到地表上。可环绕地表是 Babylon 独有能力；Three 没有 CPU 地形，
+    // 拿不到这个方法时退回旧路径（直接进答案地层），而不是把人晾在轨道视角。
+    const landed = rendererRef.current?.enterPlanetSurface?.(questionId) ?? false
+    if (!landed) enterStrata(questionId)
   }, [enterStrata, questionEntry])
 
   const moveStrata = useCallback((intent: Parameters<MindverseRenderer['moveStrata']>[0]) => {

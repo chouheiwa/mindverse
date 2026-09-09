@@ -32,6 +32,8 @@ const testState = vi.hoisted(() => ({
   focusPickResult: null as Star | null,
   orbitCalls: [] as Array<[number, number]>,
   strataEnterCalls: [] as unknown[],
+  surfaceEnterCalls: [] as string[],
+  surfaceExitCalls: 0,
   strataMoveCalls: [] as unknown[],
   strataExitCalls: [] as number[],
   closeSpecimenCalls: 0,
@@ -88,6 +90,8 @@ vi.mock('virtual:mindverse-renderer', async () => {
     focusProbePart(part: unknown) { testState.partCalls.push(part) }
     setReducedMotion(reduced: boolean) { testState.reducedCalls.push(reduced) }
     orbitWorkspace(dx: number, dy: number) { testState.orbitCalls.push([dx, dy]) }
+    enterPlanetSurface(questionId: string) { testState.surfaceEnterCalls.push(questionId); return true }
+    exitPlanetSurface() { testState.surfaceExitCalls += 1 }
     enterStrata(request: unknown) { testState.strataEnterCalls.push(request) }
     moveStrata(intent: unknown) { testState.strataMoveCalls.push(intent) }
     exitStrata(token: number) { testState.strataExitCalls.push(token) }
@@ -159,6 +163,8 @@ beforeEach(() => {
   testState.focusPickResult = null
   testState.orbitCalls = []
   testState.strataEnterCalls = []
+  testState.surfaceEnterCalls = []
+  testState.surfaceExitCalls = 0
   testState.strataMoveCalls = []
   testState.strataExitCalls = []
   testState.closeSpecimenCalls = 0
@@ -415,8 +421,7 @@ describe('Universe question keyboard integration', () => {
     await user.click(trigger)
     expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(screen.queryByRole('button', { name: '关闭问题行星入口' })).not.toBeInTheDocument()
-    // 进入行星直落地质，退回表面之后才是问题工作台。
-    await exitAutoStrata(user)
+    // 进入行星现在是落到地表，2D 工作台随即可见 —— 不必先退出地层。
     expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
     expect(testState.suspendCalls).toBe(0)
     await user.click(screen.getByRole('button', { name: '返回问题航道' }))
@@ -436,7 +441,8 @@ describe('Universe question keyboard integration', () => {
     await waitFor(() => expect(testState.callbacks).not.toBeNull())
     act(() => testState.callbacks?.onPick?.(star))
     await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
-    // 进入行星即自动飞进大气层，不再需要第二次点击。
+    // 落到地表之后，往脚下挖才进答案地层 —— 这是单独一步。
+    await user.click(await screen.findByRole('button', { name: '打开答案地层' }))
     await waitFor(() => expect(testState.strataEnterCalls).toHaveLength(1))
     expect(testState.strataEnterCalls[0]).toMatchObject({ token: 1, questionId: 'question:7' })
 
@@ -490,8 +496,6 @@ describe('Universe question keyboard integration', () => {
 
     await user.keyboard('{Enter}')
     expect(testState.suspendCalls).toBe(0)
-    // 进入行星现在直落地质，工作台是「从地质退回来」才到的地方。
-    await exitAutoStrata(user)
     expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
     const stage = screen.getByRole('region', { name: '问题行星近景' })
     fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 30 }))
@@ -510,14 +514,12 @@ describe('Universe question keyboard integration', () => {
     await user.click(laneButton)
     await user.click(within(await screen.findByRole('complementary', { name: '问题行星入口' }))
       .getByRole('button', { name: '进入问题行星' }))
-    await exitAutoStrata(user)
     await user.click(await screen.findByRole('button', { name: '返回问题航道' }))
     await waitFor(() => expect(focusReturnTarget('lane:question:7')).toHaveFocus())
 
     await user.click(laneButton)
     await user.click(within(await screen.findByRole('complementary', { name: '问题行星入口' }))
       .getByRole('button', { name: '进入问题行星' }))
-    await exitAutoStrata(user)
     expect(await screen.findByRole('dialog')).toBeVisible()
     act(() => testState.callbacks?.onPick?.(null))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -527,7 +529,6 @@ describe('Universe question keyboard integration', () => {
     await user.click(resetLaneButton)
     await user.click(within(await screen.findByRole('complementary', { name: '问题行星入口' }))
       .getByRole('button', { name: '进入问题行星' }))
-    await exitAutoStrata(user)
     expect(await screen.findByRole('dialog')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '熄灭的星' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -555,14 +556,6 @@ describe('Universe question keyboard integration', () => {
 /** 焦点归还断言按标记走：地层往返会重挂载来路按钮，握旧节点会把「行为正确」误判成「焦点丢了」。 */
 const focusReturnTarget = (key: string) => document.querySelector(`[data-focus-return="${key}"]`)
 
-async function exitAutoStrata(user: ReturnType<typeof userEvent.setup>) {
-  const last = testState.strataEnterCalls[testState.strataEnterCalls.length - 1] as { token: number }
-  const token = last.token
-  act(() => testState.callbacks?.onStrataPhase?.({ token, questionId: 'question:7', phase: 'surface-crossing' }))
-  act(() => testState.callbacks?.onStrataPhase?.({ token, questionId: 'question:7', phase: 'strata-free' }))
-  await user.click(await screen.findByRole('button', { name: '返回行星表面' }))
-  act(() => testState.callbacks?.onStrataExited?.({ token, questionId: 'question:7' }))
-}
 
 test('entering a question planet flies into the atmosphere, and leaving does not pull you back in', async () => {
   const user = userEvent.setup()
@@ -572,6 +565,7 @@ test('entering a question planet flies into the atmosphere, and leaving does not
   act(() => testState.callbacks?.onPick?.(star))
 
   await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+  await user.click(await screen.findByRole('button', { name: '打开答案地层' }))
   await waitFor(() => expect(testState.strataEnterCalls).toHaveLength(1))
   expect(testState.strataEnterCalls[0]).toMatchObject({ token: 1, questionId: 'question:7' })
 
@@ -584,4 +578,18 @@ test('entering a question planet flies into the atmosphere, and leaving does not
   expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
   await waitFor(() => expect(testState.strataEnterCalls).toHaveLength(1))
   expect(screen.queryByRole('region', { name: '答案地层导航' })).not.toBeInTheDocument()
+})
+
+test('entering a question planet lands on its surface, and digging is a separate step', async () => {
+  const user = userEvent.setup()
+  render(<UniverseView />)
+  await screen.findByRole('heading', { name: '好奇心星图' })
+  await waitFor(() => expect(testState.callbacks).not.toBeNull())
+  act(() => testState.callbacks?.onPick?.(star))
+
+  await user.click(await screen.findByRole('button', { name: '进入问题行星' }))
+
+  // 进来先站到地表上 —— 这一步不该直接把人塞进地层。
+  await waitFor(() => expect(testState.surfaceEnterCalls).toEqual(['question:7']))
+  expect(testState.strataEnterCalls).toHaveLength(0)
 })

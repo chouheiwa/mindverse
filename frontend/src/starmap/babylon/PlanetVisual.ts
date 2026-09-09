@@ -5,7 +5,7 @@ import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Quaternion, Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector.js'
 import { CreateIcoSphere } from '@babylonjs/core/Meshes/Builders/icoSphereBuilder.js'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
-import { createTerrainField } from './terrainField'
+import { createPlanetTerrainSource } from './planetTerrainSource'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
@@ -16,7 +16,6 @@ import { describePlanetAppearance, type PlanetAppearance } from './planetAppeara
 import { planetInteractionRim } from './interactionFeedback'
 import { babylonUpliftTier, type BabylonUpliftTier } from './visualUplift'
 import type { Quality } from '../quality'
-import { buildPlanetTerrain } from './planetTerrain'
 import { planetAtmosphereFragmentShader } from './shaders/planetAtmosphere.fragment.fx'
 import { planetAtmosphereVertexShader } from './shaders/planetAtmosphere.vertex.fx'
 import { planetFragmentShader } from './shaders/planet.fragment.fx'
@@ -348,15 +347,8 @@ export class PlanetVisual {
     const data = VertexData.CreateIcoSphere({
       radius: 1, subdivisions: level === 'high' ? 12 : level === 'medium' ? 6 : 3, flat: false,
     })
-    const terrain = buildPlanetTerrain(this.descriptor, level)
-    const field = createTerrainField({
-      ...terrain,
-      seed: this.descriptor.seed,
-      detailDensity: this.descriptor.detailDensity,
-      faultStrength: this.descriptor.faultStrength,
-      qualityLevel: QUALITY_LEVEL[level],
-    })
-    const displacement = 0.045 + this.descriptor.detailDensity * 0.08
+    // 与可环绕地表世界共用同一个构造口 —— 两边必须是同一片地貌。
+    const { field, displacement } = createPlanetTerrainSource(this.descriptor, level)
     const positions = data.positions!
     const normals = data.normals!
     const attributes = new Float32Array(positions.length / 3 * 4)

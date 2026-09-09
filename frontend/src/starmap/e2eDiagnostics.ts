@@ -58,6 +58,17 @@ export interface RenderSnapshot {
     starfieldShellCount?: number
     /** 宇宙背景增益。地表阶段必须是 0。 */
     backdropGain?: number
+    /** 可环绕地表的阶段与规模。没进地表时 phase 是 idle、各计数为 0。 */
+    surfaceStage?: {
+      phase: 'idle' | 'descending' | 'walking' | 'digging'
+      descent: number
+      chunkCount: number
+      meshCount: number
+      builtThisUpdate: number
+      vertexCount: number
+      skyVisible: boolean
+      groundRadius: number
+    }
     renderCostMs?: number
     maxRenderCostMs?: number
   }

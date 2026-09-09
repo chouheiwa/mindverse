@@ -28,7 +28,10 @@ describe('PlanetSky', () => {
     const positions = sky.mesh.getVerticesData('position')!
     const normals = sky.mesh.getVerticesData('normal')!
     expect(positions[0]! * normals[0]! + positions[1]! * normals[1]! + positions[2]! * normals[2]!).toBeLessThan(0)
-    expect(sky.mesh.layerMask).toBe(0)
+    // 天空交给常规管线画，不再手动调 mesh.render —— 那要用还没准备好的场景变换
+    // 矩阵，真引擎上会抛「reading 'm'」而 NullEngine 测不出来。
+    expect(sky.mesh.infiniteDistance).toBe(true)
+    expect(sky.mesh.applyFog).toBe(false)
   })
 
   it('hides at zero dim and clamps nonfinite or excessive input', () => {
@@ -79,10 +82,11 @@ describe('PlanetSky', () => {
     expect(sky.mesh.position.asArray()).toEqual(camera.globalPosition.asArray())
     expect(sky.mesh.rotation.asArray()).toEqual([0, 0, 0])
     sky.diagnostics().up.forEach((value, i) => expect(value).toBeCloseTo(i === 0 ? 1 : 0, 6))
-    expect(draw).toHaveBeenCalledOnce()
+    // 绝不手动绘制：这一条是回归闸，防止有人再把 mesh.render 放回 draw phase。
+    expect(draw).not.toHaveBeenCalled()
     sky.setDim(0)
     scene.onBeforeDrawPhaseObservable.notifyObservers(scene)
-    expect(draw).toHaveBeenCalledOnce()
+    expect(draw).not.toHaveBeenCalled()
   })
 
   it('keeps every thermal zenith darker than its horizon', () => {

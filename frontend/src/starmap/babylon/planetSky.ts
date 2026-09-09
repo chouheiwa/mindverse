@@ -56,7 +56,10 @@ export class PlanetSky {
     this.mesh = CreateSphere('planet-sky', { diameter: 2, segments: 32, sideOrientation: Mesh.BACKSIDE }, scene)
     // 不继承行星或相机旋转，否则转动视角时太阳会黏在屏幕上。
     this.mesh.isPickable = false
-    this.mesh.layerMask = 0
+    // 天空跟着相机走，永远在最远处。用 infiniteDistance 让 Babylon 自己处理，
+    // 比手动改 position 稳，也不会被相机的近远裁剪面切掉。
+    this.mesh.infiniteDistance = true
+    this.mesh.applyFog = false
     this.material = new ShaderMaterial('planet-sky-material', scene, {
       vertexSource: planetSkyVertexShader, fragmentSource: planetSkyFragmentShader,
     }, { attributes: ['position'], uniforms: [...PLANET_SKY_UNIFORMS], needAlphaBlending: true })
@@ -80,8 +83,10 @@ export class PlanetSky {
       const near = Math.max(0.001, camera.minZ)
       const far = camera.maxZ > near ? camera.maxZ : Math.max(this.radius * 2, near * 4)
       this.mesh.scaling.setAll(Math.min(far * 0.9, Math.max(near * 2, this.radius)))
-      this.mesh.computeWorldMatrix(true)
-      for (const subMesh of this.mesh.subMeshes) this.mesh.render(subMesh, true)
+      // 不手动调 mesh.render：那要在 onBeforeDrawPhase 里用还没准备好的场景变换
+      // 矩阵，真引擎上会抛 "Cannot read properties of undefined (reading 'm')"，
+      // 而 NullEngine 不走绘制路径所以测不出来。交给常规管线画：天球半径远大于
+      // 地形，深度测试自然让地面盖住它，不需要任何特殊次序。
     })
   }
 

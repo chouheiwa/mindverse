@@ -710,3 +710,42 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   expect(atPlanet.stellar.visibleQuestionOrbits).toBe(0)
 })
 
+
+test('a near miss on a question planet selects it instead of ejecting you to the universe', async ({ page }) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  await openStar(page)
+  await page.getByRole('button', { name: /固定地层问题/ }).click()
+  await expect.poll(async () => (await snapshot(page))!.planet.selectedQuestionId).toBe('question:7')
+
+  // 等相机飞停：连续两次采样的投影一致才算稳。行星本身进了恒星系就已冻住，
+  // 这里等的是机位，不是行星。
+  const sample = async () => (await snapshot(page))!.projectedBounds.selectedPlanet!
+  let previous = await sample()
+  let stableRun = 0
+  await expect.poll(async () => {
+    const current = await sample()
+    // 连续两帧接近不算稳：负载下缓动很慢，凑巧接近很常见。要求连续 6 次。
+    stableRun = Math.abs(current.x - previous.x) < 0.05 && Math.abs(current.y - previous.y) < 0.05
+      ? stableRun + 1 : 0
+    previous = current
+    return stableRun
+  }, { timeout: 60_000, intervals: [120] }).toBeGreaterThanOrEqual(6)
+
+  // 稳定之后行星必须真的不动 —— 这条闸的是「移动靶」本身。
+  const bounds = await sample()
+  await page.waitForTimeout(700)
+  const later = await sample()
+  expect(later.x).toBeCloseTo(bounds.x, 2)
+  expect(later.y).toBeCloseTo(bounds.y, 2)
+
+  // 瞄偏：点在行星边缘之外 8px。以前这会被判成空白点击并把人弹回全景。
+  const centre = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+  await canvas(page).click({
+    position: { x: centre.x + bounds.width / 2 + 8, y: centre.y },
+    force: true,
+  })
+  const after = (await snapshot(page))!
+  expect(after.stellar.focusedStarKey).not.toBeNull()
+  expect(after.planet.selectedQuestionId).toBe('question:7')
+})

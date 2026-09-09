@@ -94,9 +94,15 @@ export function advanceSurfaceStage(
   }
 }
 
-/** 地表世界是否应当在场（含往下挖时：洞口还在地表上）。 */
+/**
+ * 地表世界是否应当在场。
+ *
+ * 挖进地层之后**不在场**：洞穴有自己的墙，外面再裹一层地形网格没有意义，而且
+ * 会把地层的明暗分层压平 —— 实测分层带交叉数从 ≥3 掉到 2，「有层次的世界」直接
+ * 变成一片均匀的灰。
+ */
 export function surfaceWorldVisible(state: SurfaceStageState): boolean {
-  return state.phase === 'descending' || state.phase === 'walking' || state.phase === 'digging'
+  return state.phase === 'descending' || state.phase === 'walking'
 }
 
 /** 天空是否可见。挖进地层之后头顶是岩层，不是天。 */

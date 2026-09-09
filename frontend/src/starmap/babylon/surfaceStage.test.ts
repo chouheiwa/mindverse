@@ -51,7 +51,8 @@ describe('the surface stage is business logic, so it lives outside the frame loo
     const digging = advanceSurfaceStage(walking, { kind: 'dig', token: walking.token })
     expect(digging.phase).toBe('digging')
     expect(surfaceSkyVisible(digging)).toBe(false)
-    expect(surfaceWorldVisible(digging)).toBe(true)
+    // 洞穴有自己的墙 —— 外面再裹一层地形会把地层的明暗分层压平。
+    expect(surfaceWorldVisible(digging)).toBe(false)
     const back = advanceSurfaceStage(digging, { kind: 'surfaced', token: digging.token })
     expect(back.phase).toBe('walking')
     expect(surfaceSkyVisible(back)).toBe(true)

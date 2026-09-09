@@ -21,6 +21,7 @@ import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
 import { backdropGain } from '../backdropVisibility'
+import { planetMotionTime } from './planetMotion'
 import { PlanetSky } from './planetSky'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
@@ -117,7 +118,10 @@ import {
 } from './orbitPresentation'
 import { StarLayer } from './starLayer'
 import { describeStarPresentation, HOVER_INTERPOLATION_MS, type StarPresentation } from './starPresentation'
-import { ProjectedStarCandidateBuffer, pickProjectedStar, type PointerInputKind } from './starPicker'
+import {
+  ProjectedStarCandidateBuffer, pickProjectedStar,
+  type PointerInputKind, type ProjectedStarCandidate,
+} from './starPicker'
 import { CameraFlightController, computeSystemExtent, exitTarget, shouldExitOnWheel, type CameraFlight } from './cameraFlight'
 import { describeStarVisual } from './starVisualDescriptor'
 
@@ -311,6 +315,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
   private destroyed = false
   private universeVisible = true
+  /** 进入恒星系那一刻的动画时间。行星停在这里，不再是移动靶。 */
+  private planetMotionFrozenAtMs: number | null = null
   // ── 可环绕地表 ──
   private surfaceStage: SurfaceStageState = IDLE_SURFACE_STAGE
   private surfaceWorld: PlanetSurfaceWorld | null = null
@@ -655,6 +661,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.cancelFlight('reset')
     this.clearPlanet()
     this.focusedStar = null
+    this.planetMotionFrozenAtMs = null
     this.releaseMaterializedPlanets()
     this.starLayer.setFocus(null, null)
     this.applyLayerFocus(null)
@@ -914,6 +921,11 @@ export class BabylonRenderer implements MindverseRenderer {
       })
       return
     }
+    // 往脚下挖：地表世界退场（洞穴有自己的墙），阶段进入 digging。
+    this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
+      kind: 'dig', token: this.surfaceStage.token,
+    })
+    this.applySurfaceVisibility()
     this.cancelFlight('strata')
     this.planetFocusController.suspend(false)
     this.clearPointerFeedback()
@@ -930,7 +942,14 @@ export class BabylonRenderer implements MindverseRenderer {
   }
   focusAnswerSpecimen(answerId: string): void { this.strataTransition.focusAnswer(answerId) }
   closeAnswerSpecimen(): void { this.strataTransition.closeAnswer() }
-  exitStrata(token: StrataToken): void { this.strataTransition.exit(token) }
+  exitStrata(token: StrataToken): void {
+    this.strataTransition.exit(token)
+    // 升回地表：地表世界重新在场。
+    this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
+      kind: 'surfaced', token: this.surfaceStage.token,
+    })
+    this.applySurfaceVisibility()
+  }
 
   private createScene(index: UniverseIndex): void {
     configurePlanetImageProcessing(this.scene.imageProcessingConfiguration)
@@ -1563,7 +1582,9 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updatePlanetPosition(visual: PlanetVisualRecord, elapsedMs: number): void {
     const datum = visual.datum
-    const motionTime = this.reducedMotion ? 0 : elapsedMs
+    const motionTime = planetMotionTime({
+      elapsedMs, frozenAtMs: this.planetMotionFrozenAtMs, reducedMotion: this.reducedMotion,
+    })
     const starPosition = starWorldPosition(
       datum.star,
       motionTime,
@@ -1787,8 +1808,13 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceRoot?.setEnabled(present)
     this.surfaceSky?.setDim(surfaceSkyVisible(this.surfaceStage) ? 1 : 0)
     // 站在地表上时宇宙必须整个退场 —— 这个阶段没有轨道视角。
+    // 但**不能反过来主动点亮**：往下挖时 present 变 false，而那一刻 universeVisible
+    // 还是 true（setUniverseVisible(false) 由地层过渡稍后才调），照着点亮会把整个
+    // 宇宙塞回洞穴里。宇宙的开关归 setUniverseVisible 管，这里只负责按下去。
     if (present) this.universeRoot.setEnabled(false)
-    else if (this.universeVisible) this.universeRoot.setEnabled(true)
+    else if (this.surfaceStage.phase === 'idle' && this.universeVisible) {
+      this.universeRoot.setEnabled(true)
+    }
   }
 
   private disposeSurfaceWorld(): void {
@@ -2180,6 +2206,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.clearPlanet()
       this.materializeStarSystem(star)
       this.focusedStar = star
+      this.planetMotionFrozenAtMs = this.motionTime()
       const starKey = starIdentity(star.s)
       const target = this.currentStarPosition(star)
       this.starLayer.setFocus(starKey, star)
@@ -2415,6 +2442,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.presentation = describeStarPresentation({ phase: 'star-focus' })
     } else {
       this.focusedStar = null
+    this.planetMotionFrozenAtMs = null
       attemptRecovery(() => this.starLayer.setFocus(null, null))
       this.overviewTarget = finiteVector3(this.overviewTarget) ? this.overviewTarget : Vector3.Zero()
       this.overviewRadius = finitePositive(this.overviewRadius) ? this.overviewRadius : 30
@@ -2633,13 +2661,47 @@ export class BabylonRenderer implements MindverseRenderer {
         return candidate
       },
     )
-    const picked = pickProjectedStar({
+    const local = {
       x: clientX - rect.left,
       y: clientY - rect.top,
       inputKind,
       viewport: { width: rect.width, height: rect.height },
-    }, candidates)
-    return picked ? `star:${picked.starKey}` : null
+    }
+    const picked = pickProjectedStar(local, candidates)
+    if (picked) return `star:${picked.starKey}`
+    // 行星过去只走 scene.pick，逐像素打在网格上：球在屏幕上多小可点区域就多小，
+    // 瞄准差几像素就被判成「点了空白」，然后被 exitHierarchy 弹回宇宙。
+    // 让它享有与恒星同一套屏幕空间容差 —— 近失变命中，而不是变退出。
+    const planet = pickProjectedStar(local, this.projectedPlanetCandidates())
+    return planet ? `planet:${planet.starKey}` : null
+  }
+
+  /** 当前可交互问题行星的屏幕投影，供邻近拾取使用。 */
+  private projectedPlanetCandidates(): readonly ProjectedStarCandidate[] {
+    if (!this.universeVisible || !this.focusedStar) return []
+    const rect = this.canvas.getBoundingClientRect()
+    const renderHeight = Math.max(1, this.engine.getRenderHeight())
+    const projectionScale = renderHeight * 0.5 / Math.tan(this.camera.fov * 0.5)
+    const cameraPosition = this.camera.globalPosition
+    const candidates: ProjectedStarCandidate[] = []
+    for (const record of this.visualByQuestion.values()) {
+      const mesh = record.visual.activeMesh
+      if (!mesh.isEnabled() || !mesh.isPickable) continue
+      const projected = this.projectToCss(mesh.position)
+      if (!(projected.z > 0 && projected.z < 1)) continue
+      const distance = Math.max(1e-3, Vector3.Distance(mesh.position, cameraPosition))
+      const radiusPx = record.visual.descriptor.radius * projectionScale / distance
+        * rect.height / renderHeight
+      candidates.push({
+        starKey: record.datum.question.id,
+        x: projected.x,
+        y: projected.y,
+        depth: projected.z,
+        visualRadiusPx: radiusPx,
+        visible: true,
+      })
+    }
+    return candidates
   }
 
   private sceneTarget(clientX: number, clientY: number): string | null {

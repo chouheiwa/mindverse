@@ -4,7 +4,9 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Quaternion, Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector.js'
 import { CreateIcoSphere } from '@babylonjs/core/Meshes/Builders/icoSphereBuilder.js'
-import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
+import { createTerrainField } from './terrainField'
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import { initialPlanetLod, nextPlanetLod, type PlanetLod } from './planetLod'
@@ -48,9 +50,7 @@ export interface PlanetVisualUpdate {
 }
 
 const SURFACE_UNIFORMS = [
-  'world', 'worldViewProjection', 'uTime', 'uDisplacement', 'uDetailDensity', 'uFaultStrength',
-  'uWarpStrength', 'uNormalEpsilon', 'uSmallCraterThreshold', 'uSeed', 'uOctaves', 'uQualityLevel',
-  'uLargeCraterCount', 'uLargeCraters', 'uLargeCraterShape', 'uThermal', 'uThermalIce', 'uFreshness',
+  'world', 'worldViewProjection', 'uTime', 'uSeed', 'uThermal', 'uThermalIce', 'uFreshness',
   'uCreated', 'uCollected', 'uSelected', 'uCraterDensity', 'uIncident', 'uReveal',
   'uCloudCoverage', 'uCloudSpeed', 'uNightLights', 'uSnowLine', 'uLavaGlow', 'uIceFracture',
   'uCraterVisibility', 'uCloudOctaves', 'uHovered', 'uInteractionRim', 'uInteractionColor',
@@ -62,7 +62,7 @@ const ATMOSPHERE_UNIFORMS = [
   'uShellRadius', 'uDensity', 'uReveal', 'uQualityLevel',
 ] as const
 
-const QUALITY_LEVEL: Readonly<Record<PlanetLod, number>> = Object.freeze({ low: 0, medium: 1, high: 2 })
+const QUALITY_LEVEL: Readonly<Record<PlanetLod, 0 | 1 | 2>> = Object.freeze({ low: 0, medium: 1, high: 2 })
 
 export class PlanetVisual {
   readonly descriptor: PlanetSurfaceDescriptor
@@ -83,6 +83,7 @@ export class PlanetVisual {
   private focusMaterial: ShaderMaterial | null = null
   private focusAtmosphereMesh: Mesh | null = null
   private focusAtmosphereMaterial: ShaderMaterial | null = null
+  private orbitGeometryLevel: PlanetLod | null = null
   private level: SurfaceLevel
   private focusBlend = 0
   private reveal = 0
@@ -197,6 +198,10 @@ export class PlanetVisual {
       this.level = 'high'
     } else {
       this.level = level
+      if (this.orbitGeometryLevel !== level) {
+        this.configureSurfaceGeometry(this.orbitMesh, level)
+        this.orbitGeometryLevel = level
+      }
       this.configureSurfaceMaterial(this.orbitMaterial, level)
       this.disposeFocusResources()
     }
@@ -327,11 +332,9 @@ export class PlanetVisual {
   }
 
   private createSurfaceMesh(suffix: string, level: PlanetLod): Mesh {
-    const mesh = CreateIcoSphere(`planet:${this.descriptor.metadata.questionId}:${suffix}`, {
-      radius: 1,
-      subdivisions: level === 'high' ? 12 : level === 'medium' ? 6 : 3,
-      flat: false,
-    }, this.scene)
+    const mesh = new Mesh(`planet:${this.descriptor.metadata.questionId}:${suffix}`, this.scene)
+    this.configureSurfaceGeometry(mesh, level)
+    if (suffix === 'orbit') this.orbitGeometryLevel = level
     mesh.parent = this.parent ?? null
     mesh.scaling.setAll(this.radius)
     mesh.isPickable = true
@@ -341,12 +344,58 @@ export class PlanetVisual {
     return mesh
   }
 
+  private configureSurfaceGeometry(mesh: Mesh, level: PlanetLod): void {
+    const data = VertexData.CreateIcoSphere({
+      radius: 1, subdivisions: level === 'high' ? 12 : level === 'medium' ? 6 : 3, flat: false,
+    })
+    const terrain = buildPlanetTerrain(this.descriptor, level)
+    const field = createTerrainField({
+      ...terrain,
+      seed: this.descriptor.seed,
+      detailDensity: this.descriptor.detailDensity,
+      faultStrength: this.descriptor.faultStrength,
+      qualityLevel: QUALITY_LEVEL[level],
+    })
+    const displacement = 0.045 + this.descriptor.detailDensity * 0.08
+    const positions = data.positions!
+    const normals = data.normals!
+    const attributes = new Float32Array(positions.length / 3 * 4)
+    // Icosphere face seams duplicate vertices; evaluate each direction only once.
+    const samples = new Map<string, { height: number; normal: readonly number[]; signals: readonly number[] }>()
+    for (let index = 0; index < positions.length; index += 3) {
+      const length = Math.hypot(positions[index], positions[index + 1], positions[index + 2])
+      const radial: [number, number, number] = [
+        positions[index] / length, positions[index + 1] / length, positions[index + 2] / length,
+      ]
+      const key = radial.map((value) => value.toFixed(12)).join(',')
+      let vertex = samples.get(key)
+      if (!vertex) {
+        const sample = field.sample(radial)
+        vertex = {
+          height: field.height(radial),
+          normal: field.normal(radial, level === 'high' ? 0.006 : 0.012, displacement),
+          signals: [sample.height, surfaceRelief(radial, this.descriptor),
+            clamp01(sample.relief), clamp01(Math.max(sample.largeCraterMask, sample.smallCraterMask))],
+        }
+        samples.set(key, vertex)
+      }
+      for (let axis = 0; axis < 3; axis += 1) {
+        positions[index + axis] = radial[axis] * (1 + vertex.height * displacement)
+        normals[index + axis] = vertex.normal[axis]
+      }
+      attributes.set(vertex.signals, index / 3 * 4)
+    }
+    data.applyToMesh(mesh)
+    mesh.setVerticesData('terrainData', attributes, false, 4)
+    mesh.refreshBoundingInfo()
+  }
+
   private createSurfaceMaterial(name: string, level: PlanetLod): ShaderMaterial {
     const material = new ShaderMaterial(name, this.scene, {
       vertexSource: planetVertexShader,
       fragmentSource: planetFragmentShader,
     }, {
-      attributes: ['position', 'normal'],
+      attributes: ['position', 'normal', 'terrainData'],
       uniforms: [...SURFACE_UNIFORMS],
       needAlphaBlending: true,
     })
@@ -356,23 +405,7 @@ export class PlanetVisual {
   }
 
   private configureSurfaceMaterial(material: ShaderMaterial, level: PlanetLod): void {
-    const terrain = buildPlanetTerrain(this.descriptor, level)
     material.setFloat('uTime', 0)
-    material.setFloat('uDisplacement', 0.045 + this.descriptor.detailDensity * 0.08)
-    material.setFloat('uDetailDensity', this.descriptor.detailDensity)
-    material.setFloat('uFaultStrength', this.descriptor.faultStrength)
-    material.setFloat('uWarpStrength', terrain.warpStrength)
-    material.setFloat('uNormalEpsilon', level === 'high' ? 0.006 : 0.012)
-    material.setFloat('uSmallCraterThreshold', terrain.smallCraterThreshold)
-    material.setInt('uOctaves', terrain.octaves)
-    material.setInt('uQualityLevel', QUALITY_LEVEL[level])
-    material.setInt('uLargeCraterCount', terrain.largeCraters.length)
-    const craterVectors = terrain.largeCraters.flatMap(({ direction, radius }) => [...direction, radius])
-    const craterShapes = terrain.largeCraters.flatMap(({ depth, rim }) => [depth, rim, 0, 0])
-    while (craterVectors.length < 32) craterVectors.push(0)
-    while (craterShapes.length < 32) craterShapes.push(0)
-    material.setArray4('uLargeCraters', craterVectors)
-    material.setArray4('uLargeCraterShape', craterShapes)
     material.setVector4('uThermal', new Vector4(
       this.descriptor.thermal.magma,
       this.descriptor.thermal.desert,
@@ -504,3 +537,31 @@ export function chooseInitialPlanetLod(projectedRadiusPx: number, focused: boole
 
 const finite = (value: number): number => Number.isFinite(value) ? value : 0
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, finite(value)))
+
+// Preserve the former vertex shader's independent material grain signal.
+// Shape and normals exclusively use terrainField; this noise only modulates albedo.
+function surfaceRelief(radial: readonly number[], descriptor: PlanetSurfaceDescriptor): number {
+  const point = radial.map((value) => value * (14 + 10 * descriptor.detailDensity))
+  const cell = point.map(Math.floor)
+  const local = point.map((value, axis) => value - cell[axis])
+  const fade = local.map((value) => value * value * (3 - 2 * value))
+  const corner = (x: number, y: number, z: number): number => {
+    const at = [cell[0] + x, cell[1] + y, cell[2] + z]
+    const gradient = [[127.1, 311.7, 74.7], [269.5, 183.3, 246.1], [113.5, 271.9, 124.6]]
+      .map((weights) => {
+        const value = Math.sin(at.reduce((sum, value, axis) => sum + value * weights[axis], 0)
+          + descriptor.seed * 0.000071) * 43758.5453123
+        return (value - Math.floor(value)) * 2 - 1
+      })
+    const length = Math.hypot(...gradient) || 1
+    return (gradient[0] * (local[0] - x) + gradient[1] * (local[1] - y)
+      + gradient[2] * (local[2] - z)) / length
+  }
+  const mix = (a: number, b: number, t: number): number => a + (b - a) * t
+  return mix(
+    mix(mix(corner(0, 0, 0), corner(1, 0, 0), fade[0]),
+      mix(corner(0, 1, 0), corner(1, 1, 0), fade[0]), fade[1]),
+    mix(mix(corner(0, 0, 1), corner(1, 0, 1), fade[0]),
+      mix(corner(0, 1, 1), corner(1, 1, 1), fade[0]), fade[1]), fade[2],
+  ) * 0.9
+}

@@ -1,3 +1,4 @@
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial.js'
@@ -5,6 +6,8 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { PlanetSurfaceDescriptor } from './planetSurface'
 import { PlanetVisual } from './PlanetVisual'
+import { buildPlanetTerrain } from './planetTerrain'
+import { createTerrainField } from './terrainField'
 import { planetWorldRadius } from '../gl/planetMaterials'
 
 const descriptor: PlanetSurfaceDescriptor = Object.freeze({
@@ -249,5 +252,58 @@ describe('PlanetVisual resource boundary', () => {
     expect(onError).not.toHaveBeenCalled()
     expect(scene.meshes).toHaveLength(0)
     expect(scene.materials).toEqual(materialsAfterDisposal)
+  })
+})
+
+
+describe('CPU planet terrain', () => {
+  test.each(['low', 'medium', 'high'] as const)('%s vertices and normals agree with the terrain field', (level) => {
+    const { visual } = setup({ initialLod: 'low' })
+    visual.setLod(level)
+    const mesh = level === 'high' ? visual.focusMesh! : visual.orbitMesh
+    const positions = mesh.getVerticesData('position')!
+    const source = VertexData.CreateIcoSphere({ radius: 1, subdivisions: level === 'low' ? 3 : level === 'medium' ? 6 : 12, flat: false }).positions!
+    const normals = mesh.getVerticesData('normal')!
+    const signals = mesh.getVerticesData('terrainData')!
+    const field = createTerrainField({
+      ...buildPlanetTerrain(descriptor, level), ...descriptor,
+      qualityLevel: level === 'low' ? 0 : level === 'medium' ? 1 : 2,
+    })
+    const displacement = 0.045 + descriptor.detailDensity * 0.08
+    expect(signals.length).toBe(positions.length / 3 * 4)
+    for (let index = 0; index < positions.length; index += 159) {
+      const length = Math.hypot(positions[index], positions[index + 1], positions[index + 2])
+      const sourceLength = Math.hypot(source[index], source[index + 1], source[index + 2])
+      const radial: [number, number, number] = [
+        source[index] / sourceLength, source[index + 1] / sourceLength, source[index + 2] / sourceLength,
+      ]
+      const sample = field.sample(radial)
+      expect(length).toBeCloseTo(1 + field.height(radial) * displacement, 6)
+      const expectedNormal = field.normal(radial, level === 'high' ? 0.006 : 0.012, displacement)
+      expectedNormal.forEach((value, axis) => expect(normals[index + axis]).toBeCloseTo(value, 5))
+      const offset = index / 3 * 4
+      expect(signals[offset]).toBeCloseTo(sample.height, 5)
+      expect(signals[offset + 1]).toBeGreaterThanOrEqual(-0.5)
+      expect(signals[offset + 1]).toBeLessThanOrEqual(0.5)
+      expect(signals[offset + 2]).toBeCloseTo(Math.min(1, Math.max(0, sample.relief)), 5)
+      expect(signals[offset + 3]).toBeCloseTo(Math.max(sample.largeCraterMask, sample.smallCraterMask), 5)
+    }
+  })
+
+  test('changes orbit resolution in both directions without replacing the pickable mesh', () => {
+    const { visual } = setup({ initialLod: 'low' })
+    const mesh = visual.orbitMesh
+    const lowCount = mesh.getTotalVertices()
+    visual.setPosition(new Vector3(3, 2, 1))
+    visual.setLod('medium')
+    const mediumCount = mesh.getTotalVertices()
+    expect(mediumCount).toBeGreaterThan(lowCount)
+    visual.setLod('high')
+    expect(visual.focusMesh!.getTotalVertices()).toBeGreaterThan(mediumCount)
+    visual.setLod('low')
+    expect(visual.orbitMesh).toBe(mesh)
+    expect(mesh.getTotalVertices()).toBe(lowCount)
+    expect(mesh.position.asArray()).toEqual([3, 2, 1])
+    expect(mesh.isPickable).toBe(true)
   })
 })

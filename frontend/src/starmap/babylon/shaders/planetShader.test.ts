@@ -14,32 +14,16 @@ describe('Babylon procedural planet shader contract', () => {
     expect(planetFragmentShader).toMatch(/gl_FragColor\s*=\s*vec4\([^;]+uReveal/)
   })
 
-  test('declares Babylon attributes and a real near-surface displacement path', () => {
-    expect(planetVertexShader).toMatch(/attribute\s+vec3\s+position\s*;/)
-    expect(planetVertexShader).toMatch(/attribute\s+vec3\s+normal\s*;/)
-    expect(planetVertexShader).toMatch(/uniform\s+mat4\s+worldViewProjection\s*;/)
-    expect(planetVertexShader).toMatch(/uniform\s+float\s+uDisplacement\s*;/)
-    expect(planetVertexShader).toMatch(/uniform\s+float\s+uSeed\s*;/)
-    expect(planetVertexShader).not.toMatch(/terrainNoise\([^)]*uTime/)
-    expect(planetVertexShader).toMatch(/position\s*\+\s*normal\s*\*.*uDisplacement/s)
-    expect(planetVertexShader).toMatch(/varying\s+vec3\s+vLocal/)
-  })
-
-  test('uses coherent warped 3D terrain and tangent finite-difference normals', () => {
-    expect(planetVertexShader).toContain('gradientNoise')
-    expect(planetVertexShader).toContain('fbm')
-    expect(planetVertexShader).toContain('domainWarp')
-    expect(planetVertexShader).toContain('ridgedNoise')
-    expect(planetVertexShader).toContain('craterProfile')
-    expect(planetVertexShader).toContain('displacedNormal')
-    expect(planetVertexShader).toMatch(/uLargeCraters\s*\[\s*8\s*\]/)
-    expect(planetVertexShader).toMatch(/for\s*\(\s*int\s+[xyz]\s*=\s*-1;[\s\S]*<=\s*1;[\s\S]*\)/)
-    expect(planetVertexShader).toContain('uSmallCraterThreshold')
-    expect(planetVertexShader).toContain('uDetailDensity')
-    expect(planetVertexShader).not.toMatch(/hash31\s*\(\s*floor/)
-    expect(planetFragmentShader).not.toMatch(/hash31\s*\(\s*floor/)
-    expect(planetVertexShader).not.toMatch(/\buv\b/i)
-    expectNoReversedNumericSmoothstep(planetVertexShader)
+  test('passes CPU geometry and material signals through without GPU terrain evaluation', () => {
+    expect(planetVertexShader).toContain('attribute vec3 position;')
+    expect(planetVertexShader).toContain('attribute vec3 normal;')
+    expect(planetVertexShader).toContain('attribute vec4 terrainData;')
+    expect(planetVertexShader).toContain('worldViewProjection * vec4(position, 1.0)')
+    expect(planetVertexShader).toContain('mat3(world) * normal')
+    for (const [varying, component] of [['vHeight', 'x'], ['vRelief', 'y'], ['vRidgeMask', 'z'], ['vCraterMask', 'w']]) {
+      expect(planetVertexShader).toContain(`${varying} = terrainData.${component};`)
+    }
+    expect(planetVertexShader).not.toMatch(/uDisplacement|terrainSample|gradientNoise|displacedNormal/)
   })
 
   test('contains thermal blending, terrain relief and evidence-safe overlays', () => {

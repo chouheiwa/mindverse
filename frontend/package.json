@@ -24,7 +24,7 @@
     "capture:stellar-baseline": "MINDVERSE_REFERENCE_DEVICE=1 MINDVERSE_UPDATE_BASELINES=1 MINDVERSE_BASELINE_OUT=testdata/render-baselines/babylon-stellar-v4.json npm run test:e2e:performance",
     "verify:stellar-baseline": "MINDVERSE_REFERENCE_DEVICE=1 MINDVERSE_BASELINE_OUT=testdata/render-baselines/babylon-stellar-candidate.json npm run test:e2e:performance && npm run compare:stellar-baselines",
     "capture:planet-candidate": "MINDVERSE_PLANET_BASELINE_OUT=testdata/render-baselines/babylon-planets-candidate.json npm run test:e2e:performance -- --grep 'thermal planets' --workers=1 --reporter=dot",
-    "compare:planet-baselines": "node scripts/compare-render-baselines.mjs testdata/render-baselines/babylon-planets-v1.json testdata/render-baselines/babylon-planets-candidate.json",
+    "compare:planet-baselines": "node scripts/compare-render-baselines.mjs testdata/render-baselines/babylon-planets-v2.json testdata/render-baselines/babylon-planets-candidate.json",
     "test:e2e:install": "playwright install chromium",
     "preview": "vite preview"
   },

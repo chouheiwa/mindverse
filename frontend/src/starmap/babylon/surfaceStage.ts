@@ -110,6 +110,17 @@ export function surfaceSkyVisible(state: SurfaceStageState): boolean {
   return state.phase === 'descending' || state.phase === 'walking'
 }
 
+/**
+ * 地表是否拥有相机的 up 轴。
+ *
+ * 地表相机把 upVector 掰成脚下的法线；一旦地表不再驱动相机（往下挖、退回轨道），
+ * up 必须交还给世界 Y。否则洞穴与宇宙都带着那个倾角一起歪 —— 实测地层的水平
+ * 纹层变成斜纹，分带亮度剖面被抹平，交叉数从 ≥3 掉到 1。
+ */
+export function surfaceCameraUpOwned(state: SurfaceStageState): boolean {
+  return state.phase === 'descending' || state.phase === 'walking'
+}
+
 /** 行走输入是否该被接受。俯冲途中与下潜中都不该能走。 */
 export function surfaceWalkEnabled(state: SurfaceStageState): boolean {
   return state.phase === 'walking'

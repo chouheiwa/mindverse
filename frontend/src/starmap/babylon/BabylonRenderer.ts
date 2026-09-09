@@ -26,7 +26,7 @@ import { PlanetSky } from './planetSky'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
 import {
-  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceSkyVisible, surfaceWalkEnabled,
+  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraUpOwned, surfaceSkyVisible, surfaceWalkEnabled,
   surfaceWorldVisible, type SurfaceStageState,
 } from './surfaceStage'
 import { standAt, surfaceFrame, walkSurface, type SurfacePose } from './surfaceCamera'
@@ -1446,6 +1446,7 @@ export class BabylonRenderer implements MindverseRenderer {
       cameraTargetX: this.camera.target.x,
       cameraTargetY: this.camera.target.y,
       cameraTargetZ: this.camera.target.z,
+      cameraUp: [this.camera.upVector.x, this.camera.upVector.y, this.camera.upVector.z],
       strataPose: this.strataTransition.pose,
       undatedRoom: this.strataTransition.layout?.undatedRoom
         ? {
@@ -1814,6 +1815,11 @@ export class BabylonRenderer implements MindverseRenderer {
     if (present) this.universeRoot.setEnabled(false)
     else if (this.surfaceStage.phase === 'idle' && this.universeVisible) {
       this.universeRoot.setEnabled(true)
+    }
+    // 地表不再驱动相机时，把 up 轴交还给世界 Y。地表相机只往 upVector 里写脚下的法线，
+    // 从不还原 —— 洞穴的相机只摆位置和目标，会原样继承那个倾角。
+    if (!surfaceCameraUpOwned(this.surfaceStage) && !this.camera.upVector.equals(Vector3.UpReadOnly)) {
+      this.camera.upVector = Vector3.Up()
     }
   }
 
@@ -2516,7 +2522,11 @@ export class BabylonRenderer implements MindverseRenderer {
       this.planetDragX = event.clientX
       this.planetDragY = event.clientY
       this.planetDragMovement = 0
-      this.planetDragStartedOnTarget = this.sceneTarget(event.clientX, event.clientY) !== null
+      // 判「按在东西上」也要走屏幕空间容差。这里若仍用逐像素的 scene.pick，
+      // 瞄着行星差几像素按下、松手位移不足 6px，就会被当成「点了空白」弹回恒星系。
+      this.planetDragStartedOnTarget = this.pointerTarget(
+        event.clientX, event.clientY, pointerKind(event.pointerType),
+      ) !== null
       try { this.canvas.setPointerCapture(event.pointerId) } catch { /* detached canvas */ }
       return
     }
@@ -2690,7 +2700,9 @@ export class BabylonRenderer implements MindverseRenderer {
       const projected = this.projectToCss(mesh.position)
       if (!(projected.z > 0 && projected.z < 1)) continue
       const distance = Math.max(1e-3, Vector3.Distance(mesh.position, cameraPosition))
-      const radiusPx = record.visual.descriptor.radius * projectionScale / distance
+      // 用实际的世界半径（含缩放），和 projectedBounds 里的球一致；descriptor.radius
+      // 不是相机单位，拿它算出来的容差比屏幕上的球小一圈。
+      const radiusPx = record.visual.radius * projectionScale / distance
         * rect.height / renderHeight
       candidates.push({
         starKey: record.datum.question.id,
@@ -2699,6 +2711,7 @@ export class BabylonRenderer implements MindverseRenderer {
         depth: projected.z,
         visualRadiusPx: radiusPx,
         visible: true,
+        solid: true,
       })
     }
     return candidates

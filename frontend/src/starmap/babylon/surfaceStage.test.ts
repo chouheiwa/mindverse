@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceSkyVisible, surfaceWalkEnabled,
-  surfaceWorldVisible, type SurfaceStageState,
+  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraUpOwned, surfaceSkyVisible,
+  surfaceWalkEnabled, surfaceWorldVisible, type SurfaceStageState,
 } from './surfaceStage'
 
 const enter = (state: SurfaceStageState = IDLE_SURFACE_STAGE) =>
@@ -98,5 +98,22 @@ describe('the surface stage is business logic, so it lives outside the frame loo
       kind: 'enter', questionId: 'q', landing: [0, 0, 0],
     })
     expect(Math.hypot(...state.landing!)).toBeCloseTo(1, 9)
+  })
+
+  it('owns the camera up axis only while descending or walking', () => {
+    // 地表相机把 upVector 掰成脚下的法线。一旦地表不再驱动相机 —— 往下挖、退回轨道 ——
+    // up 必须交还给世界 Y，否则洞穴与宇宙都会带着那个倾角一起歪掉：
+    // 实测地层水平纹层变成斜纹，分带亮度剖面被抹平，交叉数从 ≥3 掉到 1。
+    expect(surfaceCameraUpOwned(IDLE_SURFACE_STAGE)).toBe(false)
+    const descending = enter()
+    expect(surfaceCameraUpOwned(descending)).toBe(true)
+    const walking = advanceSurfaceStage(descending, { kind: 'landed', token: descending.token })
+    expect(surfaceCameraUpOwned(walking)).toBe(true)
+    const digging = advanceSurfaceStage(walking, { kind: 'dig', token: walking.token })
+    expect(digging.phase).toBe('digging')
+    expect(surfaceCameraUpOwned(digging)).toBe(false)
+    const surfaced = advanceSurfaceStage(digging, { kind: 'surfaced', token: digging.token })
+    expect(surfaceCameraUpOwned(surfaced)).toBe(true)
+    expect(surfaceCameraUpOwned(advanceSurfaceStage(surfaced, { kind: 'exit' }))).toBe(false)
   })
 })

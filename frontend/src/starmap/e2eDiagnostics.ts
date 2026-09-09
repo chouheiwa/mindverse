@@ -100,6 +100,8 @@ export interface RenderSnapshot {
     cameraDistance: number, targetDistance: number,
     cameraAlpha?: number, cameraBeta?: number,
     cameraTargetX?: number, cameraTargetY?: number, cameraTargetZ?: number,
+    /** 相机 up 轴。只有站在地表上时才允许偏离世界 Y。 */
+    cameraUp?: readonly [number, number, number],
     strataPose?: { depth: number, yaw: number, pitch: number, snapId: string | null } | null,
     undatedRoom?: { centerDepth: number, angle: number } | null,
   }

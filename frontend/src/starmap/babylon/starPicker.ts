@@ -13,6 +13,11 @@ export interface ProjectedStarCandidate {
   readonly depth: number
   readonly visualRadiusPx: number
   readonly visible: boolean
+  /**
+   * 实体（无光晕）目标：容差 = 实体半径 + 输入方式的余量，不封顶。
+   * 恒星的封顶是为了不让光晕吃掉相邻的星；实体球越大反而越难点是荒谬的。
+   */
+  readonly solid?: boolean
 }
 
 export interface StarPickInput {
@@ -42,7 +47,9 @@ export function pickProjectedStar(
     const candidate = candidates[index]
     if (!candidate) continue
     if (!isPickable(candidate, input.viewport.width, input.viewport.height)) continue
-    const radius = clamp(candidate.visualRadiusPx, minimumRadius, maximumRadius)
+    const radius = candidate.solid
+      ? Math.max(0, candidate.visualRadiusPx) + minimumRadius
+      : clamp(candidate.visualRadiusPx, minimumRadius, maximumRadius)
     const dx = input.x - candidate.x
     const dy = input.y - candidate.y
     const distanceSquared = dx * dx + dy * dy

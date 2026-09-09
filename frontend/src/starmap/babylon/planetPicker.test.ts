@@ -51,4 +51,22 @@ describe('a small planet must still be clickable', () => {
       )).toBeNull()
     }
   })
+
+  it('keeps a near-miss margin on a big planet instead of capping at the star halo limit', () => {
+    // 恒星的拾取半径封顶 28px 是为了不让光晕吃掉相邻的星；行星没有光晕，
+    // 实体球有多大，容差就该在球外再留一圈 —— 否则球越大反而越难点：
+    // 实测 77px 的球，点在边缘外 8px 直接判空，把人从行星上踢下来。
+    const big = planet({ visualRadiusPx: 38.7, solid: true })
+    expect(pickProjectedStar({ x: 640 + 38.7 + 8, y: 360, inputKind: 'mouse', viewport }, [big])?.starKey)
+      .toBe('planet:question:7')
+    expect(pickProjectedStar({ x: 640 + 38.7 + 20, y: 360, inputKind: 'touch', viewport }, [big])?.starKey)
+      .toBe('planet:question:7')
+    // 鼠标的余量仍然按鼠标算，不能借手指的。
+    expect(pickProjectedStar({ x: 640 + 38.7 + 20, y: 360, inputKind: 'mouse', viewport }, [big])).toBeNull()
+  })
+
+  it('leaves star tolerance untouched', () => {
+    const star = planet({ starKey: 'star', visualRadiusPx: 38.7 })
+    expect(pickProjectedStar({ x: 640 + 30, y: 360, inputKind: 'mouse', viewport }, [star])).toBeNull()
+  })
 })

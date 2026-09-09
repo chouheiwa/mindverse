@@ -642,6 +642,12 @@ test('the answer strata is a lit, layered world rather than a black void', async
   const inside = (await snapshot(page))!
   expect(inside.scene.planetCount).toBeGreaterThanOrEqual(0)
   expect(inside.scenePhase).toMatch(/strata-(free|snapped)/)
+  // 相机 up 轴必须回到世界 Y。地表把它掰成脚下法线，洞穴若原样继承，水平纹层就成了斜纹，
+  // 下面的分带剖面会被抹平 —— 这条把那种失败说成人话。
+  expect(inside.scene.cameraUp).toBeDefined()
+  expect(inside.scene.cameraUp![0]).toBeCloseTo(0, 6)
+  expect(inside.scene.cameraUp![1]).toBeCloseTo(1, 6)
+  expect(inside.scene.cameraUp![2]).toBeCloseTo(0, 6)
 
   // 2) 洞窟必须有东西可看。全黑的地层世界只是一个 HUD。
   const lit = await nonBackgroundRatio(page)
@@ -718,26 +724,36 @@ test('a near miss on a question planet selects it instead of ejecting you to the
   await page.getByRole('button', { name: /固定地层问题/ }).click()
   await expect.poll(async () => (await snapshot(page))!.planet.selectedQuestionId).toBe('question:7')
 
-  // 等相机飞停：连续两次采样的投影一致才算稳。行星本身进了恒星系就已冻住，
+  // 等相机飞停：连续多次采样的投影一致才算稳。行星本身进了恒星系就已冻住，
   // 这里等的是机位，不是行星。
-  const sample = async () => (await snapshot(page))!.projectedBounds.selectedPlanet!
+  // 只数**真的渲染过新帧**的采样：选中后渲染器可能空闲近一秒，其间投影是旧帧的
+  // 3px 远景贴片；第一帧真渲染出来行星才换成 77px 的实体球。按墙钟采样会把那段
+  // 空闲误判成「稳」，然后在换帧那一刻看到一次 30px 的「移动」。
+  const sample = async () => {
+    const current = (await snapshot(page))!
+    return { bounds: current.projectedBounds.selectedPlanet!, frames: current.resources.actualRenderCount }
+  }
   let previous = await sample()
   let stableRun = 0
   await expect.poll(async () => {
     const current = await sample()
-    // 连续两帧接近不算稳：负载下缓动很慢，凑巧接近很常见。要求连续 6 次。
-    stableRun = Math.abs(current.x - previous.x) < 0.05 && Math.abs(current.y - previous.y) < 0.05
+    if (current.frames === previous.frames) return stableRun
+    // 连续两帧接近不算稳：负载下缓动很慢，凑巧接近很常见。要求连续 6 帧。
+    stableRun = Math.abs(current.bounds.x - previous.bounds.x) < 0.05
+      && Math.abs(current.bounds.y - previous.bounds.y) < 0.05
       ? stableRun + 1 : 0
     previous = current
     return stableRun
   }, { timeout: 60_000, intervals: [120] }).toBeGreaterThanOrEqual(6)
 
   // 稳定之后行星必须真的不动 —— 这条闸的是「移动靶」本身。
-  const bounds = await sample()
+  const bounds = (await sample()).bounds
   await page.waitForTimeout(700)
-  const later = await sample()
+  const later = (await sample()).bounds
   expect(later.x).toBeCloseTo(bounds.x, 2)
   expect(later.y).toBeCloseTo(bounds.y, 2)
+  // 稳定后的行星是实体球，不是远景贴片 —— 下面的「瞄偏 8px」才有意义。
+  expect(bounds.width).toBeGreaterThan(20)
 
   // 瞄偏：点在行星边缘之外 8px。以前这会被判成空白点击并把人弹回全景。
   const centre = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }

@@ -21,7 +21,7 @@ import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
 import { backdropGain } from '../backdropVisibility'
-import { planetMotionTime } from './planetMotion'
+import { planetOrbitClock } from './planetMotion'
 import { PlanetSky } from './planetSky'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
@@ -1583,16 +1583,18 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updatePlanetPosition(visual: PlanetVisualRecord, elapsedMs: number): void {
     const datum = visual.datum
-    const motionTime = planetMotionTime({
+    // 冻结公转冻的只能是轨道相位。恒星还在绕星群中心走、上下浮动，镜头跟着它 ——
+    // 恒星位置必须用活时钟，否则行星和轨道盘留在原地，镜头带着恒星飞走。
+    const clock = planetOrbitClock({
       elapsedMs, frozenAtMs: this.planetMotionFrozenAtMs, reducedMotion: this.reducedMotion,
     })
     const starPosition = starWorldPosition(
       datum.star,
-      motionTime,
+      clock.frameTimeMs,
       this.reducedMotion ? 0 : 1.35,
       this.planetStarPositionScratch,
     )
-    const angle = datum.phase + Math.PI * 2 / datum.period * (motionTime / 1000)
+    const angle = datum.phase + Math.PI * 2 / datum.period * (clock.orbitTimeMs / 1000)
     const cosine = Math.cos(angle)
     const sine = Math.sin(angle)
     visual.visual.setPosition(this.planetPositionScratch.set(

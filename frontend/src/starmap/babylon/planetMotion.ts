@@ -25,3 +25,23 @@ export function planetMotionTime(input: PlanetMotionInput): number {
   if (frozen !== null && Number.isFinite(frozen)) return frozen
   return Number.isFinite(input.elapsedMs) ? input.elapsedMs : 0
 }
+
+export interface PlanetOrbitClock {
+  /** 恒星所在参考系的时间：恒星绕星群中心走、上下浮动都按它算，镜头也跟着它。 */
+  readonly frameTimeMs: number
+  /** 轨道相位的时间：进了恒星系就冻在当下。 */
+  readonly orbitTimeMs: number
+}
+
+/**
+ * 行星定位的两个时钟。
+ *
+ * 冻结公转冻的只能是**轨道相位**。恒星本身还在走、镜头还跟着它 —— 若把恒星
+ * 那一刻的位置也冻住，行星和轨道盘就留在原地，镜头带着恒星飞走。
+ */
+export function planetOrbitClock(input: PlanetMotionInput): PlanetOrbitClock {
+  return Object.freeze({
+    frameTimeMs: planetMotionTime({ ...input, frozenAtMs: null }),
+    orbitTimeMs: planetMotionTime(input),
+  })
+}

@@ -717,6 +717,38 @@ test('the planet stage has no universe left in it', async ({ page }) => {
 })
 
 
+test('question planets and their orbits ride along with a drifting star', async ({ page }) => {
+  // 恒星在绕星群中心走、还在上下浮动，镜头跟着恒星。行星与轨道盘必须同样跟着 ——
+  // 冻结公转冻的只能是轨道相位，不能把恒星那一刻的位置也一起冻住。
+  await openBabylonUniverse(page, '', 'no-preference')
+  await expectReady(page)
+  await openStar(page)
+  await page.getByRole('button', { name: /固定地层问题/ }).click()
+  await expect.poll(async () => (await snapshot(page))!.planet.selectedQuestionId).toBe('question:7')
+  await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+
+  const sample = async () => {
+    const current = (await snapshot(page))!
+    const star = current.stellar.projectedStars.find(({ starKey }) => starKey === current.stellar.focusedStarKey)!
+    const planet = current.projectedBounds.selectedPlanet!
+    return {
+      frames: current.resources.actualRenderCount ?? 0,
+      star: { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 },
+      planet: { x: planet.x + planet.width / 2, y: planet.y + planet.height / 2, width: planet.width },
+    }
+  }
+  // 先等到行星换成实体球并且真渲染过帧。
+  await expect.poll(async () => (await sample()).planet.width, { timeout: 30_000 }).toBeGreaterThan(20)
+  const first = await sample()
+  await expect.poll(async () => (await sample()).frames, { timeout: 10_000 }).toBeGreaterThan(first.frames + 12)
+  const second = await sample()
+  process.stdout.write(`[ride-along] star ${JSON.stringify(first.star)} -> ${JSON.stringify(second.star)} planet ${JSON.stringify(first.planet)} -> ${JSON.stringify(second.planet)}\n`)
+  // 镜头跟着恒星：恒星在屏幕上不动。
+  expect(Math.hypot(second.star.x - first.star.x, second.star.y - first.star.y)).toBeLessThan(1.5)
+  // 行星也必须不动 —— 它和轨道盘要跟着恒星一起走。
+  expect(Math.hypot(second.planet.x - first.planet.x, second.planet.y - first.planet.y)).toBeLessThan(1.5)
+})
+
 test('a near miss on a question planet selects it instead of ejecting you to the universe', async ({ page }) => {
   await openBabylonUniverse(page)
   await expectReady(page)

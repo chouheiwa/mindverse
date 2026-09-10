@@ -79,7 +79,10 @@ describe('PlanetSky', () => {
     camera.rotation.set(0.2, 0.4, 0.6)
     camera.getViewMatrix(true)
     scene.onBeforeDrawPhaseObservable.notifyObservers(scene)
-    expect(sky.mesh.position.asArray()).toEqual(camera.globalPosition.asArray())
+    // infiniteDistance：位置留在原点，跟随相机由 Babylon 的零平移视图矩阵完成。
+    // 之前把位置设成相机位置，球心跑到两倍相机位移处，相机在球外，天空只剩一个球面。
+    expect(sky.mesh.infiniteDistance).toBe(true)
+    expect(sky.mesh.position.asArray()).toEqual([0, 0, 0])
     expect(sky.mesh.rotation.asArray()).toEqual([0, 0, 0])
     sky.diagnostics().up.forEach((value, i) => expect(value).toBeCloseTo(i === 0 ? 1 : 0, 6))
     // 绝不手动绘制：这一条是回归闸，防止有人再把 mesh.render 放回 draw phase。
@@ -87,6 +90,17 @@ describe('PlanetSky', () => {
     sky.setDim(0)
     scene.onBeforeDrawPhaseObservable.notifyObservers(scene)
     expect(draw).not.toHaveBeenCalled()
+  })
+
+  it('reads as a daytime sky, not a black void', () => {
+    // 之前天顶 = 地平线 × (0.12, 0.18, 0.3)，岩石行星的天顶亮度 ≈ 0.05 —— 站在地表上
+    // 抬头是一片黑，读起来就是「还在宇宙里」。
+    const { sky } = setup()
+    const lum = (c: readonly number[]) => c[0]! * 0.2126 + c[1]! * 0.7152 + c[2]! * 0.0722
+    for (const key of ['magma', 'desert', 'rock', 'tundra', 'ice'] as const) {
+      sky.setThermal({ magma: 0, desert: 0, rock: 0, tundra: 0, ice: 0, [key]: 1 })
+      expect(lum(sky.diagnostics().zenith), key).toBeGreaterThan(0.14)
+    }
   })
 
   it('keeps every thermal zenith darker than its horizon', () => {

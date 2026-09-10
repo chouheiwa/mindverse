@@ -704,6 +704,11 @@ test('cluster structure rings leave the frame as the camera zooms in from panora
 })
 
 test('the planet stage has no universe left in it', async ({ page }) => {
+  // 地表材质是自定义着色器：编译失败时 Babylon 只在控制台报错，画面静默全黑。
+  const effectErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error' && /compiling effect|compile effect/i.test(message.text())) effectErrors.push(message.text())
+  })
   await openBabylonUniverse(page)
   await expectReady(page)
   await openStar(page)
@@ -727,6 +732,7 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   // 状态机。实测 Metal 上整帧 lit = 0：近裁剪面 0.1 把半径 0.18 的星球整个地面裁掉了。
   const surface = atPlanet.resources.surfaceStage!
   process.stdout.write(`[surface] ${JSON.stringify(surface)}\n`)
+  expect(effectErrors).toEqual([])
   // 相机得真的站在地上：注视点在眼前半个半径处；被宇宙的 1.2 机位下限夹住时
   // 相机悬在星球外一米多，这个距离会是 1.2。
   expect(surface.cameraTargetDistance!).toBeLessThan(surface.groundRadius)
@@ -735,9 +741,13 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   expect(surface.sunElevation!).toBeGreaterThan(0.3)
   const lit = await nonBackgroundRatio(page)
   process.stdout.write(`[surface] nonBackground ${lit.toFixed(4)}\n`)
-  const skyBands = (await canvas(page).evaluate(readFreshLuminanceProfile, 12)).bands
-  process.stdout.write(`[surface] bands ${skyBands.map((value) => value.toFixed(4)).join(',')}\n`)
+  const profile = await canvas(page).evaluate(readFreshLuminanceProfile, 12)
+  process.stdout.write(`[surface] bands ${profile.bands.map((value) => value.toFixed(4)).join(',')} contrast ${profile.contrast.map((value) => value.toFixed(4)).join(',')}\n`)
   expect(lit).toBeGreaterThan(0.3)
+  // 抬头得是白天的天，不是黑洞：最上面一带亮度。修复前 0.0104。
+  expect(profile.bands[0]!).toBeGreaterThan(0.10)
+  // 脚下得有岩理，不是一片平灰：最下面一带的像素对比度。修复前素色 StandardMaterial ≈ 0.003。
+  expect(profile.contrast[profile.contrast.length - 1]!).toBeGreaterThan(0.02)
 
   // 返回问题航道 = 离开地表回到轨道：宇宙回来，地表阶段归 idle。
   await page.getByRole('button', { name: '返回问题航道' }).click()

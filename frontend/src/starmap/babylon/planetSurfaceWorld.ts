@@ -1,4 +1,5 @@
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
+import type { Material } from '@babylonjs/core/Materials/material.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
@@ -12,6 +13,8 @@ import { buildTerrainMesh } from './terrainMesh'
 export interface PlanetSurfaceWorldOptions {
   /** 地表基色。不给就是中性岩灰。 */
   readonly albedo?: Vec3
+  /** 地表材质。给了就用它（世界拥有它，dispose 时一起释放）；不给就是素色 StandardMaterial。 */
+  readonly material?: Material
   readonly field: PlanetTerrainField
   readonly radius: number
   readonly displacement: number
@@ -46,7 +49,7 @@ export class PlanetSurfaceWorld {
   private readonly scene: Scene
   private readonly parent: TransformNode
   private readonly options: PlanetSurfaceWorldOptions
-  private readonly material: StandardMaterial
+  private readonly material: Material
   private builtThisUpdate = 0
   private disposedThisUpdate = 0
   private disposed = false
@@ -57,10 +60,15 @@ export class PlanetSurfaceWorld {
     // 块缓存依赖地形参数固定，复制选项可避免调用方改参数后新旧块形状不一致。
     this.options = { ...options }
     // 材质由世界共享，否则数百块会带来同样数量的材质和释放责任。
-    this.material = new StandardMaterial('planet-surface:material', scene)
-    const albedo = options.albedo ?? [0.34, 0.33, 0.31]
-    this.material.diffuseColor = new Color3(albedo[0], albedo[1], albedo[2])
-    this.material.specularColor = new Color3(0.03, 0.03, 0.03)
+    if (options.material) {
+      this.material = options.material
+    } else {
+      const plain = new StandardMaterial('planet-surface:material', scene)
+      const albedo = options.albedo ?? [0.34, 0.33, 0.31]
+      plain.diffuseColor = new Color3(albedo[0], albedo[1], albedo[2])
+      plain.specularColor = new Color3(0.03, 0.03, 0.03)
+      this.material = plain
+    }
   }
 
   /** cameraDirection 在 parent 局部空间中；cameraRadius 以行星半径为单位，贴地约为 1。 */

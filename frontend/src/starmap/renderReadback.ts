@@ -49,6 +49,8 @@ export async function readFreshPixelStats(
 export interface FreshLuminanceProfile {
   /** 自上而下的分带平均亮度，0–1。 */
   readonly bands: readonly number[]
+  /** 每带内像素亮度的标准差，0–1。平灰是 0，岩理/棋盘明显大于 0。 */
+  readonly contrast: readonly number[]
   readonly nonBackground: number
   readonly total: number
 }
@@ -95,6 +97,7 @@ export async function readFreshLuminanceProfile(
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
       const rows = Math.max(1, Math.floor(height / bands))
       const profile: number[] = []
+      const contrast: number[] = []
       let nonBackground = 0
       for (let index = 0; index < pixels.length; index += 4) {
         if (Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) > 12) nonBackground += 1
@@ -102,18 +105,23 @@ export async function readFreshLuminanceProfile(
       // readPixels 的原点在左下：从最后一带往前读，剖面才是「自上而下」。
       for (let band = bands - 1; band >= 0; band -= 1) {
         let sum = 0
+        let squares = 0
         let samples = 0
         const stop = band === bands - 1 ? height : (band + 1) * rows
         for (let y = band * rows; y < stop; y += 2) {
           for (let x = 0; x < width; x += 4) {
             const offset = (y * width + x) * 4
-            sum += (pixels[offset] * 0.2126 + pixels[offset + 1] * 0.7152 + pixels[offset + 2] * 0.0722) / 255
+            const luminance = (pixels[offset] * 0.2126 + pixels[offset + 1] * 0.7152 + pixels[offset + 2] * 0.0722) / 255
+            sum += luminance
+            squares += luminance * luminance
             samples += 1
           }
         }
-        profile.push(samples > 0 ? sum / samples : 0)
+        const mean = samples > 0 ? sum / samples : 0
+        profile.push(mean)
+        contrast.push(samples > 0 ? Math.sqrt(Math.max(0, squares / samples - mean * mean)) : 0)
       }
-      resolve({ bands: profile, nonBackground, total: pixels.length / 4 })
+      resolve({ bands: profile, contrast, nonBackground, total: pixels.length / 4 })
     })
     sampleAfterRender()
   })

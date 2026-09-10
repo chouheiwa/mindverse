@@ -95,7 +95,10 @@ export class PlanetSky {
     this.drawObserver = scene.onBeforeDrawPhaseObservable.add(() => {
       const camera = scene.activeCamera
       if (this.disposed || !camera || !this.mesh.isVisible || !parent.isEnabled()) return
-      this.mesh.position.copyFrom(camera.globalPosition)
+      // infiniteDistance 的网格由 Babylon 用去掉平移的视图矩阵绘制，位置必须留在原点：
+      // 再把位置设成相机位置，球心就跑到两倍相机位移处，相机根本不在球里 ——
+      // 实测天空只剩一个从外面看的橙色球面，其余全黑。
+      this.mesh.position.setAll(0)
       const center = parent.getAbsolutePosition()
       const radial = camera.globalPosition.subtract(center)
       this.up = direction([radial.x, radial.y, radial.z])
@@ -127,7 +130,9 @@ export class PlanetSky {
       const weight = total > 1e-8 ? safe[i]! / Math.max(total, 1e-8) : Number(key === 'rock')
       this.horizon.addInPlace(Vector3.FromArray(PALETTE[key]).scale(weight))
     })
-    this.zenith = this.horizon.multiply(new Vector3(0.12, 0.18, 0.3))
+    // 天顶要读得出是白天：之前 ×(0.12,0.18,0.3) 让岩石行星的天顶亮度只有 0.05，
+    // 站在地表上抬头一片黑。仍比地平线暗（空气厚度的读法不变），但是明显的蓝天。
+    this.zenith = this.horizon.multiply(new Vector3(0.5, 0.62, 0.86))
     this.sunColor = Vector3.Lerp(this.horizon, Vector3.One(), 0.65)
     this.material.setVector3('uZenithColor', this.zenith)
     this.material.setVector3('uHorizonColor', this.horizon)

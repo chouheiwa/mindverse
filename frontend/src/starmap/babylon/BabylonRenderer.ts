@@ -25,6 +25,7 @@ import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '.
 import { backdropGain } from '../backdropVisibility'
 import { planetOrbitClock } from './planetMotion'
 import { PlanetSky, thermalGroundAlbedo } from './planetSky'
+import { PlanetGround } from './planetGround'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
 import {
@@ -327,6 +328,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceStage: SurfaceStageState = IDLE_SURFACE_STAGE
   private surfaceWorld: PlanetSurfaceWorld | null = null
   private surfaceSky: PlanetSky | null = null
+  /** 地表材质控制器：太阳、相机与热型调色。材质本身归 surfaceWorld 释放。 */
+  private surfaceGround: PlanetGround | null = null
   /** 地表的太阳与天光。地形块用 StandardMaterial，场景里没有灯它就是一片黑。 */
   private surfaceSun: DirectionalLight | null = null
   private surfaceAmbient: HemisphericLight | null = null
@@ -1762,7 +1765,13 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceRoot = root
     this.surfaceRadius = this.selectedPlanetWorldRadius()
     this.surfaceDisplacement = displacement
+    this.surfaceGround = new PlanetGround(this.scene, {
+      radius: this.surfaceRadius,
+      thermal: this.selectedVisual.descriptor.thermal,
+      seed: this.selectedVisual.descriptor.seed,
+    })
     this.surfaceWorld = new PlanetSurfaceWorld(this.scene, root, {
+      material: this.surfaceGround.material,
       field,
       radius: this.surfaceRadius,
       displacement,
@@ -1895,6 +1904,8 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceWorld = null
     this.surfaceSky?.dispose()
     this.surfaceSky = null
+    this.surfaceGround?.dispose()
+    this.surfaceGround = null
     this.surfaceSun?.dispose()
     this.surfaceSun = null
     this.surfaceAmbient?.dispose()
@@ -1961,6 +1972,9 @@ export class BabylonRenderer implements MindverseRenderer {
     }
     const sun = this.surfaceSunDirection()
     this.surfaceSky?.setSun(sun)
+    this.surfaceGround?.setSun(sun)
+    const eye = this.camera.globalPosition
+    this.surfaceGround?.setCamera([eye.x, eye.y, eye.z], [root.position.x, root.position.y, root.position.z], this.surfaceRadius)
     this.surfaceSun?.direction.set(-sun[0], -sun[1], -sun[2])
     this.surfaceAmbient?.direction.set(frame.up[0], frame.up[1], frame.up[2])
   }

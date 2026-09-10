@@ -1,6 +1,9 @@
 .strata-hud { position: fixed; inset: 18px 18px auto; z-index: 32; pointer-events: none; color: #dcebed; font-family: ui-monospace, monospace; outline: none }
 .strata-hud > * { pointer-events: auto }
-.strata-touch-pad { position: fixed; left: 25vw; top: 24vh; width: 50vw; height: 48vh; touch-action: none; background: transparent }
+/* 触控/点击垫铺满整屏：答案标本可能落在任何位置，只盖中间一块会让边上的标本点不到
+   （点击掉到底下的工作台对话框里，什么都不发生）。HUD 的其他元素在它之上。 */
+.strata-touch-pad { position: fixed; inset: 0; z-index: 0; touch-action: none; background: transparent }
+.strata-hud > :not(.strata-touch-pad) { position: relative; z-index: 1 }
 .strata-hud header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px }
 .strata-hud header div { display: grid; gap: 4px; padding: 12px 14px; border-left: 2px solid #62c3de; background: linear-gradient(90deg, rgb(4 12 17 / 88%), transparent) }
 .strata-hud header span { color: #6fa9b9; font-size: 9px; letter-spacing: .2em }

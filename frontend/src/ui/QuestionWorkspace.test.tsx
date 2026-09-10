@@ -93,6 +93,37 @@ describe('QuestionWorkspace', () => {
     }
   })
 
+  test('on the surface the dossier starts folded into a card; I unfolds it, Escape folds it back', async () => {
+    // 地表是主画面。资料默认折成右上角一张小卡（标题、回答数、「资料」「打开答案地层」），
+    // 铺开的阅读面板只在你要看的时候出现；再按 Esc 才是离开行星。
+    const user = userEvent.setup()
+    const onBack = vi.fn()
+    const onEnterStrata = vi.fn()
+    render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
+      onBack={onBack} onRestoreCamera={() => {}} onEnterStrata={onEnterStrata} />)
+    const card = screen.getByRole('region', { name: '问题资料卡' })
+    expect(within(card).getByRole('heading', { level: 1 })).toHaveTextContent(question.title)
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '打开答案地层' })).toHaveLength(1)
+
+    await user.click(within(card).getByRole('button', { name: /资料/ }))
+    expect(screen.getByRole('tablist')).toBeVisible()
+    expect(screen.getByRole('tab', { name: '我的证据轨迹' })).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(onBack).not.toHaveBeenCalled()
+
+    // 键盘 I 同样开合；折叠状态下 Escape 才是离开行星。
+    // 原生 modal 里 Escape 以 cancel 事件到达：铺开时先折回，折叠时才关闭。
+    await user.keyboard('i')
+    expect(screen.getByRole('tablist')).toBeVisible()
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(onBack).not.toHaveBeenCalled()
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    expect(onBack).toHaveBeenCalledOnce()
+  })
+
   test('shows exact question, canonical links, sample provenance, and distinguishes personal relations', () => {
     const answers = [
       answer('answer:1', { authorName: 'Alice', bindings: [{ relation: 'created', folders: [] }] }),

@@ -399,7 +399,19 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
     )
   }).toBeGreaterThan(0)
   expect((await snapshot(page))!.resources.highPlanetCount).toBeLessThanOrEqual(1)
-  const entryCamera = (await snapshot(page))!.scene
+  // 环视改的是地表姿态，相机要到下一帧才跟上；SwiftShader 一帧上百毫秒，这里必须等
+  // 相机在两个真渲染帧之间不再变化，否则记下的「入口机位」是半路的。
+  let settled = (await snapshot(page))!
+  await expect.poll(async () => {
+    const next = (await snapshot(page))!
+    const same = next.resources.actualRenderCount! > settled.resources.actualRenderCount!
+      && next.scene.cameraAlpha === settled.scene.cameraAlpha
+      && next.scene.cameraBeta === settled.scene.cameraBeta
+      && next.scene.cameraTargetX === settled.scene.cameraTargetX
+    settled = next
+    return same
+  }, { timeout: 15_000, intervals: [100] }).toBe(true)
+  const entryCamera = settled.scene
   await enterStrata(page, '回溯地层')
   expect(await nonBackgroundRatio(page)).toBeGreaterThanOrEqual(0.35)
   // Evidence that entering a question lands in a strata world rather than text
@@ -733,6 +745,13 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   const surface = atPlanet.resources.surfaceStage!
   process.stdout.write(`[surface] ${JSON.stringify(surface)}\n`)
   expect(effectErrors).toEqual([])
+  // 资料默认折成小卡，阅读面板不挡地表；按 I 铺开，Esc 折回。
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  await page.keyboard.press('i')
+  await expect(page.getByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '问题资料卡' })).toBeVisible()
   // 相机得真的站在地上：注视点在眼前半个半径处；被宇宙的 1.2 机位下限夹住时
   // 相机悬在星球外一米多，这个距离会是 1.2。
   expect(surface.cameraTargetDistance!).toBeLessThan(surface.groundRadius)

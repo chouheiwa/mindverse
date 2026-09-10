@@ -422,7 +422,7 @@ describe('Universe question keyboard integration', () => {
     expect(testState.selectCalls).toEqual([['star:v1:private:8ed3f6ad685b959e', 'question:7']])
     expect(screen.queryByRole('button', { name: '关闭问题行星入口' })).not.toBeInTheDocument()
     // 进入行星现在是落到地表，2D 工作台随即可见 —— 不必先退出地层。
-    expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: /资料/ })).toBeVisible()
     expect(testState.suspendCalls).toBe(0)
     await user.click(screen.getByRole('button', { name: '返回问题航道' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -462,7 +462,7 @@ describe('Universe question keyboard integration', () => {
     await user.click(screen.getByRole('button', { name: '返回行星表面' }))
     expect(testState.strataExitCalls).toEqual([1])
     act(() => testState.callbacks?.onStrataExited?.({ token: 1, questionId: 'question:7' }))
-    expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: /资料/ })).toBeVisible()
   })
 
   test('hands lane focus to the card, enters and leaves the workspace, and clears stale entry state', async () => {
@@ -496,7 +496,7 @@ describe('Universe question keyboard integration', () => {
 
     await user.keyboard('{Enter}')
     expect(testState.suspendCalls).toBe(0)
-    expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: /资料/ })).toBeVisible()
     const stage = screen.getByRole('region', { name: '行星地表' })
     fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 30 }))
     fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 19 }))
@@ -575,7 +575,7 @@ test('entering a question planet flies into the atmosphere, and leaving does not
 
   await user.click(screen.getByRole('button', { name: '返回行星表面' }))
   act(() => testState.callbacks?.onStrataExited?.({ token: 1, questionId: 'question:7' }))
-  expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
+  expect(await screen.findByRole('button', { name: /资料/ })).toBeVisible()
   await waitFor(() => expect(testState.strataEnterCalls).toHaveLength(1))
   expect(screen.queryByRole('region', { name: '答案地层导航' })).not.toBeInTheDocument()
 })

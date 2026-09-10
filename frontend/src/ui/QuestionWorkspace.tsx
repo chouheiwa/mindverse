@@ -172,6 +172,9 @@ export interface QuestionWorkspaceProps {
 export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
   onBack, onRestoreCamera, onOrbit, stage = 'orbit', onWalk, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
   const onSurface = stage === 'surface'
+  // 地表上资料默认折成小卡；铺开的阅读面板只在你要看的时候出现。
+  const [dossierOpen, setDossierOpen] = useState(false)
+  const folded = onSurface && !dossierOpen
   const walkKeysRef = useRef(new Set<string>())
   useEffect(() => {
     if (!onSurface || !onWalk) return
@@ -237,6 +240,18 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
       walkKeysRef.current.add(event.code)
       return
     }
+    if (onSurface && event.code === 'KeyI' && !isTextEntryTarget(event.target)) {
+      event.preventDefault()
+      setDossierOpen((open) => !open)
+      return
+    }
+    if (onSurface && dossierOpen && event.key === 'Escape') {
+      // 铺开的资料先折回去；再按一次才是离开行星。
+      event.preventDefault()
+      event.stopPropagation()
+      setDossierOpen(false)
+      return
+    }
     modal.onKeyDown(event)
     if (event.key === 'Escape' && !modal.nativeModalRef.current) {
       event.preventDefault()
@@ -246,11 +261,16 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
 
   const labels: Record<Mode, string> = { personal: '我的证据轨迹', retrospective: '回溯', prism: '棱镜' }
   return (
-    <dialog ref={dialogRef} className={onSurface ? 'qw qw--surface' : 'qw'} aria-modal="true" aria-labelledby="qw-title"
+    <dialog ref={dialogRef} className={onSurface ? (folded ? 'qw qw--surface qw--folded' : 'qw qw--surface') : 'qw'} aria-modal="true" aria-labelledby="qw-title"
       onKeyDown={onDialogKeyDown}
       onKeyUp={(event) => { walkKeysRef.current.delete(event.code) }}
       onBlur={() => walkKeysRef.current.clear()}
-      onCancel={(event) => { event.preventDefault(); close() }}>
+      onCancel={(event) => {
+        event.preventDefault()
+        // 原生 modal 的 Esc 走 cancel 事件：铺开的资料先折回去，再按一次才离开行星。
+        if (onSurface && dossierOpen) setDossierOpen(false)
+        else close()
+      }}>
       <header className="qw-head">
         <button type="button" className="qw-back" onClick={close} aria-label="返回问题航道">← 返回问题航道</button>
         <span>{onSurface ? 'PLANET SURFACE' : 'QUESTION OBSERVATORY'}{orbitIndex ? ` · ORBIT ${String(orbitIndex).padStart(2, '0')}` : ''}</span>
@@ -286,16 +306,32 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
               <b>{model.answerCount} 条可核验回答</b>
             </div>
             <div className="qw-planet-controls">
-              <span>{onSurface ? 'W/S 前进后退 · A/D 平移 · 拖动环视 · Q/E 俯仰' : '拖动旋转 · 观察表面'}</span>
-              <button type="button" disabled={strataActive || !onEnterStrata}
+              <span>{onSurface ? 'W/S 前进后退 · A/D 平移 · 拖动环视 · Q/E 俯仰 · I 资料' : '拖动旋转 · 观察表面'}</span>
+              {!onSurface && <button type="button" disabled={strataActive || !onEnterStrata}
                 onClick={() => onEnterStrata?.(questionId)}>
                 {strataActive ? '正在进入答案地层' : '打开答案地层'}
-              </button>
+              </button>}
             </div>
             <p className="qw-strata-disclaimer">
               当前仍可访问的答案按首发时间排列，不代表当年观点或社区份额；列表存在幸存者偏差与版本偏差。
             </p>
           </section>
+          {onSurface && (
+            <section className="qw-card" aria-label="问题资料卡">
+              <p className="qw-kicker">QUESTION · {model.answerCount} 条可核验回答</p>
+              {folded && <h1 id="qw-title" ref={headingRef} tabIndex={-1}>{model.question.title}</h1>}
+              <div className="qw-card-actions">
+                <button type="button" aria-pressed={dossierOpen} onClick={() => setDossierOpen((open) => !open)}>
+                  {dossierOpen ? '收起资料 · Esc' : '资料 · I'}
+                </button>
+                <button type="button" disabled={strataActive || !onEnterStrata}
+                  onClick={() => onEnterStrata?.(questionId)}>
+                  {strataActive ? '正在进入答案地层' : '打开答案地层'}
+                </button>
+              </div>
+            </section>
+          )}
+          {!folded && <>
           <div className="qw-titleblock">
             <p>当前样本 · <span>{model.answerCount} 个当前可访问回答</span></p>
             <h1 id="qw-title" ref={headingRef} tabIndex={-1}>{model.question.title}</h1>
@@ -319,6 +355,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
             {activeMode === 'retrospective' && <RetrospectivePanel chronicle={model.chronicle} />}
             {activeMode === 'prism' && <PrismPanel />}
           </div>
+          </>}
         </main>
       )}
     </dialog>

@@ -29,6 +29,28 @@
 .qw--surface .qw-planet-stage::before, .qw--surface .qw-planet-stage::after { content: none }
 .qw--surface .qw-head { background: rgb(5 7 17 / 72%) }
 .qw--surface .qw-main { background: linear-gradient(90deg, transparent 0 50%, rgb(5 7 17 / 80%) 56%, rgb(5 7 17 / 94%) 64%) }
+/* 折叠：地表占满，右上角只留一张资料卡。 */
+.qw--folded .qw-main { grid-template-columns: 1fr; background: transparent }
+.qw--folded .qw-planet-stage { grid-column: 1 }
+.qw-card { position: absolute; z-index: 3; right: clamp(18px, 3vw, 44px); top: calc(68px + clamp(16px, 3vh, 30px)); width: min(360px, calc(100vw - 36px));
+  display: grid; gap: 10px; padding: 16px 18px 14px; border: 1px solid rgb(172 190 231 / 18%); background: rgb(5 7 17 / 66%);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px) }
+.qw-card .qw-kicker { margin: 0 }
+.qw .qw-card h1 { margin: 0; font-family: var(--f-d); font-size: 18px; font-weight: 500; line-height: 1.45; color: var(--ink) }
+.qw-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px }
+.qw-card-actions button { min-height: 40px; padding: 0 12px; border: 1px solid rgb(172 190 231 / 28%); background: rgb(5 7 17 / 55%); color: var(--ink);
+  font: inherit; font-family: var(--f-m); font-size: 10px; letter-spacing: .08em }
+.qw-card-actions button[aria-pressed="true"] { border-color: rgb(222 183 103 / 55%); background: rgb(222 183 103 / 12%) }
+.qw-card-actions button:last-child { border-color: rgb(222 183 103 / 42%) }
+/* 铺开的资料从右侧滑入，资料卡顶在上面继续可用。 */
+.qw--surface:not(.qw--folded) .qw-titleblock { padding-top: clamp(92px, 16vh, 140px) }
+@media (prefers-reduced-motion: no-preference) {
+  .qw--surface:not(.qw--folded) .qw-titleblock, .qw--surface:not(.qw--folded) .qw-rail, .qw--surface:not(.qw--folded) .qw-reading { animation: qw-dossier-in .28s var(--e-enter, ease-out) both }
+}
+@keyframes qw-dossier-in { from { opacity: 0; transform: translateX(24px) } }
+@media (max-width: 760px) {
+  .qw-card { position: sticky; top: 68px; right: auto; width: auto; margin: 12px }
+}
 .qw-planet-stage::before, .qw-planet-stage::after { content: ''; position: absolute; pointer-events: none }
 .qw-planet-stage::before { inset: 8%; border: 1px solid rgb(168 184 222 / 12%); clip-path: polygon(0 0, 9% 0, 9% 1px, 0 1px, 0 9%, 1px 9%, 1px 0, 100% 0, 100% 9%, calc(100% - 1px) 9%, calc(100% - 1px) 1px, 91% 1px, 91% 0, 100% 0, 100% 100%, 91% 100%, 91% calc(100% - 1px), calc(100% - 1px) calc(100% - 1px), calc(100% - 1px) 91%, 100% 91%, 100% 100%, 0 100%, 0 91%, 1px 91%, 1px calc(100% - 1px), 9% calc(100% - 1px), 9% 100%, 0 100%) }
 .qw-planet-stage::after { inset: 0; background: radial-gradient(circle at 50% 48%, transparent 0 28%, rgb(3 5 13 / 3%) 43%, rgb(3 5 13 / 72%) 100%) }

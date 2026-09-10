@@ -813,6 +813,8 @@ describe('Babylon stellar motion runtime', () => {
     renderer.overviewTarget = Vector3.Zero(); renderer.overviewRadius = 300
     renderer.planets = [{ star: datum, orbitR: 100, radius: 4 }]
     renderer.clearPlanet = (BabylonRenderer.prototype as any).clearPlanet
+    // clearPlanet 现在先离开行星地表；这个夹具没有地表，给个空实现。
+    renderer.exitPlanetSurface = () => {}
 
     expect(renderer.focusStar('alpha')).toBe(datum.s)
     const systemRadius = renderer.activeFlight.flight.to.radius

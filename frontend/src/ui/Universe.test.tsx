@@ -497,7 +497,7 @@ describe('Universe question keyboard integration', () => {
     await user.keyboard('{Enter}')
     expect(testState.suspendCalls).toBe(0)
     expect(await screen.findByRole('tab', { name: '我的证据轨迹' })).toBeVisible()
-    const stage = screen.getByRole('region', { name: '问题行星近景' })
+    const stage = screen.getByRole('region', { name: '行星地表' })
     fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 30 }))
     fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 19 }))
     fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 42, clientY: 19 }))
@@ -592,4 +592,8 @@ test('entering a question planet lands on its surface, and digging is a separate
   // 进来先站到地表上 —— 这一步不该直接把人塞进地层。
   await waitFor(() => expect(testState.surfaceEnterCalls).toEqual(['question:7']))
   expect(testState.strataEnterCalls).toHaveLength(0)
+
+  // 返回问题航道就是离开地表：否则宇宙一直关着、相机一直被地表占着，人被困在球上。
+  await user.click(await screen.findByRole('button', { name: '返回问题航道' }))
+  await waitFor(() => expect(testState.surfaceExitCalls).toBe(1))
 })

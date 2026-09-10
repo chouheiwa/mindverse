@@ -5,6 +5,8 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js'
 import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { Viewport } from '@babylonjs/core/Maths/math.viewport.js'
+import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js'
+import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { CreateIcoSphere } from '@babylonjs/core/Meshes/Builders/icoSphereBuilder.js'
@@ -22,14 +24,14 @@ import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
 import { backdropGain } from '../backdropVisibility'
 import { planetOrbitClock } from './planetMotion'
-import { PlanetSky } from './planetSky'
+import { PlanetSky, thermalGroundAlbedo } from './planetSky'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
 import {
-  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraUpOwned, surfaceSkyVisible, surfaceWalkEnabled,
+  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraOwned, surfaceSkyVisible, surfaceWalkEnabled,
   surfaceWorldVisible, type SurfaceStageState,
 } from './surfaceStage'
-import { standAt, surfaceFrame, walkSurface, type SurfacePose } from './surfaceCamera'
+import { landingSite, standAt, surfaceFrame, surfaceNearPlane, walkSurface, type SurfacePose } from './surfaceCamera'
 import { clusterRingOpacity } from '../clusterRingVisibility'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot, type StellarDiagnosticsSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
@@ -240,6 +242,10 @@ interface PlanetVisualRecord {
 
 /** 轨道俯冲到站立的时长。与大气层穿越同量级，让落地有过程感。 */
 const SURFACE_DESCENT_MS = 1100
+/** 宇宙视角的近裁剪面。地表阶段按眼高另算，退场时还原。 */
+const UNIVERSE_CAMERA_MIN_Z = 0.1
+/** 宇宙视角的最近机位。地表阶段相机贴着地面，这个下限必须让开。 */
+const UNIVERSE_LOWER_RADIUS_LIMIT = 1.2
 
 export class BabylonRenderer implements MindverseRenderer {
   private readonly runtime: BabylonRuntime
@@ -321,6 +327,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceStage: SurfaceStageState = IDLE_SURFACE_STAGE
   private surfaceWorld: PlanetSurfaceWorld | null = null
   private surfaceSky: PlanetSky | null = null
+  /** 地表的太阳与天光。地形块用 StandardMaterial，场景里没有灯它就是一片黑。 */
+  private surfaceSun: DirectionalLight | null = null
+  private surfaceAmbient: HemisphericLight | null = null
   private surfaceRoot: TransformNode | null = null
   private surfacePose: SurfacePose | null = null
   /** 地表世界的行星基准半径（世界单位）。 */
@@ -423,8 +432,8 @@ export class BabylonRenderer implements MindverseRenderer {
       const camera = new ArcRotateCamera('mindverse-camera', opening.alpha, opening.beta, 30, Vector3.Zero(), scene)
       this.camera = camera
       camera.fov = THREE_VERTICAL_FOV
-      camera.minZ = 0.1
-      camera.lowerRadiusLimit = 1.2
+      camera.minZ = UNIVERSE_CAMERA_MIN_Z
+      camera.lowerRadiusLimit = UNIVERSE_LOWER_RADIUS_LIMIT
       camera.upperRadiusLimit = 10_000
       // 相机阻尼显式化，并与 Reduced Motion 联动：「到位之后还在漂」
       // 正是降级动效偏好要消除的那一类运动。滚轮步长恒定 —— 退出阶梯
@@ -671,6 +680,8 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   clearPlanet(): void {
+    // 取消选中行星就是离开它的地表；否则宇宙一直关着、相机一直被地表占着。
+    this.exitPlanetSurface()
     if (this.destroyed || !this.selected) return
     this.planetFocusController.suspend()
     this.selectedVisual?.visual.setSelected(false)
@@ -720,16 +731,30 @@ export class BabylonRenderer implements MindverseRenderer {
     this.canvas.style.pointerEvents = open ? 'none' : ''
     if (open) this.camera.detachControl()
     else if (this.universeVisible) this.camera.attachControl(this.canvas, true)
+    this.applyCameraViewport()
+    // Three pulls in to PLANET_NEAR so the planet stays readable beside the panel.
+    if (open && this.selected && !surfaceCameraOwned(this.surfaceStage)) this.camera.radius = PLANET_NEAR
+    if (open) this.clearPointerFeedback()
+  }
+
+  /**
+   * 工作台打开时把 3D 视口让给右侧面板；站在地表上时视口占满 —— 那是主画面，
+   * 面板只是叠在上面的 HUD。
+   */
+  private applyCameraViewport(): void {
+    const open = this.workspaceOpen && !surfaceCameraOwned(this.surfaceStage)
     this.camera.viewport = open && this.engine.getRenderWidth() > 760
       ? new Viewport(0.18, 0, 0.82, 1)
       : open ? new Viewport(0, 0.16, 1, 0.84) : new Viewport(0, 0, 1, 1)
-    // Three pulls in to PLANET_NEAR so the planet stays readable beside the panel.
-    if (open && this.selected) this.camera.radius = PLANET_NEAR
-    if (open) this.clearPointerFeedback()
   }
 
   orbitWorkspace(deltaX: number, deltaY: number): void {
     if (this.destroyed || !this.selected) return
+    // 站在地表上时拖动是环视，不是转行星。
+    if (surfaceCameraOwned(this.surfaceStage)) {
+      this.walkPlanetSurface({ forward: 0, strafe: 0, turn: deltaX * 0.004, tilt: -deltaY * 0.004 })
+      return
+    }
     if (!this.planetFocusController.drag(deltaX, deltaY)) {
       this.selectedVisual?.visual.rotate(-deltaX * 0.005, -deltaY * 0.005)
     }
@@ -943,12 +968,10 @@ export class BabylonRenderer implements MindverseRenderer {
   focusAnswerSpecimen(answerId: string): void { this.strataTransition.focusAnswer(answerId) }
   closeAnswerSpecimen(): void { this.strataTransition.closeAnswer() }
   exitStrata(token: StrataToken): void {
+    // 升回地表要等上浮动画结束（setUniverseVisible(true) 那一刻）。此刻就把相机交还
+    // 给地表，会和还在跑的上浮飞行同帧互写相机，最终机位取决于谁最后写 —— 负载下
+    // 实测退回地表后 alpha 偏了 0.12。
     this.strataTransition.exit(token)
-    // 升回地表：地表世界重新在场。
-    this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
-      kind: 'surfaced', token: this.surfaceStage.token,
-    })
-    this.applySurfaceVisibility()
   }
 
   private createScene(index: UniverseIndex): void {
@@ -1385,7 +1408,9 @@ export class BabylonRenderer implements MindverseRenderer {
         focused: visual === this.selectedVisual,
       })
     }
-    if (this.selected && this.selectedVisual && this.universeVisible) {
+    if (surfaceCameraOwned(this.surfaceStage)) {
+      // 地表拥有相机：聚焦控制器每帧把注视点拷回行星中心会把人拽进行星内部。
+    } else if (this.selected && this.selectedVisual && this.universeVisible) {
       if (this.planetFocusController.state === 'focused') {
         this.camera.target.copyFrom(this.selectedVisual.visual.activeMesh.position)
       }
@@ -1722,9 +1747,14 @@ export class BabylonRenderer implements MindverseRenderer {
     const centre = this.selectedVisual.visual.activeMesh.position
     const camera = this.camera.globalPosition
     const away = new Vector3(camera.x - centre.x, camera.y - centre.y, camera.z - centre.z)
-    const landing: readonly [number, number, number] = away.lengthSquared() > 1e-9
+    const approach: readonly [number, number, number] = away.lengthSquared() > 1e-9
       ? [away.x / away.length(), away.y / away.length(), away.z / away.length()]
       : [0, 1, 0]
+    // 正对镜头的那一面通常是夜面（恒星在行星背后）；落点挪到白天那一面。
+    const star = this.focusedStar ? this.currentStarPosition(this.focusedStar) : null
+    const landing: readonly [number, number, number] = landingSite(approach, star
+      ? [star.x - centre.x, star.y - centre.y, star.z - centre.z]
+      : approach)
 
     this.disposeSurfaceWorld()
     const root = new TransformNode('planet-surface-root', this.scene)
@@ -1738,6 +1768,7 @@ export class BabylonRenderer implements MindverseRenderer {
       displacement,
       resolution: this.quality === 'high' ? 8 : this.quality === 'medium' ? 6 : 4,
       skirtDepth: 0.02,
+      albedo: thermalGroundAlbedo(this.selectedVisual.descriptor.thermal),
       maxDepth: this.quality === 'low' ? 4 : 5,
       detailAngle: 0.35,
       budget: this.quality === 'high' ? 400 : 240,
@@ -1746,6 +1777,16 @@ export class BabylonRenderer implements MindverseRenderer {
       radius: this.surfaceRadius * 6,
       thermal: this.selectedVisual.descriptor.thermal,
     })
+    const sunDirection = this.surfaceSunDirection()
+    this.surfaceSun = new DirectionalLight('planet-surface:sun',
+      new Vector3(-sunDirection[0], -sunDirection[1], -sunDirection[2]), this.scene)
+    this.surfaceSun.parent = root
+    this.surfaceSun.intensity = 1.15
+    this.surfaceAmbient = new HemisphericLight('planet-surface:sky-light',
+      new Vector3(landing[0], landing[1], landing[2]), this.scene)
+    this.surfaceAmbient.parent = root
+    this.surfaceAmbient.intensity = 0.42
+    this.surfaceAmbient.groundColor = new Color3(0.05, 0.045, 0.04)
     this.surfaceField = field
     // 站在落点上，眼高按行星半径取比例，换一颗大小不同的行星观感一致。
     this.surfacePose = standAt(landing, this.surfaceRadius * 0.012)
@@ -1789,6 +1830,12 @@ export class BabylonRenderer implements MindverseRenderer {
     vertexCount: number
     skyVisible: boolean
     groundRadius: number
+    cameraTargetDistance: number
+    lightCount: number
+    /** 相机到星心的距离，以行星半径为单位。站在地上约 1.01。 */
+    cameraAltitude: number
+    /** 太阳相对脚下法线的高度角余弦。负数是夜面。 */
+    sunElevation: number
   }> {
     const world = this.surfaceWorld?.diagnostics()
     const frame = this.surfacePose && this.surfaceField
@@ -1803,6 +1850,15 @@ export class BabylonRenderer implements MindverseRenderer {
       vertexCount: world?.vertexCount ?? 0,
       skyVisible: surfaceSkyVisible(this.surfaceStage),
       groundRadius: frame?.groundRadius ?? 0,
+      cameraTargetDistance: Vector3.Distance(this.camera.globalPosition, this.camera.target),
+      lightCount: (this.surfaceSun ? 1 : 0) + (this.surfaceAmbient ? 1 : 0),
+      cameraAltitude: this.surfaceRoot
+        ? Vector3.Distance(this.camera.globalPosition, this.surfaceRoot.position) / Math.max(1e-6, this.surfaceRadius)
+        : 0,
+      sunElevation: frame ? (() => {
+        const sun = this.surfaceSunDirection()
+        return frame.up[0] * sun[0] + frame.up[1] * sun[1] + frame.up[2] * sun[2]
+      })() : 0,
     })
   }
 
@@ -1820,9 +1876,18 @@ export class BabylonRenderer implements MindverseRenderer {
     }
     // 地表不再驱动相机时，把 up 轴交还给世界 Y。地表相机只往 upVector 里写脚下的法线，
     // 从不还原 —— 洞穴的相机只摆位置和目标，会原样继承那个倾角。
-    if (!surfaceCameraUpOwned(this.surfaceStage) && !this.camera.upVector.equals(Vector3.UpReadOnly)) {
+    if (!surfaceCameraOwned(this.surfaceStage) && !this.camera.upVector.equals(Vector3.UpReadOnly)) {
       this.camera.upVector = Vector3.Up()
     }
+    // 近裁剪面同样归地表所有：宇宙的 0.1 会把小行星的整个可见地面裁掉（画布全黑）。
+    const owned = surfaceCameraOwned(this.surfaceStage)
+    this.camera.minZ = owned && this.surfacePose
+      ? surfaceNearPlane(this.surfacePose.eyeHeight)
+      : UNIVERSE_CAMERA_MIN_Z
+    // 最近机位下限也一样：ArcRotateCamera 每帧把 radius 夹回 ≥1.2，地表相机根本
+    // 贴不到地面，只能悬在半径 0.18 的星球外一米多，连天空球都在身后。
+    this.camera.lowerRadiusLimit = owned ? null : UNIVERSE_LOWER_RADIUS_LIMIT
+    this.applyCameraViewport()
   }
 
   private disposeSurfaceWorld(): void {
@@ -1830,6 +1895,10 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceWorld = null
     this.surfaceSky?.dispose()
     this.surfaceSky = null
+    this.surfaceSun?.dispose()
+    this.surfaceSun = null
+    this.surfaceAmbient?.dispose()
+    this.surfaceAmbient = null
     this.surfaceRoot?.dispose(false, false)
     this.surfaceRoot = null
     this.surfacePose = null
@@ -1890,7 +1959,10 @@ export class BabylonRenderer implements MindverseRenderer {
       this.camera.setTarget(landedTarget)
       this.camera.setPosition(landed)
     }
-    this.surfaceSky?.setSun(this.surfaceSunDirection())
+    const sun = this.surfaceSunDirection()
+    this.surfaceSky?.setSun(sun)
+    this.surfaceSun?.direction.set(-sun[0], -sun[1], -sun[2])
+    this.surfaceAmbient?.direction.set(frame.up[0], frame.up[1], frame.up[2])
   }
 
   /** 恒星相对这颗行星的方向，用来给天空定太阳位置。 */
@@ -1909,6 +1981,13 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.destroyed) return
     this.universeVisible = visible
     this.universeRoot.setEnabled(visible)
+    // 地层退场完成：若是从地表挖下去的，此刻回到地表（地表世界重新在场、相机归还）。
+    if (visible && this.surfaceStage.phase === 'digging') {
+      this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
+        kind: 'surfaced', token: this.surfaceStage.token,
+      })
+      this.applySurfaceVisibility()
+    }
     this.caveRoot?.setEnabled(!visible)
     this.scene.fogEnabled = !visible
     if (visible && !this.workspaceOpen) this.camera.attachControl(this.canvas, true)

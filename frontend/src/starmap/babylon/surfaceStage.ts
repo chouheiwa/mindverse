@@ -111,13 +111,15 @@ export function surfaceSkyVisible(state: SurfaceStageState): boolean {
 }
 
 /**
- * 地表是否拥有相机的 up 轴。
+ * 地表是否拥有相机。
  *
- * 地表相机把 upVector 掰成脚下的法线；一旦地表不再驱动相机（往下挖、退回轨道），
- * up 必须交还给世界 Y。否则洞穴与宇宙都带着那个倾角一起歪 —— 实测地层的水平
- * 纹层变成斜纹，分带亮度剖面被抹平，交叉数从 ≥3 掉到 1。
+ * 拥有的意思是**整台相机**：位置、注视点、up 轴、近裁剪面、最近机位下限。别的
+ * 驱动者（行星聚焦控制器每帧把注视点拷回行星中心、工作台打开时把 radius 拉到
+ * PLANET_NEAR）在此期间都必须让开 —— 实测它们把相机拽到星心外 0.5R 的行星内部，
+ * 画布只剩裙边的亮线。一旦地表不再驱动相机（往下挖、退回轨道），这些都要交还：
+ * up 回世界 Y，否则洞穴与宇宙带着倾角一起歪，地层的水平纹层变斜纹。
  */
-export function surfaceCameraUpOwned(state: SurfaceStageState): boolean {
+export function surfaceCameraOwned(state: SurfaceStageState): boolean {
   return state.phase === 'descending' || state.phase === 'walking'
 }
 

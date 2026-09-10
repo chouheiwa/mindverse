@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTerrainField } from './terrainField'
-import { standAt, surfaceBasis, surfaceFrame, walkSurface } from './surfaceCamera'
+import { landingSite, standAt, surfaceBasis, surfaceFrame, surfaceNearPlane, walkSurface } from './surfaceCamera'
 import type { Vec3 } from './cubeSphere'
 
 const field = createTerrainField({
@@ -115,5 +115,39 @@ describe('walking a sphere means the local frame travels with you', () => {
     const frame = surfaceFrame(bad, field, Number.NaN, Number.NaN)
     expect(frame.position.every((value) => Number.isFinite(value))).toBe(true)
     expect(frame.target.every((value) => Number.isFinite(value))).toBe(true)
+  })
+
+  it('puts the near clip plane well inside the horizon of a small planet', () => {
+    // 行星世界半径只有 0.18，眼高按比例是 0.0022，地平线距离 sqrt(2·R·h) ≈ 0.028 ——
+    // 相机沿用宇宙的 minZ = 0.1 时，整个可见地面都在近裁剪面之内，画布全黑。
+    for (const radius of [0.18, 0.30, 1, 12]) {
+      const eyeHeight = radius * 0.012
+      const horizon = Math.sqrt(2 * radius * eyeHeight)
+      const near = surfaceNearPlane(eyeHeight)
+      expect(near).toBeGreaterThan(0)
+      expect(near).toBeLessThan(eyeHeight / 2)
+      expect(near).toBeLessThan(horizon / 5)
+    }
+    expect(Number.isFinite(surfaceNearPlane(Number.NaN))).toBe(true)
+    expect(surfaceNearPlane(0)).toBeGreaterThan(0)
+  })
+
+  it('moves the landing site onto the day side', () => {
+    // 从轨道飞过来时恒星在行星背后，正对镜头的那一面是夜面：实测落点太阳高度角
+    // 余弦 −0.73，天是黑的，地形只剩天光的一点灰。落点要往太阳那边挪，直到太阳
+    // 至少有个清晨的高度 —— 但不能直接落到日下点，那样没有阴影、地形没有起伏感。
+    const sun: Vec3 = [0, 0, 1]
+    const night = landingSite([0, 0, -1], sun)
+    const elevation = night[0] * sun[0] + night[1] * sun[1] + night[2] * sun[2]
+    expect(elevation).toBeGreaterThan(0.3)
+    expect(elevation).toBeLessThan(0.9)
+    expect(Math.hypot(...night)).toBeCloseTo(1, 9)
+    // 已经在白天的落点保持不动。
+    const day: Vec3 = [Math.sin(0.6), 0, Math.cos(0.6)]
+    expect(landingSite(day, sun)).toEqual(day)
+    // 正好背对太阳（退化：两向量共线）也要给出一个有效的白天落点。
+    const antipode = landingSite([0, 0, -1], [0, 0, 1])
+    expect(Number.isFinite(antipode[0]) && Math.hypot(...antipode) > 0.99).toBe(true)
+    expect(antipode[2]).toBeGreaterThan(0.3)
   })
 })

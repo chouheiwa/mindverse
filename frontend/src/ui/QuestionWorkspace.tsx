@@ -158,15 +158,35 @@ export interface QuestionWorkspaceProps {
   orbitIndex?: number
   onBack: () => void
   onRestoreCamera: () => void
-  /** Orbit the live, already-selected 3D planet behind this observatory. */
+  /** Orbit the live, already-selected 3D planet behind this observatory (or look around on the surface). */
   onOrbit?: (deltaX: number, deltaY: number) => void
+  /** 轨道观测台，还是站在地表上的行走 HUD。 */
+  stage?: 'orbit' | 'surface'
+  /** 地表行走：每个 tick 一小步（角度制，相对行星半径）。 */
+  onWalk?: (input: Readonly<{ forward: number; strafe: number; turn: number; tilt: number }>) => void
   onEnterStrata?: (questionId: string) => void
   strataActive?: boolean
   getReturnFocus?: () => HTMLElement | null
 }
 
 export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
-  onBack, onRestoreCamera, onOrbit, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
+  onBack, onRestoreCamera, onOrbit, stage = 'orbit', onWalk, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
+  const onSurface = stage === 'surface'
+  const walkKeysRef = useRef(new Set<string>())
+  useEffect(() => {
+    if (!onSurface || !onWalk) return
+    const keys = walkKeysRef.current
+    const interval = window.setInterval(() => {
+      const forward = walkAxis(keys, ['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown'])
+      const strafe = walkAxis(keys, ['KeyD'], ['KeyA'])
+      const turn = walkAxis(keys, ['ArrowRight'], ['ArrowLeft'])
+      const tilt = walkAxis(keys, ['KeyE'], ['KeyQ'])
+      if (forward || strafe || turn || tilt) {
+        onWalk({ forward: forward * WALK_STEP, strafe: strafe * WALK_STEP, turn: turn * TURN_STEP, tilt: tilt * TURN_STEP })
+      }
+    }, WALK_TICK_MS)
+    return () => { window.clearInterval(interval); keys.clear() }
+  }, [onSurface, onWalk])
   const isPublic = shared || readOnly
   const mobileTabs = useMobileTabs()
   const tabs: readonly Mode[] = isPublic ? ['retrospective', 'prism'] : ['personal', 'retrospective', 'prism']
@@ -212,6 +232,11 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   }
 
   const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDialogElement>) => {
+    if (onSurface && isWalkKey(event.code) && !isTextEntryTarget(event.target)) {
+      event.preventDefault()
+      walkKeysRef.current.add(event.code)
+      return
+    }
     modal.onKeyDown(event)
     if (event.key === 'Escape' && !modal.nativeModalRef.current) {
       event.preventDefault()
@@ -221,18 +246,22 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
 
   const labels: Record<Mode, string> = { personal: '我的证据轨迹', retrospective: '回溯', prism: '棱镜' }
   return (
-    <dialog ref={dialogRef} className="qw" aria-modal="true" aria-labelledby="qw-title" onKeyDown={onDialogKeyDown}
+    <dialog ref={dialogRef} className={onSurface ? 'qw qw--surface' : 'qw'} aria-modal="true" aria-labelledby="qw-title"
+      onKeyDown={onDialogKeyDown}
+      onKeyUp={(event) => { walkKeysRef.current.delete(event.code) }}
+      onBlur={() => walkKeysRef.current.clear()}
       onCancel={(event) => { event.preventDefault(); close() }}>
       <header className="qw-head">
         <button type="button" className="qw-back" onClick={close} aria-label="返回问题航道">← 返回问题航道</button>
-        <span>QUESTION OBSERVATORY{orbitIndex ? ` · ORBIT ${String(orbitIndex).padStart(2, '0')}` : ''}</span>
+        <span>{onSurface ? 'PLANET SURFACE' : 'QUESTION OBSERVATORY'}{orbitIndex ? ` · ORBIT ${String(orbitIndex).padStart(2, '0')}` : ''}</span>
         {model.status === 'ready' && <a href={model.question.url} target="_blank" rel="noopener noreferrer">知乎原问题</a>}
       </header>
       {model.status === 'error' ? (
         <main className="qw-error"><h1 id="qw-title" ref={headingRef} tabIndex={-1}>无法建立问题工作台</h1><p>{model.message}</p></main>
       ) : (
         <main className="qw-main">
-          <section className="qw-planet-stage" aria-label="问题行星近景"
+          <section className={onSurface ? 'qw-planet-stage qw-planet-stage--surface' : 'qw-planet-stage'}
+            aria-label={onSurface ? '行星地表' : '问题行星近景'}
             onPointerDown={(event) => {
               if (isInteractivePointerTarget(event.target)) return
               dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
@@ -251,13 +280,13 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
               event.currentTarget.releasePointerCapture?.(event.pointerId)
             }}
             onPointerCancel={() => { dragRef.current = null }}>
-            <div className="qw-reticle" aria-hidden="true"><i /><i /><i /></div>
+            {!onSurface && <div className="qw-reticle" aria-hidden="true"><i /><i /><i /></div>}
             <div className="qw-planet-readout">
-              <span>LIVE OBJECT · QUESTION</span>
+              <span>{onSurface ? 'PLANET SURFACE · QUESTION' : 'LIVE OBJECT · QUESTION'}</span>
               <b>{model.answerCount} 条可核验回答</b>
             </div>
             <div className="qw-planet-controls">
-              <span>拖动旋转 · 观察表面</span>
+              <span>{onSurface ? 'W/S 前进后退 · A/D 平移 · 拖动环视 · Q/E 俯仰' : '拖动旋转 · 观察表面'}</span>
               <button type="button" disabled={strataActive || !onEnterStrata}
                 onClick={() => onEnterStrata?.(questionId)}>
                 {strataActive ? '正在进入答案地层' : '打开答案地层'}
@@ -294,6 +323,18 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
       )}
     </dialog>
   )
+}
+
+/** 每个 tick 走的角度（弧度，相对行星半径）：50ms 一步，绕球一圈约 80 秒。 */
+const WALK_STEP = 0.004
+const TURN_STEP = 0.02
+const WALK_TICK_MS = 50
+const WALK_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']
+const isWalkKey = (code: string): boolean => WALK_KEYS.includes(code)
+const isTextEntryTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
+function walkAxis(keys: ReadonlySet<string>, positive: readonly string[], negative: readonly string[]): number {
+  return Number(positive.some((key) => keys.has(key))) - Number(negative.some((key) => keys.has(key)))
 }
 
 function isInteractivePointerTarget(target: EventTarget | null): boolean {

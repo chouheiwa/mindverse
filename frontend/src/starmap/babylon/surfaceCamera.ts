@@ -184,3 +184,41 @@ export function standAt(direction: Vec3, eyeHeight: number): SurfacePose {
   const { up, north } = surfaceBasis(direction)
   return Object.freeze({ direction: up, facing: north, pitch: 0, eyeHeight })
 }
+
+/**
+ * 站在地表时相机的近裁剪面。
+ *
+ * 宇宙视角的 minZ = 0.1 是按星际尺度定的；行星世界半径可能只有 0.18，眼高按比例
+ * 0.0022，地平线距离 sqrt(2·R·h) ≈ 0.028 —— 整个可见地面都在 0.1 之内，画布全黑。
+ * 近裁剪面必须跟着眼高走。
+ */
+export function surfaceNearPlane(eyeHeight: number): number {
+  const height = Number.isFinite(eyeHeight) && eyeHeight > 0 ? eyeHeight : 1e-3
+  return Math.max(1e-6, height * 0.2)
+}
+
+/** 落点太阳高度角余弦的下限：清晨的光，有阴影、有起伏。 */
+const LANDING_MIN_SUN_ELEVATION = 0.45
+
+/**
+ * 把落点挪到白天那一面。
+ *
+ * 从轨道飞过来时恒星在行星背后，正对镜头的那一面是夜面。落点沿「落点→太阳」的
+ * 大圆往太阳挪，直到太阳至少有清晨的高度；已经在白天的落点不动。
+ */
+export function landingSite(approach: Vec3, sun: Vec3): Vec3 {
+  const from = normalize(approach)
+  const toward = normalize(sun)
+  const elevation = from[0] * toward[0] + from[1] * toward[1] + from[2] * toward[2]
+  if (elevation >= LANDING_MIN_SUN_ELEVATION) return from
+  // 落点与太阳方向张成的平面内旋转；共线时任取一个垂直方向。
+  const sideways = normalize(scaleAdd(from, toward, -elevation))
+  const side = Math.hypot(...sideways) > 0.5 && Number.isFinite(sideways[0])
+    ? sideways
+    : normalize(cross(toward, Math.abs(toward[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0]))
+  const angle = Math.acos(LANDING_MIN_SUN_ELEVATION)
+  return normalize(scaleAdd(
+    [toward[0] * Math.cos(angle), toward[1] * Math.cos(angle), toward[2] * Math.cos(angle)],
+    side, Math.sin(angle),
+  ))
+}

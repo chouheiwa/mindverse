@@ -59,6 +59,40 @@ describe('QuestionWorkspace', () => {
     expect(onOrbit).toHaveBeenCalledWith(34, -17)
   })
 
+  test('on the planet surface the stage is a walking HUD, not an orbit observatory', () => {
+    // 站到地表上以后，左边那块不再是「轨道十字环 + 拖动旋转」的观测台：那是轨道时代
+    // 的东西，会把底下的 3D 地表挡掉。它得是不遮画面的 HUD：W/S 走、拖动环视。
+    vi.useFakeTimers()
+    try {
+      const onWalk = vi.fn()
+      const onOrbit = vi.fn()
+      render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
+        onBack={() => {}} onRestoreCamera={() => {}} onOrbit={onOrbit} onWalk={onWalk} />)
+      const stage = screen.getByRole('region', { name: '行星地表' })
+      expect(within(stage).queryByText(/拖动旋转/)).not.toBeInTheDocument()
+      expect(within(stage).getByText(/W\/S/)).toBeVisible()
+      expect(document.querySelector('.qw-reticle')).toBeNull()
+
+      const dialog = screen.getByRole('dialog')
+      fireEvent.keyDown(dialog, { code: 'KeyW', key: 'w' })
+      act(() => { vi.advanceTimersByTime(120) })
+      expect(onWalk).toHaveBeenCalled()
+      expect(onWalk.mock.calls.at(-1)![0].forward).toBeGreaterThan(0)
+      fireEvent.keyUp(dialog, { code: 'KeyW', key: 'w' })
+      onWalk.mockClear()
+      act(() => { vi.advanceTimersByTime(120) })
+      expect(onWalk).not.toHaveBeenCalled()
+
+      // 拖动在地表上是环视，仍然经 onOrbit 交给渲染器分派。
+      fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 80 }))
+      fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 150, clientY: 70 }))
+      fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 150, clientY: 70 }))
+      expect(onOrbit).toHaveBeenCalledWith(30, -10)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('shows exact question, canonical links, sample provenance, and distinguishes personal relations', () => {
     const answers = [
       answer('answer:1', { authorName: 'Alice', bindings: [{ relation: 'created', folders: [] }] }),

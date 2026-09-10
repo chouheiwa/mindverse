@@ -68,6 +68,11 @@ export interface RenderSnapshot {
       vertexCount: number
       skyVisible: boolean
       groundRadius: number
+      /** 相机到注视点的距离。站在地面上时远小于星球半径；被 1.2 的下限夹住时是 1.2。 */
+      cameraTargetDistance?: number
+      lightCount?: number
+      cameraAltitude?: number
+      sunElevation?: number
     }
     renderCostMs?: number
     maxRenderCostMs?: number

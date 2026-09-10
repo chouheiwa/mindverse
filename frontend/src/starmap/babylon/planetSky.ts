@@ -28,6 +28,27 @@ const PALETTE: Record<keyof ThermalWeights, Vec3> = {
   rock: [0.31, 0.34, 0.40], tundra: [0.20, 0.46, 0.39], ice: [0.42, 0.70, 0.96],
 }
 const clamp01 = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0
+
+/** 按热型权重混出的地平线色（也是地表的基色来源）。 */
+export function thermalHorizonColor(weights: ThermalWeights): Vec3 {
+  const keys = Object.keys(PALETTE) as (keyof ThermalWeights)[]
+  const safe = keys.map((key) => clamp01(weights[key]))
+  const total = safe.reduce((sum, value) => sum + value, 0)
+  const color: [number, number, number] = [0, 0, 0]
+  keys.forEach((key, index) => {
+    const weight = total > 1e-8 ? safe[index]! / total : Number(key === 'rock')
+    color[0] += PALETTE[key][0] * weight
+    color[1] += PALETTE[key][1] * weight
+    color[2] += PALETTE[key][2] * weight
+  })
+  return color
+}
+
+/** 地表基色：与天空同族色相，压暗一档，太阳直射时不至于一片白。 */
+export function thermalGroundAlbedo(weights: ThermalWeights): Vec3 {
+  const horizon = thermalHorizonColor(weights)
+  return [horizon[0] * 0.78 + 0.06, horizon[1] * 0.74 + 0.05, horizon[2] * 0.66 + 0.04]
+}
 function direction(value: Vec3): Vector3 {
   const scale = Math.max(...value.map(Math.abs))
   if (!value.every(Number.isFinite) || scale < 1e-12) return Vector3.Up()

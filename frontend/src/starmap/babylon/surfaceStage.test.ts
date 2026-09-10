@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraUpOwned, surfaceSkyVisible,
+  advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraOwned, surfaceSkyVisible,
   surfaceWalkEnabled, surfaceWorldVisible, type SurfaceStageState,
 } from './surfaceStage'
 
@@ -104,16 +104,16 @@ describe('the surface stage is business logic, so it lives outside the frame loo
     // 地表相机把 upVector 掰成脚下的法线。一旦地表不再驱动相机 —— 往下挖、退回轨道 ——
     // up 必须交还给世界 Y，否则洞穴与宇宙都会带着那个倾角一起歪掉：
     // 实测地层水平纹层变成斜纹，分带亮度剖面被抹平，交叉数从 ≥3 掉到 1。
-    expect(surfaceCameraUpOwned(IDLE_SURFACE_STAGE)).toBe(false)
+    expect(surfaceCameraOwned(IDLE_SURFACE_STAGE)).toBe(false)
     const descending = enter()
-    expect(surfaceCameraUpOwned(descending)).toBe(true)
+    expect(surfaceCameraOwned(descending)).toBe(true)
     const walking = advanceSurfaceStage(descending, { kind: 'landed', token: descending.token })
-    expect(surfaceCameraUpOwned(walking)).toBe(true)
+    expect(surfaceCameraOwned(walking)).toBe(true)
     const digging = advanceSurfaceStage(walking, { kind: 'dig', token: walking.token })
     expect(digging.phase).toBe('digging')
-    expect(surfaceCameraUpOwned(digging)).toBe(false)
+    expect(surfaceCameraOwned(digging)).toBe(false)
     const surfaced = advanceSurfaceStage(digging, { kind: 'surfaced', token: digging.token })
-    expect(surfaceCameraUpOwned(surfaced)).toBe(true)
-    expect(surfaceCameraUpOwned(advanceSurfaceStage(surfaced, { kind: 'exit' }))).toBe(false)
+    expect(surfaceCameraOwned(surfaced)).toBe(true)
+    expect(surfaceCameraOwned(advanceSurfaceStage(surfaced, { kind: 'exit' }))).toBe(false)
   })
 })

@@ -138,14 +138,22 @@ test(`three full journeys keep every interaction working and release every resou
 
     // --- 进入问题行星 → 主动旋转 ---
     await openQuestionWorkspace(page, '固定地层问题')
-    const stage = page.getByRole('region', { name: '问题行星近景' })
+    // 站在地表上：拖动是环视（相机注视点变），不再转行星。
+    const stage = page.getByRole('region', { name: '行星地表' })
     const stageBounds = (await stage.boundingBox())!
-    const rotationBefore = (await snapshot(page))!.planet.rotation
+    const lookBefore = (await snapshot(page))!.scene
     await page.mouse.move(stageBounds.x + stageBounds.width * 0.35, stageBounds.y + stageBounds.height * 0.45)
     await page.mouse.down()
     await page.mouse.move(stageBounds.x + stageBounds.width * 0.6, stageBounds.y + stageBounds.height * 0.33, { steps: 6 })
     await page.mouse.up()
-    await expect.poll(async () => (await snapshot(page))!.planet.rotation).not.toEqual(rotationBefore)
+    await expect.poll(async () => {
+      const scene = (await snapshot(page))!.scene
+      return Math.hypot(
+        scene.cameraTargetX! - lookBefore.cameraTargetX!,
+        scene.cameraTargetY! - lookBefore.cameraTargetY!,
+        scene.cameraTargetZ! - lookBefore.cameraTargetZ!,
+      )
+    }).toBeGreaterThan(0)
     const entryCamera = await settledCamera(page)
 
     // --- 进入地层：宇宙退场，纵向地层可读 ---

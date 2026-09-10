@@ -98,4 +98,27 @@ describe('a chunk becomes real geometry, and the seams must not open', () => {
     const direction = faceDirection(2, 0.25, -0.5)
     expect(Math.hypot(...point)).toBeCloseTo(10 * (1 + field.height(direction) * 0.085), 9)
   })
+
+  it('winds every triangle so its Babylon front face points outward on all six cube faces', () => {
+    // Babylon 左手系：三角形 (p1,p2,p3) 的正面法线是 (p1−p2)×(p3−p2)。固定的顶点顺序在
+    // 六个立方体面上手性不一致 —— 绕反的面从星球外看被背面剔除，脚下的地面直接消失，
+    // 只剩裙边发亮（实测地表画布点亮比例 0.028）。
+    for (const face of [0, 1, 2, 3, 4, 5] as const) {
+      for (const [u, v] of [[0.25, -0.5], [-0.6, 0.3], [0, 0]] as const) {
+        const mesh = buildTerrainMesh({ ...base, chunk: { face, u, v, halfSize: 0.25, depth: 2 }, skirtDepth: 0.02 })
+        const p = mesh.positions
+        const n = mesh.normals
+        for (let index = 0; index < mesh.indices.length; index += 3) {
+          const [i1, i2, i3] = [mesh.indices[index]!, mesh.indices[index + 1]!, mesh.indices[index + 2]!]
+          const ax = p[i1 * 3]! - p[i2 * 3]!, ay = p[i1 * 3 + 1]! - p[i2 * 3 + 1]!, az = p[i1 * 3 + 2]! - p[i2 * 3 + 2]!
+          const bx = p[i3 * 3]! - p[i2 * 3]!, by = p[i3 * 3 + 1]! - p[i2 * 3 + 1]!, bz = p[i3 * 3 + 2]! - p[i2 * 3 + 2]!
+          const fx = ay * bz - az * by, fy = az * bx - ax * bz, fz = ax * by - ay * bx
+          const rx = n[i1 * 3]! + n[i2 * 3]! + n[i3 * 3]!
+          const ry = n[i1 * 3 + 1]! + n[i2 * 3 + 1]! + n[i3 * 3 + 1]!
+          const rz = n[i1 * 3 + 2]! + n[i2 * 3 + 2]! + n[i3 * 3 + 2]!
+          expect(fx * rx + fy * ry + fz * rz, `face ${face} u ${u} v ${v} triangle ${index / 3}`).toBeGreaterThan(0)
+        }
+      }
+    }
+  })
 })

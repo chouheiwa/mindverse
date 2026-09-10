@@ -73,13 +73,33 @@ export function buildTerrainMesh(input: TerrainMeshInput): TerrainMeshData {
   }
 
   const triangles: number[] = []
+  // Babylon 左手系：三角形 (p1,p2,p3) 的正面法线是 (p1−p2)×(p3−p2)。立方体六个面的
+  // (u,v) 手性不一致，固定顶点顺序会让一半的面从星球外看被背面剔除 —— 脚下的地面
+  // 直接消失。所以按几何决定绕向：正面必须朝着顶点法线（向外）。
+  const pushOutward = (i1: number, i2: number, i3: number): void => {
+    const ax = positions[i1 * 3]! - positions[i2 * 3]!
+    const ay = positions[i1 * 3 + 1]! - positions[i2 * 3 + 1]!
+    const az = positions[i1 * 3 + 2]! - positions[i2 * 3 + 2]!
+    const bx = positions[i3 * 3]! - positions[i2 * 3]!
+    const by = positions[i3 * 3 + 1]! - positions[i2 * 3 + 1]!
+    const bz = positions[i3 * 3 + 2]! - positions[i2 * 3 + 2]!
+    const fx = ay * bz - az * by
+    const fy = az * bx - ax * bz
+    const fz = ax * by - ay * bx
+    const rx = normals[i1 * 3]! + normals[i2 * 3]! + normals[i3 * 3]!
+    const ry = normals[i1 * 3 + 1]! + normals[i2 * 3 + 1]! + normals[i3 * 3 + 1]!
+    const rz = normals[i1 * 3 + 2]! + normals[i2 * 3 + 2]! + normals[i3 * 3 + 2]!
+    if (fx * rx + fy * ry + fz * rz >= 0) triangles.push(i1, i2, i3)
+    else triangles.push(i1, i3, i2)
+  }
   for (let row = 0; row < resolution; row += 1) {
     for (let column = 0; column < resolution; column += 1) {
       const a = row * side + column
       const b = a + 1
       const c = a + side
       const d = c + 1
-      triangles.push(a, c, b, b, c, d)
+      pushOutward(a, c, b)
+      pushOutward(b, c, d)
     }
   }
 
@@ -96,8 +116,8 @@ export function buildTerrainMesh(input: TerrainMeshInput): TerrainMeshData {
       normals[skirtIndex * 3 + 1] = normals[edgeIndex * 3 + 1]!
       normals[skirtIndex * 3 + 2] = normals[edgeIndex * 3 + 2]!
       if (previousEdgeIndex >= 0) {
-        triangles.push(previousEdgeIndex, skirtIndex - 1, edgeIndex)
-        triangles.push(edgeIndex, skirtIndex - 1, skirtIndex)
+        pushOutward(previousEdgeIndex, skirtIndex - 1, edgeIndex)
+        pushOutward(edgeIndex, skirtIndex - 1, skirtIndex)
       }
       skirtIndex += 1
     }

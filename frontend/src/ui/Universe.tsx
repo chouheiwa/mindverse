@@ -442,6 +442,8 @@ export function PrivateUniverseView() {
   }, [rememberQuestionReturn, setPlanet, setQuestionEntry, star])
 
   const leaveQuestionEntry = useCallback(() => {
+    // 返回问题航道就是离开地表：否则宇宙一直关着、相机一直被地表占着，人被困在球上。
+    rendererRef.current?.exitPlanetSurface?.()
     setQuestionEntry(null)
   }, [setQuestionEntry])
 
@@ -473,10 +475,13 @@ export function PrivateUniverseView() {
    * 已经进过，否则用户会被一直拉回地层、永远出不来。
    */
   const autoEnteredQuestionRef = useRef<string | null>(null)
+  /** 是否站在行星地表上。决定工作台左边是行走 HUD 还是轨道观测台。 */
+  const [surfaceLanded, setSurfaceLanded] = useState(false)
   useEffect(() => {
     const questionId = questionEntry?.question.id ?? null
     if (!questionId) {
       autoEnteredQuestionRef.current = null
+      setSurfaceLanded(false)
       return
     }
     if (autoEnteredQuestionRef.current === questionId) return
@@ -484,6 +489,7 @@ export function PrivateUniverseView() {
     // 先站到地表上。可环绕地表是 Babylon 独有能力；Three 没有 CPU 地形，
     // 拿不到这个方法时退回旧路径（直接进答案地层），而不是把人晾在轨道视角。
     const landed = rendererRef.current?.enterPlanetSurface?.(questionId) ?? false
+    setSurfaceLanded(landed)
     if (!landed) enterStrata(questionId)
   }, [enterStrata, questionEntry])
 
@@ -673,6 +679,8 @@ export function PrivateUniverseView() {
           orbitIndex={questionEntry.orbitIndex} shared={false} readOnly={false}
           onBack={leaveQuestionEntry} onRestoreCamera={restoreQuestionCamera}
           onOrbit={(deltaX, deltaY) => rendererRef.current?.orbitWorkspace(deltaX, deltaY)}
+          stage={surfaceLanded ? 'surface' : 'orbit'}
+          onWalk={(input) => { rendererRef.current?.walkPlanetSurface?.(input) }}
           onEnterStrata={enterStrata} strataActive={exploration.kind === 'surface-approach'}
           getReturnFocus={getQuestionReturnFocus} />
       )}

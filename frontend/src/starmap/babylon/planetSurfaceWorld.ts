@@ -1,4 +1,5 @@
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
+import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
@@ -9,6 +10,8 @@ import type { PlanetTerrainField } from './terrainField'
 import { buildTerrainMesh } from './terrainMesh'
 
 export interface PlanetSurfaceWorldOptions {
+  /** 地表基色。不给就是中性岩灰。 */
+  readonly albedo?: Vec3
   readonly field: PlanetTerrainField
   readonly radius: number
   readonly displacement: number
@@ -55,6 +58,9 @@ export class PlanetSurfaceWorld {
     this.options = { ...options }
     // 材质由世界共享，否则数百块会带来同样数量的材质和释放责任。
     this.material = new StandardMaterial('planet-surface:material', scene)
+    const albedo = options.albedo ?? [0.34, 0.33, 0.31]
+    this.material.diffuseColor = new Color3(albedo[0], albedo[1], albedo[2])
+    this.material.specularColor = new Color3(0.03, 0.03, 0.03)
   }
 
   /** cameraDirection 在 parent 局部空间中；cameraRadius 以行星半径为单位，贴地约为 1。 */

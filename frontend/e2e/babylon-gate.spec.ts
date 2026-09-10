@@ -381,15 +381,23 @@ test('Babylon vertical slice renders, orbits, crosses the surface and preserves 
 
   const selectedBefore = (await snapshot(page))!.projectedBounds.selectedPlanet!
   expect(Math.min(selectedBefore.width, selectedBefore.height)).toBeGreaterThanOrEqual(720 * 0.24)
-  const stage = page.getByRole('region', { name: '问题行星近景' })
+  // 站在地表上：左边是行走 HUD，拖动是环视（相机注视点变），不再转行星。
+  const stage = page.getByRole('region', { name: '行星地表' })
   const stageBounds = await stage.boundingBox()
-  if (!stageBounds) throw new Error('question planet stage has no bounds')
-  const rotationBefore = (await snapshot(page))!.planet.rotation
+  if (!stageBounds) throw new Error('planet surface stage has no bounds')
+  const lookBefore = (await snapshot(page))!.scene
   await page.mouse.move(stageBounds.x + stageBounds.width * 0.35, stageBounds.y + stageBounds.height * 0.45)
   await page.mouse.down()
   await page.mouse.move(stageBounds.x + stageBounds.width * 0.58, stageBounds.y + stageBounds.height * 0.35, { steps: 5 })
   await page.mouse.up()
-  await expect.poll(async () => (await snapshot(page))!.planet.rotation).not.toEqual(rotationBefore)
+  await expect.poll(async () => {
+    const scene = (await snapshot(page))!.scene
+    return Math.hypot(
+      scene.cameraTargetX! - lookBefore.cameraTargetX!,
+      scene.cameraTargetY! - lookBefore.cameraTargetY!,
+      scene.cameraTargetZ! - lookBefore.cameraTargetZ!,
+    )
+  }).toBeGreaterThan(0)
   expect((await snapshot(page))!.resources.highPlanetCount).toBeLessThanOrEqual(1)
   const entryCamera = (await snapshot(page))!.scene
   await enterStrata(page, '回溯地层')
@@ -714,6 +722,29 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   expect(atPlanet.planet.selectedQuestionId).toBe('question:7')
   expect(atPlanet.resources.backdropGain).toBe(0)
   expect(atPlanet.stellar.visibleQuestionOrbits).toBe(0)
+
+  // 地表必须真的画出来。诊断说「walking、327 块」而画布全黑 —— 那不是地表，是一个
+  // 状态机。实测 Metal 上整帧 lit = 0：近裁剪面 0.1 把半径 0.18 的星球整个地面裁掉了。
+  const surface = atPlanet.resources.surfaceStage!
+  process.stdout.write(`[surface] ${JSON.stringify(surface)}\n`)
+  // 相机得真的站在地上：注视点在眼前半个半径处；被宇宙的 1.2 机位下限夹住时
+  // 相机悬在星球外一米多，这个距离会是 1.2。
+  expect(surface.cameraTargetDistance!).toBeLessThan(surface.groundRadius)
+  expect(surface.lightCount!).toBeGreaterThanOrEqual(1)
+  // 落点得在白天那一面：正对镜头的一面是夜面（恒星在行星背后），实测太阳高度角余弦 −0.73。
+  expect(surface.sunElevation!).toBeGreaterThan(0.3)
+  const lit = await nonBackgroundRatio(page)
+  process.stdout.write(`[surface] nonBackground ${lit.toFixed(4)}\n`)
+  const skyBands = (await canvas(page).evaluate(readFreshLuminanceProfile, 12)).bands
+  process.stdout.write(`[surface] bands ${skyBands.map((value) => value.toFixed(4)).join(',')}\n`)
+  expect(lit).toBeGreaterThan(0.3)
+
+  // 返回问题航道 = 离开地表回到轨道：宇宙回来，地表阶段归 idle。
+  await page.getByRole('button', { name: '返回问题航道' }).click()
+  await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase).toBe('idle')
+  // 行星仍然选中（行星聚焦阶段背景增益按设计仍是 0），但行星本身必须重新画出来。
+  await expect.poll(async () => (await snapshot(page))?.stellar.visibleQuestionPlanets ?? 0).toBeGreaterThan(0)
+  await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.chunkCount).toBe(0)
 })
 
 

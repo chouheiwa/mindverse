@@ -7,8 +7,8 @@
       "_apiCore-BzPZ3njc.js"
     ]
   },
-  "_api-vGgttR-j.js": {
-    "file": "assets/api-vGgttR-j.js",
+  "_api-BaIuq0_N.js": {
+    "file": "assets/api-BaIuq0_N.js",
     "name": "api",
     "imports": [
       "_apiCore-BzPZ3njc.js"
@@ -18,15 +18,15 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_babylon-1ftxpNB8.js": {
-    "file": "assets/babylon-1ftxpNB8.js",
+  "_babylon-DIav6TrV.js": {
+    "file": "assets/babylon-DIav6TrV.js",
     "name": "babylon",
     "imports": [
       "_theme-Dor0K0Z_.js",
       "universe.html"
     ],
     "dynamicImports": [
-      "_babylon-1ftxpNB8.js"
+      "_babylon-DIav6TrV.js"
     ]
   },
   "_theme-CbzUqeID.css": {
@@ -41,20 +41,20 @@
     ]
   },
   "index.html": {
-    "file": "assets/landing-BBGwprRe.js",
+    "file": "assets/landing-D5ztTvG9.js",
     "name": "landing",
     "src": "index.html",
     "isEntry": true,
     "imports": [
       "_theme-Dor0K0Z_.js",
-      "_api-vGgttR-j.js"
+      "_api-BaIuq0_N.js"
     ],
     "css": [
       "assets/landing-s2Lwws91.css"
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-_55_GZTQ.js",
+    "file": "assets/QuestionWorkspace-DFvEc5kM.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -80,13 +80,13 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-CLeV2NZb.js",
+    "file": "assets/Universe-CfmQ45AQ.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_theme-Dor0K0Z_.js",
-      "_api-vGgttR-j.js",
+      "_api-BaIuq0_N.js",
       "_apiCore-BzPZ3njc.js",
       "universe.html",
       "_PublicShareContent-C_zLrOhg.js"
@@ -100,7 +100,7 @@
     ]
   },
   "universe.html": {
-    "file": "assets/universe-D5KvqULk.js",
+    "file": "assets/universe-COf0c4k1.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,
@@ -113,13 +113,13 @@
     ]
   },
   "virtual:mindverse-renderer": {
-    "file": "assets/_virtual_mindverse-renderer-BgE3iJ8G.js",
+    "file": "assets/_virtual_mindverse-renderer-BD_1Hzrs.js",
     "name": "_virtual_mindverse-renderer",
     "src": "virtual:mindverse-renderer",
     "isDynamicEntry": true,
     "imports": [
-      "_api-vGgttR-j.js",
-      "_babylon-1ftxpNB8.js",
+      "_api-BaIuq0_N.js",
+      "_babylon-DIav6TrV.js",
       "src/ui/Universe.tsx"
     ]
   }

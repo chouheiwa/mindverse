@@ -1,47 +1,48 @@
-// 问题行星的公转时钟。
+// 问题行星的公转时钟：节奏，而不是开关。
 //
-// 行星一直在绕恒星转。在全景里这是生命感，但**当你正要点它的时候，它是个移动
-// 靶**：球在屏幕上本来就小，还在走，点中全靠运气。
+// 全景里全速，那是生命感。进了恒星系镜头跟着恒星走 —— 公转若冻住，画面里就什么
+// 都不动了；所以慢速继续。只有选中某颗行星（要点它、要落地）时才真停住：球在屏幕
+// 上本来就小，还在走，点中全靠运气。
 //
-// 所以进了恒星系就把公转停在当下 —— 不是把角度归零（那会让行星瞬移），
-// 而是冻住此刻的时间戳，行星停在你看到的位置上。退出恒星系再解冻。
+// 换节奏永远不跳：以当前公转时刻为锚点重新计时，行星停在你看到的位置上。
 
-export interface PlanetMotionInput {
-  /** 当前动画时间。 */
-  readonly elapsedMs: number
-  /** 进入恒星系那一刻的时间戳；null 表示没有聚焦、照常公转。 */
-  readonly frozenAtMs: number | null
-  readonly reducedMotion: boolean
+export interface OrbitClockState {
+  /** 锚点：动画时间与公转时间在此对齐。 */
+  readonly anchorElapsedMs: number
+  readonly anchorOrbitMs: number
+  /** 公转时间相对动画时间的倍率。 */
+  readonly tempo: number
 }
 
-/**
- * 行星定位该用的时间。
- *
- * 减弱动效下恒为 0（与既有行为一致）；聚焦恒星系时返回冻结时刻，行星原地不动。
- */
-export function planetMotionTime(input: PlanetMotionInput): number {
-  if (input.reducedMotion) return 0
-  const frozen = input.frozenAtMs
-  if (frozen !== null && Number.isFinite(frozen)) return frozen
-  return Number.isFinite(input.elapsedMs) ? input.elapsedMs : 0
+export const ORBIT_TEMPO = Object.freeze({ panorama: 1, starFocus: 0.25, held: 0 })
+
+export const INITIAL_ORBIT_CLOCK: OrbitClockState = Object.freeze({
+  anchorElapsedMs: 0, anchorOrbitMs: 0, tempo: ORBIT_TEMPO.panorama,
+})
+
+const finite = (value: number, fallback: number): number => Number.isFinite(value) ? value : fallback
+
+/** 当前公转时间。 */
+export function orbitClockTime(state: OrbitClockState, elapsedMs: number): number {
+  const elapsed = finite(elapsedMs, state.anchorElapsedMs)
+  return finite(state.anchorOrbitMs + (elapsed - state.anchorElapsedMs) * state.tempo, state.anchorOrbitMs)
 }
 
-export interface PlanetOrbitClock {
-  /** 恒星所在参考系的时间：恒星绕星群中心走、上下浮动都按它算，镜头也跟着它。 */
-  readonly frameTimeMs: number
-  /** 轨道相位的时间：进了恒星系就冻在当下。 */
-  readonly orbitTimeMs: number
-}
-
-/**
- * 行星定位的两个时钟。
- *
- * 冻结公转冻的只能是**轨道相位**。恒星本身还在走、镜头还跟着它 —— 若把恒星
- * 那一刻的位置也冻住，行星和轨道盘就留在原地，镜头带着恒星飞走。
- */
-export function planetOrbitClock(input: PlanetMotionInput): PlanetOrbitClock {
+/** 换节奏：以此刻的公转时刻为锚点，行星不会瞬移。节奏没变时原样返回。 */
+export function retimeOrbitClock(state: OrbitClockState, elapsedMs: number, tempo: number): OrbitClockState {
+  const nextTempo = Math.max(0, finite(tempo, state.tempo))
+  if (nextTempo === state.tempo) return state
+  const elapsed = finite(elapsedMs, state.anchorElapsedMs)
   return Object.freeze({
-    frameTimeMs: planetMotionTime({ ...input, frozenAtMs: null }),
-    orbitTimeMs: planetMotionTime(input),
+    anchorElapsedMs: elapsed,
+    anchorOrbitMs: orbitClockTime(state, elapsed),
+    tempo: nextTempo,
   })
+}
+
+/** 节奏由用户在做什么决定。 */
+export function orbitTempoFor(input: Readonly<{ starFocused: boolean; planetSelected: boolean }>): number {
+  if (input.planetSelected) return ORBIT_TEMPO.held
+  if (input.starFocused) return ORBIT_TEMPO.starFocus
+  return ORBIT_TEMPO.panorama
 }

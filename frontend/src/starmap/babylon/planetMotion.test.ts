@@ -1,54 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { planetMotionTime, planetOrbitClock } from './planetMotion'
+import { INITIAL_ORBIT_CLOCK, ORBIT_TEMPO, orbitClockTime, orbitTempoFor, retimeOrbitClock } from './planetMotion'
 
-describe('planets stop orbiting once you are inside their system', () => {
-  it('keeps orbiting in the panorama', () => {
-    expect(planetMotionTime({ elapsedMs: 4200, frozenAtMs: null, reducedMotion: false })).toBe(4200)
+// 公转的节奏，而不是开关。全景里全速；进了恒星系慢速继续 —— 镜头跟着恒星走，
+// 公转若冻住，画面里就什么都不动了；只有选中某颗行星（要点它、要落地）才真停住。
+describe('the orbit clock changes tempo without ever jumping', () => {
+  it('runs at full speed in the panorama', () => {
+    expect(orbitClockTime(INITIAL_ORBIT_CLOCK, 4200)).toBe(4200)
   })
 
-  it('holds still at the moment you entered, so the target stops moving', () => {
-    // 冻的是时间戳而不是把角度归零 —— 归零会让行星瞬移到轨道起点。
-    expect(planetMotionTime({ elapsedMs: 9000, frozenAtMs: 4200, reducedMotion: false })).toBe(4200)
-    expect(planetMotionTime({ elapsedMs: 99999, frozenAtMs: 4200, reducedMotion: false })).toBe(4200)
+  it('slows down inside a star system and keeps continuity at the switch', () => {
+    const slowed = retimeOrbitClock(INITIAL_ORBIT_CLOCK, 4200, ORBIT_TEMPO.starFocus)
+    expect(orbitClockTime(slowed, 4200)).toBe(4200)
+    expect(orbitClockTime(slowed, 9000)).toBeCloseTo(4200 + 4800 * ORBIT_TEMPO.starFocus, 9)
+    expect(ORBIT_TEMPO.starFocus).toBeGreaterThan(0)
+    expect(ORBIT_TEMPO.starFocus).toBeLessThan(0.5)
   })
 
-  it('resumes exactly where it stopped when the freeze lifts', () => {
-    const frozen = planetMotionTime({ elapsedMs: 9000, frozenAtMs: 4200, reducedMotion: false })
-    expect(planetMotionTime({ elapsedMs: frozen, frozenAtMs: null, reducedMotion: false })).toBe(frozen)
+  it('holds still while a planet is selected, and resumes from where it stopped', () => {
+    const slowed = retimeOrbitClock(INITIAL_ORBIT_CLOCK, 4200, ORBIT_TEMPO.starFocus)
+    const held = retimeOrbitClock(slowed, 9000, ORBIT_TEMPO.held)
+    const heldAt = orbitClockTime(held, 9000)
+    expect(orbitClockTime(held, 30000)).toBe(heldAt)
+    const resumed = retimeOrbitClock(held, 30000, ORBIT_TEMPO.panorama)
+    expect(orbitClockTime(resumed, 30000)).toBe(heldAt)
+    expect(orbitClockTime(resumed, 31000)).toBe(heldAt + 1000)
   })
 
-  it('still pins to zero under reduced motion, whatever the freeze says', () => {
-    expect(planetMotionTime({ elapsedMs: 9000, frozenAtMs: 4200, reducedMotion: true })).toBe(0)
-    expect(planetMotionTime({ elapsedMs: 9000, frozenAtMs: null, reducedMotion: true })).toBe(0)
+  it('is a no-op when the tempo does not change', () => {
+    const slowed = retimeOrbitClock(INITIAL_ORBIT_CLOCK, 4200, ORBIT_TEMPO.starFocus)
+    expect(retimeOrbitClock(slowed, 9000, ORBIT_TEMPO.starFocus)).toBe(slowed)
   })
 
   it('never returns a non-finite time', () => {
-    for (const input of [
-      { elapsedMs: Number.NaN, frozenAtMs: null, reducedMotion: false },
-      { elapsedMs: 100, frozenAtMs: Number.NaN, reducedMotion: false },
-      { elapsedMs: Infinity, frozenAtMs: null, reducedMotion: false },
-    ]) {
-      expect(Number.isFinite(planetMotionTime(input))).toBe(true)
-    }
+    const state = retimeOrbitClock(INITIAL_ORBIT_CLOCK, Number.NaN, Number.NaN)
+    expect(Number.isFinite(orbitClockTime(state, Infinity))).toBe(true)
+    expect(Number.isFinite(orbitClockTime(INITIAL_ORBIT_CLOCK, Number.NaN))).toBe(true)
   })
 
-  it('freezes only the orbit, never the frame the star drifts in', () => {
-    // 恒星本身在绕星群中心走、还在上下浮动，相机跟着它。冻结公转时若把恒星的
-    // 位置也冻在进入那一刻，行星和轨道盘就留在原地，镜头跟着恒星飞走 ——
-    // 「恒星朝一个方向飞，行星和星盘都不跟着走」。
-    const clock = planetOrbitClock({ elapsedMs: 9000, frozenAtMs: 4200, reducedMotion: false })
-    expect(clock.frameTimeMs).toBe(9000)
-    expect(clock.orbitTimeMs).toBe(4200)
-  })
-
-  it('uses one clock for both while nothing is frozen', () => {
-    const clock = planetOrbitClock({ elapsedMs: 9000, frozenAtMs: null, reducedMotion: false })
-    expect(clock.frameTimeMs).toBe(9000)
-    expect(clock.orbitTimeMs).toBe(9000)
-  })
-
-  it('pins both to zero under reduced motion', () => {
-    const clock = planetOrbitClock({ elapsedMs: 9000, frozenAtMs: 4200, reducedMotion: true })
-    expect(clock).toEqual({ frameTimeMs: 0, orbitTimeMs: 0 })
+  it('picks the tempo from what the user is doing', () => {
+    expect(orbitTempoFor({ starFocused: false, planetSelected: false })).toBe(ORBIT_TEMPO.panorama)
+    expect(orbitTempoFor({ starFocused: true, planetSelected: false })).toBe(ORBIT_TEMPO.starFocus)
+    expect(orbitTempoFor({ starFocused: true, planetSelected: true })).toBe(ORBIT_TEMPO.held)
   })
 })

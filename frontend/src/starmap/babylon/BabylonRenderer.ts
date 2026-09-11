@@ -23,7 +23,7 @@ import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
 import { backdropGain } from '../backdropVisibility'
-import { planetOrbitClock } from './planetMotion'
+import { INITIAL_ORBIT_CLOCK, orbitClockTime, orbitTempoFor, retimeOrbitClock, type OrbitClockState } from './planetMotion'
 import { PlanetSky, thermalGroundAlbedo } from './planetSky'
 import { PlanetGround } from './planetGround'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
@@ -322,8 +322,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private entryCameraSnapshot: Readonly<{ alpha: number; beta: number; radius: number; target: Vector3 }> | null = null
   private destroyed = false
   private universeVisible = true
-  /** 进入恒星系那一刻的动画时间。行星停在这里，不再是移动靶。 */
-  private planetMotionFrozenAtMs: number | null = null
+  /** 公转时钟：全景全速、恒星系慢速、选中行星时停住，换节奏不跳。 */
+  private orbitClock: OrbitClockState = INITIAL_ORBIT_CLOCK
   // ── 可环绕地表 ──
   private surfaceStage: SurfaceStageState = IDLE_SURFACE_STAGE
   private surfaceWorld: PlanetSurfaceWorld | null = null
@@ -673,7 +673,6 @@ export class BabylonRenderer implements MindverseRenderer {
     this.cancelFlight('reset')
     this.clearPlanet()
     this.focusedStar = null
-    this.planetMotionFrozenAtMs = null
     this.releaseMaterializedPlanets()
     this.starLayer.setFocus(null, null)
     this.applyLayerFocus(null)
@@ -1612,18 +1611,21 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private updatePlanetPosition(visual: PlanetVisualRecord, elapsedMs: number): void {
     const datum = visual.datum
-    // 冻结公转冻的只能是轨道相位。恒星还在绕星群中心走、上下浮动，镜头跟着它 ——
-    // 恒星位置必须用活时钟，否则行星和轨道盘留在原地，镜头带着恒星飞走。
-    const clock = planetOrbitClock({
-      elapsedMs, frozenAtMs: this.planetMotionFrozenAtMs, reducedMotion: this.reducedMotion,
-    })
+    // 恒星位置永远用活时钟（它还在绕星群中心走、上下浮动，镜头跟着它）；公转按节奏：
+    // 全景全速、恒星系慢速、选中行星时停住。换节奏以当前时刻为锚点，行星不会瞬移。
+    const frameTimeMs = this.reducedMotion ? 0 : elapsedMs
+    this.orbitClock = retimeOrbitClock(this.orbitClock, frameTimeMs, orbitTempoFor({
+      starFocused: this.focusedStar !== null,
+      planetSelected: this.selected !== null,
+    }))
+    const orbitTimeMs = this.reducedMotion ? 0 : orbitClockTime(this.orbitClock, frameTimeMs)
     const starPosition = starWorldPosition(
       datum.star,
-      clock.frameTimeMs,
+      frameTimeMs,
       this.reducedMotion ? 0 : 1.35,
       this.planetStarPositionScratch,
     )
-    const angle = datum.phase + Math.PI * 2 / datum.period * (clock.orbitTimeMs / 1000)
+    const angle = datum.phase + Math.PI * 2 / datum.period * (orbitTimeMs / 1000)
     const cosine = Math.cos(angle)
     const sine = Math.sin(angle)
     visual.visual.setPosition(this.planetPositionScratch.set(
@@ -2308,7 +2310,6 @@ export class BabylonRenderer implements MindverseRenderer {
       this.clearPlanet()
       this.materializeStarSystem(star)
       this.focusedStar = star
-      this.planetMotionFrozenAtMs = this.motionTime()
       const starKey = starIdentity(star.s)
       const target = this.currentStarPosition(star)
       this.starLayer.setFocus(starKey, star)
@@ -2544,7 +2545,6 @@ export class BabylonRenderer implements MindverseRenderer {
       this.presentation = describeStarPresentation({ phase: 'star-focus' })
     } else {
       this.focusedStar = null
-    this.planetMotionFrozenAtMs = null
       attemptRecovery(() => this.starLayer.setFocus(null, null))
       this.overviewTarget = finiteVector3(this.overviewTarget) ? this.overviewTarget : Vector3.Zero()
       this.overviewRadius = finitePositive(this.overviewRadius) ? this.overviewRadius : 30

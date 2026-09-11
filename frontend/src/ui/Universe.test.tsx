@@ -140,7 +140,7 @@ const selectedPlanet = {
     seed: .1, family: 'basalt', answerDensity: .2, timeSpan: null, freshness: .35,
     divergence: null, created: false, collected: false,
   },
-  index: 0, orbitIndex: 1, u: [1, 0, 0], v: [0, 1, 0], orbitR: 2.1, phase: 0, period: 10, radius: .1,
+  index: 0, orbitIndex: 1, u: [1, 0, 0], v: [0, 1, 0], orbitR: 2.1, phase: 0, period: 10, radius: .1, belt: false,
 } satisfies PlanetDatum
 
 beforeEach(() => {

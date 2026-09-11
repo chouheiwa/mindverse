@@ -588,14 +588,18 @@ export function selectPlanetData(
     aggregates = readonlyMap(built)
     aggregateByIndex.set(index, aggregates)
   }
+  // 轨道位置是重要性的表达：按回答数排名，前八名各占一条轨道，其余进小行星带。
+  // 同分保持恒星里原有的顺序。
+  const admitted = star.questionIds
+    .map((questionId) => ({ question: index.questionsById.get(questionId), aggregate: aggregates.get(questionId) }))
+    .filter((entry): entry is { question: QuestionPlanet; aggregate: QuestionPlanetAggregate } =>
+      entry.question !== undefined && entry.aggregate !== undefined)
+    .sort((left, right) => right.aggregate.answerCount - left.aggregate.answerCount)
   const result: QuestionPlanetDatum[] = []
-  for (const [localIndex, questionId] of star.questionIds.entries()) {
-    const question = index.questionsById.get(questionId)
-    const aggregate = aggregates.get(questionId)
-    if (!question || !aggregate) continue
+  for (const [rank, { question, aggregate }] of admitted.entries()) {
     const datum: QuestionPlanetDatum = {
       starId: star.id,
-      orbitIndex: localIndex + 1,
+      orbitIndex: rank + 1,
       question,
       aggregate,
       answers: aggregate.answers,

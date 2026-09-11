@@ -39,6 +39,14 @@ describe('Babylon orbit presentation states', () => {
     expect(questionPlanetVisible({ phase: 'panorama', ownerKey: 'star:a' })).toBe(false)
   })
 
+  test('asteroid-belt bodies never get their own orbit ring', () => {
+    // 五十个同心环就是「特别难看」：带里的天体只画天体，不画环。
+    const state = { phase: 'star-focus' as const, focusedOwnerKey: 'star:a', ownerKey: 'star:a' }
+    expect(questionOrbitAlpha({ ...state, belt: true })).toBe(0)
+    expect(questionOrbitAlpha({ ...state, belt: false })).toBeGreaterThan(0)
+    expect(questionOrbitAlpha({ ...state, phase: 'approach', systemReveal: 1, belt: true })).toBe(0)
+  })
+
   test('star focus unfolds every question orbit in that system only', () => {
     const state = { phase: 'star-focus' as const, focusedOwnerKey: 'star:a' }
     expect(questionOrbitAlpha({ ...state, ownerKey: 'star:a' })).toBeGreaterThan(0)

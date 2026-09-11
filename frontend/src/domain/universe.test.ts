@@ -56,6 +56,18 @@ describe('current universe indexes', () => {
     expect(selectPlanetData(legacy, legacy.universe.stars[0])).toEqual([])
   })
 
+  test('ranks planets by answer count so the eight orbits go to the questions that matter', () => {
+    // 轨道位置是重要性的表达：前八名各占一条轨道，其余进小行星带。同分按原顺序。
+    const dense = clone(fixture)
+    const answer = (id: string) => ({ ...dense.answers[0], id, questionId: 'question:9', url: `https://www.zhihu.com/question/9/answer/${id.split(':')[1]}` })
+    dense.answers.push(answer('answer:10'), answer('answer:11'))
+    dense.questions.push({ id: 'question:9', questionId: '9', title: 'Bigger', url: 'https://www.zhihu.com/question/9', answerIds: ['answer:10', 'answer:11'] })
+    dense.stars[0].questionIds.push('question:9')
+    const planets = selectPlanetData(indexUniverse(dense), dense.stars[0])
+    expect(planets.map(({ question, orbitIndex, answerCount }) => [question.id, orbitIndex, answerCount]))
+      .toEqual([['question:9', 1, 2], ['question:7', 2, 1]])
+  })
+
   test('creates star-local orbit data without duplicating the global question', () => {
     const index = indexUniverse(fixture)
     const alpha = selectPlanetData(index, index.universe.stars[0])[0]

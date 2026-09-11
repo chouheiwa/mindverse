@@ -312,6 +312,10 @@ async function openQuestionWorkspace(page: Page, title: string) {
  */
 async function enterStrata(page: Page, evidenceLabel: '回溯地层' | '当前可观测表层') {
   const trigger = page.getByRole('button', { name: '打开答案地层' })
+  // 工作台是异步加载的：负载下它比地表的 walking 阶段晚一拍出现。「可见就点、不可见
+  // 就跳过」在那一瞬间会直接跳过，然后白等 30 秒 —— 必须等按钮出现（或已自动进入地层）。
+  await expect.poll(async () => (await trigger.isVisible().catch(() => false))
+    || /strata/.test((await snapshot(page))?.scenePhase ?? ''), { timeout: 20_000 }).toBe(true)
   if (await trigger.isVisible().catch(() => false)) await trigger.click()
   await expect.poll(async () => (await snapshot(page))?.scenePhase, { timeout: 30_000 })
     .toBe('strata-free')

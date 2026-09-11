@@ -1,4 +1,5 @@
 import type { QuestionPlanetDatum } from '../domain/universe'
+import { isBeltOrbit } from '../starmap/orbitGeometry'
 import './QuestionLane.css'
 
 export function QuestionLane({ planets, selectedId, onSelect }: {
@@ -17,7 +18,7 @@ export function QuestionLane({ planets, selectedId, onSelect }: {
                 <button type="button" className={selectedId === planet.question.id ? 'is-selected' : ''}
                   data-focus-return={`lane:${planet.question.id}`}
                   aria-pressed={selectedId === planet.question.id}
-                  aria-label={`轨道 ${planet.orbitIndex}，${planet.question.title}，${planet.answerCount} 个回答`}
+                  aria-label={`${isBeltOrbit(planet.orbitIndex, planets.length) ? '小行星带' : '轨道'} ${planet.orbitIndex}，${planet.question.title}，${planet.answerCount} 个回答`}
                   onClick={(event) => onSelect(planet, event.currentTarget)}>
                   <span>{String(planet.orbitIndex).padStart(2, '0')}</span>
                   <b>{planet.question.title}</b>

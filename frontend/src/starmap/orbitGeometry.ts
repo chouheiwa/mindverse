@@ -53,3 +53,47 @@ export function orbitPlane(index: number, u: Vec3, v: Vec3, axis: Vec3): Readonl
   tiltedU[0] /= length; tiltedU[1] /= length; tiltedU[2] /= length
   return Object.freeze({ u: Object.freeze(tiltedU), v: Object.freeze([v[0], v[1], v[2]] as const) })
 }
+
+/** 独立轨道的上限。像真的太阳系：八颗行星，其余进小行星带。 */
+export const MAJOR_ORBIT_COUNT = 8
+/** 小行星带：紧贴第九条轨道的位置起，一条 2.2 宽的带。 */
+const BELT_GAP = 0.4
+const BELT_WIDTH = 2.2
+const BELT_BODY_SCALE = 0.45
+
+/** 第 `orbitIndex`（1 起的展示编号）颗行星是否在小行星带里。 */
+export function isBeltOrbit(orbitIndex: number, total: number): boolean {
+  return systemOrbit(orbitIndex - 1, total, 0).belt
+}
+
+export interface SystemOrbit {
+  readonly radius: number
+  /** 在小行星带里：不画独立轨道环，天体按 bodyScale 缩小。 */
+  readonly belt: boolean
+  readonly bodyScale: number
+  readonly phase: number
+}
+
+/**
+ * 恒星系里第 `index` 颗行星（按重要性排名，0 起）的轨道。
+ *
+ * 示例语料里最大的恒星挂了 50 个问题：每颗一条等距轨道就是 50 个同心环、最外圈
+ * 半径 58。前八名各占一条轨道；其余全部进最外圈一条宽带，半径与相位按低差异序列
+ * 铺开，画成小天体。八颗以内的系统与原来完全一致。
+ */
+export function systemOrbit(index: number, total: number, seed: number): SystemOrbit {
+  const rank = orbitIndexOf(index)
+  const count = Number.isFinite(total) ? Math.max(1, Math.floor(total)) : 1
+  if (rank < MAJOR_ORBIT_COUNT || count <= MAJOR_ORBIT_COUNT) {
+    return Object.freeze({ radius: orbitRadiusFor(rank), belt: false, bodyScale: 1, phase: orbitPhase(rank, seed) })
+  }
+  const beltIndex = rank - MAJOR_ORBIT_COUNT
+  const beltCount = Math.max(1, count - MAJOR_ORBIT_COUNT)
+  const safeSeed = Number.isFinite(seed) ? seed : 0
+  // 半径用黄金比低差异序列铺满带宽；相位均分整圈再加一点错位，天体不会排成一条线。
+  const spread = (beltIndex * 0.6180339887498949 + safeSeed * 0.137) % 1
+  const radius = orbitRadiusFor(MAJOR_ORBIT_COUNT) + BELT_GAP + BELT_WIDTH * spread
+  const jitter = ((beltIndex * 2654435761 + safeSeed * 97) % 1000) / 1000 - 0.5
+  const phase = (beltIndex + 0.5 + jitter * 0.6) / beltCount * Math.PI * 2 + (safeSeed * SEED_DEGREES * Math.PI) / 180
+  return Object.freeze({ radius, belt: true, bodyScale: BELT_BODY_SCALE, phase })
+}

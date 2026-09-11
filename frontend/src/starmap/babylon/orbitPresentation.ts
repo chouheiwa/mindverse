@@ -18,6 +18,8 @@ export interface OrbitPresentationState {
 interface OwnedOrbit extends OrbitPresentationState {
   readonly ownerKey: string
   readonly questionId?: string
+  /** 小行星带里的天体：只画天体，不画环。 */
+  readonly belt?: boolean
 }
 
 interface OrbitLinePort {
@@ -59,6 +61,8 @@ export function questionOrbitAlpha(state: OwnedOrbit): number {
   // planet-focus 是**地表阶段**：轨道椭圆是宇宙家具，回答的是「我在系统的
   // 哪里」，站在地表上时这个问题不成立 —— 画出来就还是轨道视角。
   if (state.phase === 'panorama' || state.phase === 'strata' || state.phase === 'planet-focus') return 0
+  // 带里的天体不画独立轨道环：五十个同心环就是那个「特别难看」。
+  if (state.belt) return 0
   if (state.ownerKey !== state.focusedOwnerKey) return 0
   if (state.phase === 'approach') return 0.34 * reveal(state.systemReveal)
   return 0.34

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { Mode, Universe } from '../../types'
 import { selectPlanetData, UNIVERSE_QUESTION_REFS_PER_STAR_LIMIT, type QuestionPlanetDatum, type UniverseIndex } from '../../domain/universe'
 import { DEPTH_FADE, ORBIT, SIMPLEX3 } from './chunks'
-import { orbitPeriodFor, orbitPhase, orbitPlane, orbitRadiusFor } from '../orbitGeometry'
+import { orbitPeriodFor, orbitPlane, systemOrbit } from '../orbitGeometry'
 import { starData, starWorldPosition, type StarDatum } from './starData'
 import { renderDim } from './stars'
 import { PLANET_CONVERGENCE_START, PLANET_STAR_LOD_END_PX, PLANET_STAR_LOD_START_PX, indexPlanetsByStar } from '../planetVisibility'
@@ -425,6 +425,8 @@ export interface PlanetDatum {
   phase: number
   period: number
   radius: number
+  /** 在小行星带里：没有独立轨道环，是缩小的小天体。 */
+  belt: boolean
 }
 
 export interface BodyLayer {
@@ -556,10 +558,11 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
     const plane = orbitPlane(p.idx, d.sysU, d.sysV, d.sysAxis)
     const uu = plane.u as [number, number, number]
     const vv = plane.v as [number, number, number]
-    const r = orbitRadiusFor(p.idx)
+    const orbit = systemOrbit(p.idx, selectedQuestions[starIndexOf.get(d)!]!.length, d.seed)
+    const r = orbit.radius
     const period = orbitPeriodFor(r)
-    const phase = orbitPhase(p.idx, d.seed)
-    const rad = planetWorldRadius(p.material.answerDensity)
+    const phase = orbit.phase
+    const rad = planetWorldRadius(p.material.answerDensity) * orbit.bodyScale
 
     pU.set(uu, i * 3)
     pV.set(vv, i * 3)
@@ -594,7 +597,7 @@ function makeBodiesScoped(index: UniverseIndex, reduceMotion: boolean, scope: Re
       material: p.material,
       orbitIndex: p.datum.orbitIndex,
       index: i,
-      u: uu, v: vv, orbitR: r, phase, period, radius: rad,
+      u: uu, v: vv, orbitR: r, phase, period, radius: rad, belt: orbit.belt,
     })
   })
 

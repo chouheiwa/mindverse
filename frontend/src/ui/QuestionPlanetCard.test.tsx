@@ -33,6 +33,7 @@ const planet = (relations: Partial<Pick<PlanetDatum, 'created' | 'collected'>> =
   phase: 0,
   period: 10,
   radius: 0.1,
+  belt: false,
   ...relations,
 })
 

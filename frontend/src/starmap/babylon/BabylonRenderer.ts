@@ -39,7 +39,7 @@ import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
 import { starIdentity } from '../starIdentity'
 import { renderDim, resolveInteractiveStar, starInteractionEligible } from '../starVisibility'
 import { NON_FOCUSED_OPACITY } from '../focusEmphasis'
-import { orbitPeriodFor, orbitPhase, orbitPlane, orbitRadiusFor } from '../orbitGeometry'
+import { orbitPeriodFor, orbitPlane, systemOrbit } from '../orbitGeometry'
 import { detectQuality, type Quality } from '../quality'
 import type { PlanetDatum } from '../gl/bodies'
 import type {
@@ -1360,6 +1360,7 @@ export class BabylonRenderer implements MindverseRenderer {
         ...state,
         ownerKey,
         questionId: visual.datum.question.id,
+        belt: visual.datum.belt,
       }))
       const planet = questionPlanetPresentation({ ...state, ownerKey })
       visual.visual.setReveal(planet.reveal)
@@ -2959,11 +2960,13 @@ export function buildPlanetBookkeeping(
   const planets: PlanetDatum[] = []
   for (const star of stars) {
     if (!('id' in star.s)) continue
-    for (const datum of selectPlanetData(index, star.s)) {
+    const selected = selectPlanetData(index, star.s)
+    for (const datum of selected) {
       const material = planetMaterialInput(datum, timeline)
       // Three 的轨道编号从 0 起；orbitIndex 是 1 起的展示编号。
       const orbitIndex = datum.orbitIndex - 1
-      const orbitR = orbitRadiusFor(orbitIndex)
+      const orbit = systemOrbit(orbitIndex, selected.length, star.seed)
+      const orbitR = orbit.radius
       const plane = orbitPlane(orbitIndex, star.sysU, star.sysV, star.sysAxis)
       planets.push(Object.freeze({
         star,
@@ -2979,9 +2982,10 @@ export function buildPlanetBookkeeping(
         u: [plane.u[0], plane.u[1], plane.u[2]] as [number, number, number],
         v: [plane.v[0], plane.v[1], plane.v[2]] as [number, number, number],
         orbitR,
-        phase: orbitPhase(orbitIndex, star.seed),
+        phase: orbit.phase,
         period: orbitPeriodFor(orbitR),
-        radius: planetWorldRadius(material.answerDensity),
+        radius: planetWorldRadius(material.answerDensity) * orbit.bodyScale,
+        belt: orbit.belt,
       }))
     }
   }

@@ -20,9 +20,9 @@ export const QuestionPlanetCard = forwardRef<HTMLDivElement, {
   return (
     <aside ref={ref} className="qpc" aria-label="问题行星入口">
       <button className="qpc-close" type="button" onClick={onClose} aria-label="关闭问题行星入口">×</button>
-      <div className="qpc-readout" aria-label={`轨道 ${planet.orbitIndex}，${planet.answerCount} 个回答`}>
+      <div className="qpc-readout" aria-label={`${planet.belt ? '小行星带' : '轨道'} ${planet.orbitIndex}，${planet.answerCount} 个回答`}>
         <span className={`qpc-orbit${planet.created ? ' is-created' : ''}`} aria-hidden="true"><i /></span>
-        <span>QUESTION ORBIT {String(planet.orbitIndex).padStart(2, '0')}</span>
+        <span>{planet.belt ? 'ASTEROID BELT' : 'QUESTION ORBIT'} {String(planet.orbitIndex).padStart(2, '0')}</span>
         <span className="qpc-count">{planet.answerCount} 个回答</span>
       </div>
       <h2>{planet.question.title}</h2>

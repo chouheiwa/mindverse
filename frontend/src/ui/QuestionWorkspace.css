@@ -37,6 +37,11 @@
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px) }
 .qw-card .qw-kicker { margin: 0 }
 .qw .qw-card h1 { margin: 0; font-family: var(--f-d); font-size: 18px; font-weight: 500; line-height: 1.45; color: var(--ink) }
+.qw-provenance-card { display: grid; gap: 6px }
+.qw-origin { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.5 }
+.qw-origin-where { margin: 0; color: var(--readout, #aeb8d2); font-family: var(--f-m); font-size: 10px; letter-spacing: .08em }
+.qw-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; padding: 0; list-style: none }
+.qw-chips li { padding: 3px 8px; border: 1px solid rgb(172 190 231 / 22%); border-radius: 2px; color: var(--ink); font-family: var(--f-m); font-size: 10px; letter-spacing: .06em }
 .qw-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px }
 .qw-card-actions button { min-height: 40px; padding: 0 12px; border: 1px solid rgb(172 190 231 / 28%); background: rgb(5 7 17 / 55%); color: var(--ink);
   font: inherit; font-family: var(--f-m); font-size: 10px; letter-spacing: .08em }

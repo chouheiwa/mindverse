@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UniverseIndex } from '../domain/universe'
+import { formatTraceMonth, type QuestionProvenance } from '../domain/questionProvenance'
 import { buildQuestionWorkspaceModel, type PersonalWorkspaceAnswer, type WorkspaceAnswer } from './questionWorkspaceModel'
 import { useModalDialogLifecycle } from './modalDialogLifecycle'
 import './QuestionWorkspace.css'
@@ -164,13 +165,15 @@ export interface QuestionWorkspaceProps {
   stage?: 'orbit' | 'surface'
   /** 地表行走：每个 tick 一小步（角度制，相对行星半径）。 */
   onWalk?: (input: Readonly<{ forward: number; strafe: number; turn: number; tilt: number }>) => void
+  /** 「你为什么在这」：落地那一眼要看到这颗星球和你的关系。 */
+  provenance?: QuestionProvenance
   onEnterStrata?: (questionId: string) => void
   strataActive?: boolean
   getReturnFocus?: () => HTMLElement | null
 }
 
 export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
-  onBack, onRestoreCamera, onOrbit, stage = 'orbit', onWalk, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
+  onBack, onRestoreCamera, onOrbit, stage = 'orbit', onWalk, provenance, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
   const onSurface = stage === 'surface'
   // 地表上资料默认折成小卡；铺开的阅读面板只在你要看的时候出现。
   const [dossierOpen, setDossierOpen] = useState(false)
@@ -320,6 +323,22 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
             <section className="qw-card" aria-label="问题资料卡">
               <p className="qw-kicker">QUESTION · {model.answerCount} 条可核验回答</p>
               {folded && <h1 id="qw-title" ref={headingRef} tabIndex={-1}>{model.question.title}</h1>}
+              {provenance && (
+                <section className="qw-provenance-card" aria-label="你与这颗星球的关系">
+                  {provenance.origin && <p className="qw-origin">{provenance.origin}</p>}
+                  <p className="qw-origin-where">
+                    {provenance.clusterName ? `「${provenance.clusterName}」星群` : '未归入星群'}
+                    {provenance.starName ? ` · ${provenance.starName}` : ''}
+                    {` · 系内第 ${provenance.rank.index} / ${provenance.rank.count}`}
+                  </p>
+                  <ul className="qw-chips">
+                    <li>我创作 {provenance.createdCount}</li>
+                    <li>我收藏 {provenance.collectedCount}</li>
+                    {provenance.firstAt !== undefined && <li>首次 {formatTraceMonth(provenance.firstAt)}</li>}
+                    {provenance.latestAt !== undefined && provenance.latestAt !== provenance.firstAt && <li>最近 {formatTraceMonth(provenance.latestAt)}</li>}
+                  </ul>
+                </section>
+              )}
               <div className="qw-card-actions">
                 <button type="button" aria-pressed={dossierOpen} onClick={() => setDossierOpen((open) => !open)}>
                   {dossierOpen ? '收起资料 · Esc' : '资料 · I'}

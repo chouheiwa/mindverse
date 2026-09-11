@@ -22,6 +22,7 @@ import { initialUniverseUiState, universeUiReducer } from './explorationState'
 import { buildStrataSceneModel, type StrataSceneModel } from '../domain/strata'
 import { StrataHud } from './StrataHud'
 import { AnswerEvidencePanel } from './AnswerEvidencePanel'
+import { describeQuestionProvenance } from '../domain/questionProvenance'
 import './Universe.css'
 
 const reduceMotion = () =>
@@ -106,6 +107,12 @@ export function PrivateUniverseView() {
     () => universeIndex && star ? selectPlanetData(universeIndex, star) : [],
     [universeIndex, star],
   )
+  const questionProvenance = useMemo(() => {
+    if (!universeIndex || !questionEntry || !('id' in questionEntry.star.s)) return null
+    return describeQuestionProvenance(universeIndex, questionEntry.question.id, {
+      starId: questionEntry.star.s.id, orbitIndex: questionEntry.orbitIndex, orbitCount: questionPlanets.length,
+    })
+  }, [questionEntry, questionPlanets.length, universeIndex])
 
   // 取数据：分享页读快照，否则轮询生成
   useEffect(() => {
@@ -681,6 +688,7 @@ export function PrivateUniverseView() {
           onOrbit={(deltaX, deltaY) => rendererRef.current?.orbitWorkspace(deltaX, deltaY)}
           stage={surfaceLanded ? 'surface' : 'orbit'}
           onWalk={(input) => { rendererRef.current?.walkPlanetSurface?.(input) }}
+          provenance={questionProvenance ?? undefined}
           onEnterStrata={enterStrata} strataActive={exploration.kind === 'surface-approach'}
           getReturnFocus={getQuestionReturnFocus} />
       )}

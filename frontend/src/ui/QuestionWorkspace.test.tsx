@@ -124,6 +124,20 @@ describe('QuestionWorkspace', () => {
     expect(onBack).toHaveBeenCalledOnce()
   })
 
+  test('the surface card says why you are here', () => {
+    render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
+      onBack={() => {}} onRestoreCamera={() => {}}
+      provenance={{ origin: '你在 2025.12 收藏了张三的回答', starName: 'Alpha', clusterName: 'AI编程',
+        rank: { index: 2, count: 3 }, createdCount: 1, collectedCount: 2, firstAt: 1764547200, latestAt: 1772496000 }} />)
+    const relation = screen.getByRole('region', { name: '你与这颗星球的关系' })
+    expect(within(relation).getByText('你在 2025.12 收藏了张三的回答')).toBeVisible()
+    expect(within(relation).getByText(/「AI编程」星群 · Alpha · 系内第 2 \/ 3/)).toBeVisible()
+    expect(within(relation).getByText('我创作 1')).toBeVisible()
+    expect(within(relation).getByText('我收藏 2')).toBeVisible()
+    expect(within(relation).getByText('首次 2025.12')).toBeVisible()
+    expect(within(relation).getByText('最近 2026.03')).toBeVisible()
+  })
+
   test('shows exact question, canonical links, sample provenance, and distinguishes personal relations', () => {
     const answers = [
       answer('answer:1', { authorName: 'Alice', bindings: [{ relation: 'created', folders: [] }] }),

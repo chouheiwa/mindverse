@@ -124,6 +124,23 @@ describe('QuestionWorkspace', () => {
     expect(onBack).toHaveBeenCalledOnce()
   })
 
+  test('a click on the surface stage without dragging picks what is under it', () => {
+    const onSurfacePick = vi.fn()
+    const onOrbit = vi.fn()
+    render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
+      onBack={() => {}} onRestoreCamera={() => {}} onOrbit={onOrbit} onSurfacePick={onSurfacePick} />)
+    const stage = screen.getByRole('region', { name: '行星地表' })
+    fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 200, clientY: 300 }))
+    fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 202, clientY: 301 }))
+    expect(onSurfacePick).toHaveBeenCalledWith(202, 301)
+    // 拖动是环视，不是点击。
+    fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 200, clientY: 300 }))
+    fireEvent(stage, new MouseEvent('pointermove', { bubbles: true, clientX: 260, clientY: 290 }))
+    fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 260, clientY: 290 }))
+    expect(onSurfacePick).toHaveBeenCalledTimes(1)
+    expect(onOrbit).toHaveBeenCalledWith(60, -10)
+  })
+
   test('the surface card says why you are here', () => {
     render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
       onBack={() => {}} onRestoreCamera={() => {}}

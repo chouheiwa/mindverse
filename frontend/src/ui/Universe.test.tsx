@@ -34,6 +34,7 @@ const testState = vi.hoisted(() => ({
   strataEnterCalls: [] as unknown[],
   surfaceEnterCalls: [] as string[],
   surfaceExitCalls: 0,
+  surfacePickAnswerId: null as string | null,
   strataMoveCalls: [] as unknown[],
   strataExitCalls: [] as number[],
   closeSpecimenCalls: 0,
@@ -92,6 +93,7 @@ vi.mock('virtual:mindverse-renderer', async () => {
     orbitWorkspace(dx: number, dy: number) { testState.orbitCalls.push([dx, dy]) }
     enterPlanetSurface(questionId: string) { testState.surfaceEnterCalls.push(questionId); return true }
     exitPlanetSurface() { testState.surfaceExitCalls += 1 }
+    pickPlanetSurface() { return testState.surfacePickAnswerId }
     enterStrata(request: unknown) { testState.strataEnterCalls.push(request) }
     moveStrata(intent: unknown) { testState.strataMoveCalls.push(intent) }
     exitStrata(token: number) { testState.strataExitCalls.push(token) }
@@ -165,6 +167,7 @@ beforeEach(() => {
   testState.strataEnterCalls = []
   testState.surfaceEnterCalls = []
   testState.surfaceExitCalls = 0
+  testState.surfacePickAnswerId = null
   testState.strataMoveCalls = []
   testState.strataExitCalls = []
   testState.closeSpecimenCalls = 0
@@ -592,6 +595,14 @@ test('entering a question planet lands on its surface, and digging is a separate
   // 进来先站到地表上 —— 这一步不该直接把人塞进地层。
   await waitFor(() => expect(testState.surfaceEnterCalls).toEqual(['question:7']))
   expect(testState.strataEnterCalls).toHaveLength(0)
+
+  // 点到落点旁的旗：打开那条回答的证据板；关掉回到地表。
+  testState.surfacePickAnswerId = 'answer:8'
+  const stage = await screen.findByRole('region', { name: '行星地表' })
+  fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 300, clientY: 300 }))
+  fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 301, clientY: 300 }))
+  await user.click(await screen.findByRole('button', { name: '关闭答案证据板' }))
+  expect(screen.queryByRole('button', { name: '关闭答案证据板' })).not.toBeInTheDocument()
 
   // 返回问题航道就是离开地表：否则宇宙一直关着、相机一直被地表占着，人被困在球上。
   await user.click(await screen.findByRole('button', { name: '返回问题航道' }))

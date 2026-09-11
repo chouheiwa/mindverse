@@ -484,11 +484,18 @@ export function PrivateUniverseView() {
   const autoEnteredQuestionRef = useRef<string | null>(null)
   /** 是否站在行星地表上。决定工作台左边是行走 HUD 还是轨道观测台。 */
   const [surfaceLanded, setSurfaceLanded] = useState(false)
+  /** 在地表上点开的旗/石堆：那条回答的证据板。 */
+  const [surfaceEvidenceAnswerId, setSurfaceEvidenceAnswerId] = useState<string | null>(null)
+  const pickSurface = useCallback((clientX: number, clientY: number) => {
+    const answerId = rendererRef.current?.pickPlanetSurface?.(clientX, clientY) ?? null
+    if (answerId) setSurfaceEvidenceAnswerId(answerId)
+  }, [])
   useEffect(() => {
     const questionId = questionEntry?.question.id ?? null
     if (!questionId) {
       autoEnteredQuestionRef.current = null
       setSurfaceLanded(false)
+      setSurfaceEvidenceAnswerId(null)
       return
     }
     if (autoEnteredQuestionRef.current === questionId) return
@@ -689,6 +696,7 @@ export function PrivateUniverseView() {
           stage={surfaceLanded ? 'surface' : 'orbit'}
           onWalk={(input) => { rendererRef.current?.walkPlanetSurface?.(input) }}
           provenance={questionProvenance ?? undefined}
+          onSurfacePick={pickSurface}
           onEnterStrata={enterStrata} strataActive={exploration.kind === 'surface-approach'}
           getReturnFocus={getQuestionReturnFocus} />
       )}
@@ -715,6 +723,11 @@ export function PrivateUniverseView() {
         scene={strataScene} pose={strataPose} phase={strataState.kind}
         focusProxyRef={strataFocusProxyRef} onMove={moveStrata}
         onPick={(clientX, clientY) => rendererRef.current?.pickStrataAt(clientX, clientY)} onExit={exitStrata} />}
+      {surfaceLanded && surfaceEvidenceAnswerId && universeIndex.answersById.get(surfaceEvidenceAnswerId) && <AnswerEvidencePanel
+        answer={universeIndex.answersById.get(surfaceEvidenceAnswerId)!}
+        onClose={() => setSurfaceEvidenceAnswerId(null)}
+        // 关掉证据板要回到工作台里（标题），否则焦点掉到 body，W/S、I 这些键就都没人接了。
+        getReturnFocus={() => document.getElementById('qw-title')} />}
       {strataState?.kind === 'answer-specimen-focus' && universeIndex.answersById.get(strataState.answerId) && <AnswerEvidencePanel
         answer={universeIndex.answersById.get(strataState.answerId)!}
         onClose={closeAnswerEvidence} getReturnFocus={() => strataFocusProxyRef.current} />}

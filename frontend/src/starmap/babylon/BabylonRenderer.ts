@@ -26,6 +26,8 @@ import { backdropGain } from '../backdropVisibility'
 import { INITIAL_ORBIT_CLOCK, orbitClockTime, orbitTempoFor, retimeOrbitClock, type OrbitClockState } from './planetMotion'
 import { PlanetSky, thermalGroundAlbedo } from './planetSky'
 import { PlanetGround } from './planetGround'
+import { PlanetSurfaceMarks } from './planetSurfaceMarks'
+import { layoutSurfaceMarks, surfaceMarksFor } from './surfaceMarks'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
 import {
@@ -247,6 +249,9 @@ const SURFACE_DESCENT_MS = 1100
 const UNIVERSE_CAMERA_MIN_Z = 0.1
 /** 宇宙视角的最近机位。地表阶段相机贴着地面，这个下限必须让开。 */
 const UNIVERSE_LOWER_RADIUS_LIMIT = 1.2
+/** 旗与石堆的屏幕空间命中半径与上抬量（像素）。 */
+const SURFACE_MARK_PICK_RADIUS_PX = 22
+const SURFACE_MARK_PICK_LIFT_PX = 8
 
 export class BabylonRenderer implements MindverseRenderer {
   private readonly runtime: BabylonRuntime
@@ -330,6 +335,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceSky: PlanetSky | null = null
   /** 地表材质控制器：太阳、相机与热型调色。材质本身归 surfaceWorld 释放。 */
   private surfaceGround: PlanetGround | null = null
+  /** 落点旁你留下的痕迹：创作是旗、收藏是石堆。 */
+  private surfaceMarks: PlanetSurfaceMarks | null = null
+  private diagnosticSurfacePickCalls = 0
   /** 地表的太阳与天光。地形块用 StandardMaterial，场景里没有灯它就是一片黑。 */
   private surfaceSun: DirectionalLight | null = null
   private surfaceAmbient: HemisphericLight | null = null
@@ -520,6 +528,7 @@ export class BabylonRenderer implements MindverseRenderer {
                 selectedPlanet: this.selectedPlanetBounds(),
                 firstAnswerSpecimen: this.firstAnswerSpecimenBounds(answerSpecimens),
                 answerSpecimens,
+                surfaceMarks: this.surfaceMarkProjections(),
               }
             },
             lifecycle: () => {
@@ -529,6 +538,7 @@ export class BabylonRenderer implements MindverseRenderer {
                 listeners: runtime.listeners + (this.destroyed ? 0 : 8),
                 clickEvents: this.diagnosticClickEvents,
                 lastPick: this.diagnosticLastPick,
+                surfacePickCalls: this.diagnosticSurfacePickCalls,
               }
             },
             stellar: () => this.diagnosticStellar(),
@@ -1802,6 +1812,11 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceField = field
     // 站在落点上，眼高按行星半径取比例，换一颗大小不同的行星观感一致。
     this.surfacePose = standAt(landing, this.surfaceRadius * 0.012)
+    // 你留下的痕迹就在落点前方的视野里。
+    this.surfaceMarks = new PlanetSurfaceMarks(this.scene, root, {
+      field, radius: this.surfaceRadius, displacement,
+      placements: layoutSurfaceMarks(landing, this.surfacePose.facing, surfaceMarksFor(this.selectedVisual.datum.answers)),
+    })
     this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
       kind: 'enter', questionId, landing,
     })
@@ -1833,6 +1848,42 @@ export class BabylonRenderer implements MindverseRenderer {
     return true
   }
 
+  /**
+   * 点到落点旁的旗或石堆：返回那条回答的 id。没点中返回 null。
+   *
+   * 屏幕空间邻近拾取，不逐像素打网格：旗杆只有几像素宽，逐像素就又是「点击区域太小」。
+   */
+  pickPlanetSurface(clientX: number, clientY: number): string | null {
+    if (this.destroyed || !this.surfaceMarks || !surfaceCameraOwned(this.surfaceStage)) return null
+    const rect = this.canvas.getBoundingClientRect()
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+    let winner: string | null = null
+    this.diagnosticSurfacePickCalls += 1
+    let best = SURFACE_MARK_PICK_RADIUS_PX * SURFACE_MARK_PICK_RADIUS_PX
+    for (const mark of this.surfaceMarkProjections()) {
+      // 锚点在杆底；旗和石堆都往上长，命中区往上偏一点。
+      const dx = mark.x - x
+      const dy = mark.y - SURFACE_MARK_PICK_LIFT_PX - y
+      const distance = dx * dx + dy * dy
+      if (distance <= best) { best = distance; winner = mark.answerId }
+    }
+    return winner
+  }
+
+  /** 标记在屏幕上的位置，供门禁去点。 */
+  private surfaceMarkProjections(): readonly { answerId: string; x: number; y: number }[] {
+    const marks = this.surfaceMarks
+    const root = this.surfaceRoot
+    if (!marks || !root || !surfaceCameraOwned(this.surfaceStage)) return []
+    return marks.answerIds().flatMap((answerId) => {
+      const anchor = marks.anchorOf(answerId)
+      if (!anchor) return []
+      const projected = this.projectToCss(anchor.addInPlace(root.position))
+      return projected.z > 0 && projected.z < 1 ? [{ answerId, x: projected.x, y: projected.y }] : []
+    })
+  }
+
   surfaceStageDiagnostics(): Readonly<{
     phase: SurfaceStageState['phase']
     descent: number
@@ -1848,6 +1899,7 @@ export class BabylonRenderer implements MindverseRenderer {
     cameraAltitude: number
     /** 太阳相对脚下法线的高度角余弦。负数是夜面。 */
     sunElevation: number
+    markCount: number
   }> {
     const world = this.surfaceWorld?.diagnostics()
     const frame = this.surfacePose && this.surfaceField
@@ -1871,6 +1923,7 @@ export class BabylonRenderer implements MindverseRenderer {
         const sun = this.surfaceSunDirection()
         return frame.up[0] * sun[0] + frame.up[1] * sun[1] + frame.up[2] * sun[2]
       })() : 0,
+      markCount: this.surfaceMarks?.diagnostics().markCount ?? 0,
     })
   }
 
@@ -1909,6 +1962,8 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceSky = null
     this.surfaceGround?.dispose()
     this.surfaceGround = null
+    this.surfaceMarks?.dispose()
+    this.surfaceMarks = null
     this.surfaceSun?.dispose()
     this.surfaceSun = null
     this.surfaceAmbient?.dispose()

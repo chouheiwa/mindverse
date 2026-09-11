@@ -749,6 +749,16 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   const surface = atPlanet.resources.surfaceStage!
   process.stdout.write(`[surface] ${JSON.stringify(surface)}\n`)
   expect(effectErrors).toEqual([])
+  // 落点旁就是你留下的痕迹（夹具里有你创作的回答 → 旗）：在视野里、可点、点开证据板。
+  expect(surface.markCount!).toBeGreaterThan(0)
+  const marks = atPlanet.projectedBounds.surfaceMarks ?? []
+  process.stdout.write(`[surface] marks ${JSON.stringify(marks)}\n`)
+  const onScreen = marks.filter(({ x, y }) => x > 0 && x < 1280 && y > 0 && y < 720)
+  expect(onScreen.length).toBeGreaterThan(0)
+  await page.mouse.click(onScreen[0]!.x, onScreen[0]!.y - 6)
+  await expect(page.getByRole('button', { name: '关闭答案证据板' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭答案证据板' }).click()
+
   // 资料默认折成小卡，阅读面板不挡地表；按 I 铺开，Esc 折回。
   await expect(page.getByRole('tablist')).toHaveCount(0)
   await page.keyboard.press('i')

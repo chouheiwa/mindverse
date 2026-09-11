@@ -15,12 +15,15 @@ export interface RenderSnapshot {
       z: number
       bounds: { x: number, y: number, width: number, height: number } | null
     }[]
+    /** 落点旁的旗与石堆在屏幕上的位置。 */
+    surfaceMarks?: readonly { answerId: string, x: number, y: number }[]
   }
   lifecycle: {
     rafLoops: number
     listeners: number
     clickEvents?: number
     lastPick?: 'none' | 'star' | 'planet' | 'specimen' | 'other'
+    surfacePickCalls?: number
   }
   planet: {
     selectedQuestionId: string | null
@@ -73,6 +76,7 @@ export interface RenderSnapshot {
       lightCount?: number
       cameraAltitude?: number
       sunElevation?: number
+      markCount?: number
     }
     renderCostMs?: number
     maxRenderCostMs?: number

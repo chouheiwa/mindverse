@@ -167,13 +167,15 @@ export interface QuestionWorkspaceProps {
   onWalk?: (input: Readonly<{ forward: number; strafe: number; turn: number; tilt: number }>) => void
   /** 「你为什么在这」：落地那一眼要看到这颗星球和你的关系。 */
   provenance?: QuestionProvenance
+  /** 地表上没有拖动的点击：去点旗和石堆。 */
+  onSurfacePick?: (clientX: number, clientY: number) => void
   onEnterStrata?: (questionId: string) => void
   strataActive?: boolean
   getReturnFocus?: () => HTMLElement | null
 }
 
 export function QuestionWorkspace({ index, questionId, shared = false, readOnly = false, orbitIndex,
-  onBack, onRestoreCamera, onOrbit, stage = 'orbit', onWalk, provenance, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
+  onBack, onRestoreCamera, onOrbit, stage = 'orbit', onWalk, provenance, onSurfacePick, onEnterStrata, strataActive = false, getReturnFocus }: QuestionWorkspaceProps) {
   const onSurface = stage === 'surface'
   // 地表上资料默认折成小卡；铺开的阅读面板只在你要看的时候出现。
   const [dossierOpen, setDossierOpen] = useState(false)
@@ -204,7 +206,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   const tabRefs = useRef(new Map<Mode, HTMLButtonElement>())
   const previousPublicRef = useRef(isPublic)
   const closedRef = useRef(false)
-  const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null)
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; moved: number } | null>(null)
   const modal = useModalDialogLifecycle(dialogRef, { getReturnFocus, initialFocusRef: headingRef })
 
   useLayoutEffect(() => {
@@ -287,7 +289,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
             aria-label={onSurface ? '行星地表' : '问题行星近景'}
             onPointerDown={(event) => {
               if (isInteractivePointerTarget(event.target)) return
-              dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+              dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: 0 }
               event.currentTarget.setPointerCapture?.(event.pointerId)
             }}
             onPointerMove={(event) => {
@@ -296,10 +298,17 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
               const deltaX = event.clientX - previous.x
               const deltaY = event.clientY - previous.y
               if (deltaX !== 0 || deltaY !== 0) onOrbit?.(deltaX, deltaY)
-              dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+              dragRef.current = {
+                pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+                moved: previous.moved + Math.hypot(deltaX, deltaY),
+              }
             }}
             onPointerUp={(event) => {
-              if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null
+              const gesture = dragRef.current
+              if (gesture?.pointerId === event.pointerId) {
+                dragRef.current = null
+                if (onSurface && gesture.moved <= 6) onSurfacePick?.(event.clientX, event.clientY)
+              }
               event.currentTarget.releasePointerCapture?.(event.pointerId)
             }}
             onPointerCancel={() => { dragRef.current = null }}>

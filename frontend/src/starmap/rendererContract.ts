@@ -126,6 +126,8 @@ export interface MindverseRenderer {
   walkPlanetSurface?(input: Readonly<{
     forward: number; strafe: number; turn: number; tilt: number
   }>): boolean
+  /** 点到落点旁的旗或石堆：返回那条回答的 id；没点中返回 null。 */
+  pickPlanetSurface?(clientX: number, clientY: number): string | null
 
   enterStrata(request: StrataRequest): void
   moveStrata(input: StrataMoveIntent): void

@@ -719,6 +719,42 @@ test('cluster structure rings leave the frame as the camera zooms in from panora
   expect(zoomed.resources.clusterRingCount).toBe(panorama.resources.clusterRingCount)
 })
 
+test('entering a question planet is a descent you can watch, not a freeze then a cut', async ({ page }) => {
+  // 实测（Metal 真机，rAF 采样 472 帧）：修复前进入那一帧 2086.5ms，其余 <= 14.2ms —— 同一帧
+  // 建了 303 个地形块。墙钟在卡顿期间照走，卡完之后 8 次渲染就把 1100ms 的俯冲放完。
+  // 用户看到的是「卡一下，然后直接切过去」。这条门禁钉住两件事：单帧不再一次建一大批块，
+  // 俯冲真的跨了很多帧。
+  await openBabylonUniverse(page, '', 'no-preference')
+  await expectReady(page)
+  await openStar(page)
+  await page.getByRole('button', { name: /固定地层问题/ }).click()
+  await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
+
+  let builtPeak = 0
+  const descents: number[] = []
+  let started = false
+  await expect.poll(async () => {
+    const stage = (await snapshot(page))?.resources.surfaceStage
+    if (!stage) return 'idle'
+    builtPeak = Math.max(builtPeak, stage.builtThisUpdate)
+    if (stage.descentStarted) started = true
+    if (stage.phase === 'descending') descents.push(stage.descent)
+    return stage.phase
+  }, { timeout: 60_000, intervals: [40] }).toBe('walking')
+
+  const distinct = [...new Set(descents)]
+  process.stdout.write(`[descent] builtPeak ${builtPeak} distinct ${distinct.length} samples ${descents.length}\n`)
+  expect(started).toBe(true)
+  // 一帧只建限量的块 —— 303 块挤一帧正是那 2086ms。
+  expect(builtPeak).toBeLessThanOrEqual(12)
+  // 俯冲要跨过很多帧。修复前只有 8 个不同进度值，而且全挤在卡顿之后的 115ms 里。
+  expect(distinct.length).toBeGreaterThanOrEqual(12)
+  // 进度只增不减，最后走到 1。
+  for (let index = 1; index < descents.length; index += 1) {
+    expect(descents[index]!).toBeGreaterThanOrEqual(descents[index - 1]!)
+  }
+})
+
 test('the planet stage has no universe left in it', async ({ page }) => {
   // 地表材质是自定义着色器：编译失败时 Babylon 只在控制台报错，画面静默全黑。
   const effectErrors: string[] = []

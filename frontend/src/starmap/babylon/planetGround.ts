@@ -1,5 +1,6 @@
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh'
 import type { Scene } from '@babylonjs/core/scene'
 import type { Vec3 } from './cubeSphere'
 import type { ThermalWeights } from './planetSurface'
@@ -78,8 +79,24 @@ export class PlanetGround {
     this.material.setVector3('uHorizonColor', color(horizon))
   }
 
-  diagnostics(): Readonly<{ base: Vec3; accent: Vec3; rock: Vec3; disposed: boolean }> {
-    return { base: [...this.base], accent: [...this.accent], rock: [...this.rock], disposed: this.disposed }
+  isReady(): boolean {
+    return !this.disposed && this.material.isReady()
+  }
+
+  warm(mesh?: AbstractMesh): Promise<boolean> {
+    // Metal 实测 472 帧中最差 2086.5ms，其余 <= 14.2ms；303 块地形与首次编译挤在同帧。
+    // 延后触发编译，让调用方先拿到 Promise，才能在进入地表前安排预热。
+    return Promise.resolve().then(async () => {
+      if (this.disposed) return false
+      const compile = this.material.forceCompilationAsync as ((mesh?: AbstractMesh) => Promise<void>) | undefined
+      if (typeof compile !== 'function') return this.isReady()
+      await compile.call(this.material, mesh)
+      return true
+    }).catch(() => false)
+  }
+
+  diagnostics(): Readonly<{ base: Vec3; accent: Vec3; rock: Vec3; disposed: boolean; ready: boolean }> {
+    return { base: [...this.base], accent: [...this.accent], rock: [...this.rock], disposed: this.disposed, ready: this.isReady() }
   }
 
   dispose(): void {

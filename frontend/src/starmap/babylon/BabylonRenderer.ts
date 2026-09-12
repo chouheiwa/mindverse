@@ -30,6 +30,9 @@ import { PlanetSurfaceMarks } from './planetSurfaceMarks'
 import { PlanetSurfaceBeacons } from './planetSurfaceBeacons'
 import { surfaceBeaconsFor } from './surfaceBeacons'
 import { PlanetSurfaceTrail } from './planetSurfaceTrail'
+import {
+  advanceDescent, descentEase, descentProgress, IDLE_DESCENT_CLOCK, type DescentClock,
+} from './surfaceDescent'
 import { layoutSurfaceTrail } from './surfaceTrail'
 import { formatTraceMonth } from '../../domain/questionProvenance'
 import type { SurfaceLabel } from './labelLayer'
@@ -362,9 +365,11 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceDisplacement = 0
   private surfaceField: import('./terrainField').PlanetTerrainField | null = null
   /** 俯冲的起点机位与起飞时刻。落地后不再使用。 */
-  private surfaceDescent: Readonly<{
-    startedAt: number; elapsed: number; from: Vector3; fromTarget: Vector3
-  }> | null = null
+  private surfaceDescent: Readonly<{ from: Vector3; fromTarget: Vector3 }> | null = null
+  /** 俯冲时钟：等地表建够才起步，按帧推进。 */
+  private descentClock: DescentClock = IDLE_DESCENT_CLOCK
+  /** 上一帧的真实间隔，俯冲按它推进（墙钟会把卡顿算进动画）。 */
+  private lastFrameDeltaMs = 16
   /** 上一帧的宇宙背景增益。地表阶段必须是 0 —— 这是「没有宇宙视角」的判据。 */
   private backdropGainValue = 1
   private workspaceOpen = false
@@ -1400,6 +1405,7 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.destroyed) return
     const now = performance.now()
     const deltaTime = elapsedRenderDelta(this.lastSceneUpdateAt, now)
+    this.lastFrameDeltaMs = deltaTime
     if (Number.isFinite(now)) this.lastSceneUpdateAt = now
     this.elapsedMs += this.reducedMotion || this.diagnosticApproachProgressOverride != null ? 0 : deltaTime
     this.updateCameraFlight()
@@ -1806,6 +1812,8 @@ export class BabylonRenderer implements MindverseRenderer {
       radius: this.surfaceRadius,
       displacement,
       resolution: this.quality === 'high' ? 8 : this.quality === 'medium' ? 6 : 4,
+      // 每帧限量建块。实测一次性建 303 块会造成 2086ms 的单帧卡死，把俯冲动画整个吞掉。
+      buildBudgetPerUpdate: this.quality === 'low' ? 8 : 12,
       skirtDepth: 0.02,
       albedo: thermalGroundAlbedo(this.selectedVisual.descriptor.thermal),
       maxDepth: this.quality === 'low' ? 4 : 5,
@@ -1887,12 +1895,14 @@ export class BabylonRenderer implements MindverseRenderer {
       kind: 'enter', questionId, landing,
     })
     // 俯冲的起点就是此刻的机位 —— 从你飞过来的地方一路落下去，不做瞬移。
+    // 时钟归零：它要等地表建够才起步，并且按帧推进而不是墙钟。
+    this.descentClock = IDLE_DESCENT_CLOCK
     this.surfaceDescent = Object.freeze({
-      startedAt: performance.now(),
-      elapsed: 0,
       from: this.camera.globalPosition.clone(),
       fromTarget: this.camera.target.clone(),
     })
+    // 着色器提前编译：否则它会和第一批地块挤在同一帧。best-effort，失败只是回到原样。
+    void this.surfaceGround?.warm()
     this.applySurfaceVisibility()
     return true
   }
@@ -2030,6 +2040,11 @@ export class BabylonRenderer implements MindverseRenderer {
     markCount: number
     beaconCount: number
     trailSteps: number
+    /** 还欠多少地形块没建。 */
+    pendingChunks: number
+    /** 当前 LOD 的块是否已建够。俯冲等这个信号才起步。 */
+    worldReady: boolean
+    descentStarted: boolean
   }> {
     const world = this.surfaceWorld?.diagnostics()
     const frame = this.surfacePose && this.surfaceField
@@ -2054,6 +2069,9 @@ export class BabylonRenderer implements MindverseRenderer {
         return frame.up[0] * sun[0] + frame.up[1] * sun[1] + frame.up[2] * sun[2]
       })() : 0,
       markCount: this.surfaceMarks?.diagnostics().markCount ?? 0,
+      pendingChunks: world?.pendingCount ?? 0,
+      worldReady: world?.ready ?? false,
+      descentStarted: this.descentClock.started,
       beaconCount: this.surfaceBeacons?.diagnostics().beaconCount ?? 0,
       trailSteps: this.surfaceTrail?.diagnostics().stepCount ?? 0,
     })
@@ -2116,12 +2134,17 @@ export class BabylonRenderer implements MindverseRenderer {
     const pose = this.surfacePose
     const field = this.surfaceField
     if (!pose || !field || !surfaceWorldVisible(this.surfaceStage)) return
-    const frame = surfaceFrame(pose, field, this.surfaceRadius, this.surfaceDisplacement)
-    const radius = Math.hypot(frame.position[0], frame.position[1], frame.position[2])
-    // cameraRadius 是**行星半径的倍数**，不是世界距离 —— 分块 LOD 按它判角直径。
-    this.surfaceWorld?.update(pose.direction, radius / Math.max(1e-6, this.surfaceRadius))
     const root = this.surfaceRoot
     if (!root) return
+    const frame = surfaceFrame(pose, field, this.surfaceRadius, this.surfaceDisplacement)
+    const standingRadius = Math.hypot(frame.position[0], frame.position[1], frame.position[2])
+    // cameraRadius 是**行星半径的倍数**，不是世界距离 —— 分块 LOD 按它判角直径。
+    // 按相机的**真实高度**选块，而不是按落点：俯冲还在高空时不该先建好地面级细节，
+    // 那正是一次性 303 块的来源。高处只选到粗块，随着下降逐级补细。
+    const cameraAltitude = Vector3.Distance(this.camera.globalPosition, root.position)
+      / Math.max(1e-6, this.surfaceRadius)
+    const lodRadius = Math.max(standingRadius / Math.max(1e-6, this.surfaceRadius), cameraAltitude)
+    this.surfaceWorld?.update(pose.direction, lodRadius)
     const landed = new Vector3(
       root.position.x + frame.position[0],
       root.position.y + frame.position[1],
@@ -2133,18 +2156,22 @@ export class BabylonRenderer implements MindverseRenderer {
       root.position.z + frame.target[2],
     )
 
-    // 俯冲：从进入时的机位插值到站立机位。墙钟驱动（与相机飞行同一套理由：
-    // 慢硬件上按帧累加会把俯冲拖成慢动作），走完再宣告落地。
+    // 俯冲：从进入时的机位插值到站立机位。
+    //
+    // 这里**不能**用墙钟。实测进入那一帧曾长达 2086.5ms（其余帧 <= 14.2ms），墙钟在卡顿
+    // 期间照走，卡完之后 8 次渲染就把 1100ms 放完 —— 观感是「卡一下，然后直接切过去」。
+    // 改成按帧推进，并且等地表当前 LOD 建够才起步：没东西可看的时候不空跑动画。
     const descent = this.surfaceDescent
     if (descent && this.surfaceStage.phase === 'descending') {
-      const elapsed = flightElapsedMs(
-        descent.startedAt, performance.now(), SURFACE_DESCENT_MS, descent.elapsed,
-      )
-      this.surfaceDescent = Object.freeze({ ...descent, elapsed })
-      const progress = SURFACE_DESCENT_MS <= 0 || this.reducedMotion
-        ? 1
-        : Math.min(1, elapsed / SURFACE_DESCENT_MS)
-      const eased = progress * progress * (3 - 2 * progress)
+      const worldReady = this.surfaceWorld?.diagnostics().ready ?? true
+      this.descentClock = advanceDescent(this.descentClock, {
+        frameDeltaMs: this.lastFrameDeltaMs,
+        worldReady,
+        totalMs: SURFACE_DESCENT_MS,
+        reducedMotion: this.reducedMotion,
+      })
+      const progress = descentProgress(this.descentClock, SURFACE_DESCENT_MS, this.reducedMotion)
+      const eased = descentEase(progress)
       this.camera.setPosition(Vector3.Lerp(descent.from, landed, eased))
       this.camera.setTarget(Vector3.Lerp(descent.fromTarget, landedTarget, eased))
       // upVector 必须整体赋值：ArcRotateCamera 的 setter 会重建 _upToYMatrix 缓存，

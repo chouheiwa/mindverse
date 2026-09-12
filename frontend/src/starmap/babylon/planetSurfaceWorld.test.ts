@@ -5,12 +5,15 @@ import { Scene } from '@babylonjs/core/scene.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Vec3 } from './cubeSphere'
 import { createTerrainField } from './terrainField'
-import { PlanetSurfaceWorld } from './planetSurfaceWorld'
+import { faceDirection } from './cubeSphere'
+import { DEFAULT_BUILD_BUDGET_PER_UPDATE, PlanetSurfaceWorld } from './planetSurfaceWorld'
 
 const engines: NullEngine[] = []
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose() })
 
-function setup() {
+// 既有用例写在「一次 update 建完」的语义上，夹具默认给足预算保留它们；
+// 分帧建块由下面几条新用例显式传小预算来驱动。
+function setup(buildBudgetPerUpdate = 100_000) {
   const engine = new NullEngine()
   engines.push(engine)
   const scene = new Scene(engine)
@@ -22,6 +25,7 @@ function setup() {
   const world = new PlanetSurfaceWorld(scene, parent, {
     field, radius: 10, displacement: 0.1, resolution: 2, skirtDepth: 0.01,
     maxDepth: 5, detailAngle: 0.35, budget: 400,
+    buildBudgetPerUpdate,
   })
   return { scene, parent, world }
 }
@@ -43,6 +47,7 @@ describe('PlanetSurfaceWorld', () => {
     expect(world.diagnostics()).toEqual({
       chunkCount: meshes.length, meshCount: meshes.length,
       builtThisUpdate: 0, disposedThisUpdate: 0, vertexCount: meshes.length * 17,
+      pendingCount: 0, ready: true,
     })
     ownedMeshes(scene, parent).forEach((mesh, index) => {
       expect(mesh).toBe(meshes[index])
@@ -92,6 +97,8 @@ describe('PlanetSurfaceWorld', () => {
     world.update(up, 1.02)
     expect(world.diagnostics()).toEqual({
       chunkCount: 0, meshCount: 0, builtThisUpdate: 0, disposedThisUpdate: 0, vertexCount: 0,
+      // 已释放：谈不上就绪，也没有欠账。
+      pendingCount: 0, ready: false,
     })
     expect(scene.meshes).toEqual([other])
   })
@@ -117,5 +124,57 @@ describe('PlanetSurfaceWorld', () => {
     }
     world.update(direction, radius)
     expect(world.diagnostics().builtThisUpdate).toBe(0)
+  })
+
+  it('spreads chunk building across frames instead of stalling one', () => {
+    // Metal 实测：进入行星那一帧一次建了 303 块，单帧 2086.5ms，其余帧 <= 14.2ms。
+    // 每帧限量建，剩下的下一帧接着建 —— 卡顿没了，画面才有得动。
+    const { scene, parent, world } = setup(6)
+    world.update(up, 1.02)
+    expect(world.diagnostics().builtThisUpdate).toBe(6)
+    expect(world.diagnostics().pendingCount).toBeGreaterThan(0)
+    expect(world.diagnostics().ready).toBe(false)
+    expect(ownedMeshes(scene, parent).length).toBe(6)
+
+    // 相机不动，反复 update 直到补齐：pendingCount 单调下降，最终与不限量时一致。
+    let previousPending = world.diagnostics().pendingCount
+    for (let frame = 0; frame < 200 && !world.diagnostics().ready; frame += 1) {
+      world.update(up, 1.02)
+      const pending = world.diagnostics().pendingCount
+      expect(pending).toBeLessThanOrEqual(previousPending)
+      previousPending = pending
+    }
+    expect(world.diagnostics().ready).toBe(true)
+    expect(world.diagnostics().pendingCount).toBe(0)
+
+    const reference = setup(100000)
+    reference.world.update(up, 1.02)
+    expect(world.diagnostics().chunkCount).toBe(reference.world.diagnostics().chunkCount)
+  })
+
+  it('builds what you are looking at first', () => {
+    // 缺块期间玩家看到的必须是正前方完整、余光渐次补齐，而不是随机空洞。
+    const { scene, parent, world } = setup(4)
+    world.update(up, 1.02)
+    const centres = ownedMeshes(scene, parent)
+      .filter((mesh) => !mesh.name.includes(':skirt'))
+      .map((mesh) => {
+        const [, face, u, v] = /face=(\d+):u=(-?[\d.]+):v=(-?[\d.]+)/.exec(mesh.name)!
+        return faceDirection(Number(face) as 0 | 1 | 2 | 3 | 4 | 5, Number(u), Number(v))
+      })
+    expect(centres.length).toBeGreaterThan(0)
+    // 先建的这几块都在上半球（与相机方向夹角小于 90 度）。
+    for (const centre of centres) expect(centre[0] * up[0] + centre[1] * up[1] + centre[2] * up[2]).toBeGreaterThan(0)
+  })
+
+  it('falls back to a sane budget instead of never finishing', () => {
+    for (const budget of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const { world } = setup(budget)
+      world.update(up, 1.02)
+      expect(world.diagnostics().builtThisUpdate).toBeLessThanOrEqual(DEFAULT_BUILD_BUDGET_PER_UPDATE)
+      expect(world.diagnostics().builtThisUpdate).toBeGreaterThan(0)
+      for (let frame = 0; frame < 200 && !world.diagnostics().ready; frame += 1) world.update(up, 1.02)
+      expect(world.diagnostics().ready).toBe(true)
+    }
   })
 })

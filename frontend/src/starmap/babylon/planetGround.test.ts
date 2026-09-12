@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Scene } from '@babylonjs/core/scene'
+import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { PlanetGround, PLANET_GROUND_UNIFORMS } from './planetGround'
 import { planetGroundVertexShader } from './shaders/planetGround.vertex.fx'
 import { planetGroundFragmentShader } from './shaders/planetGround.fragment.fx'
@@ -16,6 +17,76 @@ function setup() {
 }
 
 describe('PlanetGround', () => {
+  it('returns a Promise before starting compilation and resolves after compilation completes', async () => {
+    const { ground } = setup()
+    let finish!: () => void
+    const compilation = new Promise<void>((resolve) => { finish = resolve })
+    const compile = vi.spyOn(ground.material, 'forceCompilationAsync').mockReturnValue(compilation)
+    const result = ground.warm()
+    expect(result).toBeInstanceOf(Promise)
+    expect(compile).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(compile).toHaveBeenCalledTimes(1)
+    finish()
+    await expect(result).resolves.toBe(true)
+  })
+
+  it('passes the optional mesh to the material compilation method once', async () => {
+    const { ground, scene } = setup()
+    const mesh = new Mesh('warm-ground', scene)
+    const compile = vi.spyOn(ground.material, 'forceCompilationAsync').mockResolvedValue(undefined)
+    await expect(ground.warm(mesh)).resolves.toBe(true)
+    expect(compile).toHaveBeenCalledExactlyOnceWith(mesh)
+    expect(compile.mock.contexts[0]).toBe(ground.material)
+  })
+
+  it.each([true, false])('falls back to readiness %s without a compilation method', async (ready) => {
+    const { ground } = setup()
+    Object.defineProperty(ground.material, 'forceCompilationAsync', { value: undefined, configurable: true })
+    const readiness = vi.spyOn(ground.material, 'isReady').mockReturnValue(ready)
+    await expect(ground.warm()).resolves.toBe(ready)
+    expect(readiness).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['reject', 'throw'])('resolves false when compilation fails via %s', async (failure) => {
+    const { ground } = setup()
+    const compile = vi.spyOn(ground.material, 'forceCompilationAsync').mockImplementation(() => {
+      if (failure === 'throw') throw new Error('shader compilation failed')
+      return Promise.reject(new Error('shader compilation failed'))
+    })
+    await expect(ground.warm()).resolves.toBe(false)
+    expect(compile).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not access the material readiness or compile after disposal', async () => {
+    const { ground } = setup()
+    ground.dispose()
+    const readiness = vi.spyOn(ground.material, 'isReady').mockImplementation(() => { throw new Error('disposed') })
+    const compile = vi.spyOn(ground.material, 'forceCompilationAsync').mockImplementation(() => { throw new Error('disposed') })
+    expect(ground.isReady()).toBe(false)
+    await expect(ground.warm()).resolves.toBe(false)
+    expect(ground.diagnostics().ready).toBe(false)
+    expect(readiness).not.toHaveBeenCalled()
+    expect(compile).not.toHaveBeenCalled()
+  })
+
+  it('skips deferred compilation if disposed before it starts', async () => {
+    const { ground } = setup()
+    const compile = vi.spyOn(ground.material, 'forceCompilationAsync').mockResolvedValue(undefined)
+    const result = ground.warm()
+    ground.dispose()
+    await expect(result).resolves.toBe(false)
+    expect(compile).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('forwards readiness %s and includes it in diagnostics', (ready) => {
+    const { ground } = setup()
+    const readiness = vi.spyOn(ground.material, 'isReady').mockReturnValue(ready)
+    expect(ground.isReady()).toBe(ready)
+    expect(readiness).toHaveBeenCalledTimes(1)
+    expect(ground.diagnostics().ready).toBe(ground.isReady())
+  })
+
   // 素色 StandardMaterial 在近地视角下只是一片平灰。地表要有细节：噪声岩理、坡向
   // 露岩、朝向太阳的明暗、远处融进地平线的雾 —— 这些都是着色器的事，几何仍在 CPU。
   it('declares the exact uniform contract in its shaders', () => {

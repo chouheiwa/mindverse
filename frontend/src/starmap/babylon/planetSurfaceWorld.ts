@@ -5,7 +5,7 @@ import { Geometry } from '@babylonjs/core/Meshes/geometry.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
-import type { Vec3 } from './cubeSphere'
+import { faceDirection, type Vec3 } from './cubeSphere'
 import { selectTerrainChunks, type TerrainChunk } from './terrainChunks'
 import type { PlanetTerrainField } from './terrainField'
 import { buildTerrainMesh } from './terrainMesh'
@@ -23,7 +23,17 @@ export interface PlanetSurfaceWorldOptions {
   readonly maxDepth: number
   readonly detailAngle: number
   readonly budget: number
+  /**
+   * 每次 update 最多新建多少块。
+   *
+   * Metal 实测：进入行星那一帧一次建了 303 块，单帧 2086.5ms，其余帧 <= 14.2ms ——
+   * 那一下卡死把俯冲动画整个吞掉了。限量之后剩下的块顺着后面几帧补，画面才动得起来。
+   */
+  readonly buildBudgetPerUpdate?: number
 }
+
+/** 每帧建块的默认上限。 */
+export const DEFAULT_BUILD_BUDGET_PER_UPDATE = 24
 
 export interface PlanetSurfaceWorldDiagnostics {
   readonly chunkCount: number
@@ -33,6 +43,10 @@ export interface PlanetSurfaceWorldDiagnostics {
   readonly disposedThisUpdate: number
   /** 包含裙边，才能反映实际提交给 GPU 的顶点负担。 */
   readonly vertexCount: number
+  /** 还欠多少块没建。 */
+  readonly pendingCount: number
+  /** 选中的块是否已经全部建好。俯冲动画等这个信号才起步。 */
+  readonly ready: boolean
 }
 
 interface ChunkMesh {
@@ -52,6 +66,7 @@ export class PlanetSurfaceWorld {
   private readonly material: Material
   private builtThisUpdate = 0
   private disposedThisUpdate = 0
+  private pendingCount = 0
   private disposed = false
 
   constructor(scene: Scene, parent: TransformNode, options: PlanetSurfaceWorldOptions) {
@@ -86,10 +101,17 @@ export class PlanetSurfaceWorld {
       this.disposedThisUpdate += 1
     }
 
-    for (const chunk of desired) {
+    // 缺哪些块。二分坐标可精确表示，稳定的键让相机不动时连 CPU 地形采样也能省掉。
+    const missing = desired.filter((chunk) => !this.chunks.has(chunkKey(chunk)))
+    // 正前方先成形：按块心方向与相机方向的夹角升序建。缺块期间玩家看到的是
+    // 正前方完整、余光渐次补齐，而不是随机空洞。
+    const facing = normalizeDirection(cameraDirection)
+    missing.sort((left, right) => chunkFacing(right, facing) - chunkFacing(left, facing))
+    const budget = buildBudgetOf(this.options.buildBudgetPerUpdate)
+    this.pendingCount = Math.max(0, missing.length - budget)
+
+    for (const chunk of missing.slice(0, budget)) {
       const key = chunkKey(chunk)
-      // 二分坐标可精确表示，稳定的键让相机不动时连 CPU 地形采样也能省掉。
-      if (this.chunks.has(key)) continue
       const data = buildTerrainMesh({ ...this.options, chunk })
       const geometry = new Geometry(`${key}:geometry`, this.scene)
       geometry.setVerticesData('position', data.positions, false, 3)
@@ -112,6 +134,8 @@ export class PlanetSurfaceWorld {
       meshCount: this.chunks.size,
       builtThisUpdate: this.builtThisUpdate,
       disposedThisUpdate: this.disposedThisUpdate,
+      pendingCount: this.disposed ? 0 : this.pendingCount,
+      ready: this.disposed ? false : this.pendingCount === 0,
       vertexCount,
     })
   }
@@ -131,4 +155,23 @@ export class PlanetSurfaceWorld {
     entry.mesh.dispose(false, false)
     entry.geometry.dispose()
   }
+}
+
+/** 预算防呆：非有限数、非正数、无穷大都退回默认值，绝不导致建不完。 */
+function buildBudgetOf(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 1) return DEFAULT_BUILD_BUDGET_PER_UPDATE
+  return Math.floor(value)
+}
+
+const normalizeDirection = (direction: Vec3): Vec3 => {
+  const length = Math.hypot(direction[0], direction[1], direction[2])
+  return Number.isFinite(length) && length > 1e-9
+    ? [direction[0] / length, direction[1] / length, direction[2] / length]
+    : [0, 1, 0]
+}
+
+/** 块心方向与相机方向的余弦：越大越靠近视野正前方。 */
+function chunkFacing(chunk: TerrainChunk, facing: Vec3): number {
+  const centre = faceDirection(chunk.face, chunk.u, chunk.v)
+  return centre[0] * facing[0] + centre[1] * facing[1] + centre[2] * facing[2]
 }

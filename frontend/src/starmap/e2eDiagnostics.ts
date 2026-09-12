@@ -83,6 +83,9 @@ export interface RenderSnapshot {
       markCount?: number
       beaconCount?: number
       trailSteps?: number
+      pendingChunks?: number
+      worldReady?: boolean
+      descentStarted?: boolean
     }
     renderCostMs?: number
     maxRenderCostMs?: number

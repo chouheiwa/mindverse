@@ -1748,6 +1748,11 @@ export class BabylonRenderer implements MindverseRenderer {
     viewport.width = cameraViewport.width * renderWidth
     viewport.height = cameraViewport.height * renderHeight
     const projected = this.projectedPositionScratch
+    // 相机矩阵与行星位置必须取自同一时刻。这段跑在 scene.render 之前，而渲染被节流到
+    // 30fps —— 于是有些帧拿到的是上一次渲染留下的视图矩阵，配上这一帧已经前进的行星
+    // 位置，锚点就在两个值之间来回跳（实测 641.46/642.17 两簇，卡片肉眼可见地抖）。
+    mesh.computeWorldMatrix(true)
+    this.scene.updateTransformMatrix()
     Vector3.ProjectToRef(
       mesh.getAbsolutePosition(), this.projectionIdentity, this.scene.getTransformMatrix(), viewport, projected,
     )

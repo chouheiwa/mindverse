@@ -53,10 +53,15 @@ export function orbitTempoFor(input: Readonly<{ starFocused: boolean; planetSele
 // 它在屏幕上的位置，点击一样准，而画面里它是活的。之前连自转都没有：拖动转的是网格，
 // 太阳在世界空间固定，明暗与轮廓一点不变，松手之后它就是一颗死球。
 
-/** 最慢的一圈：45 秒。 */
-export const PLANET_SPIN_MIN_PERIOD_MS = 45_000
+/**
+ * 最快的一圈：18 秒。
+ *
+ * 之前是 45–90 秒，实测 4 秒才转 18° —— 盯着看才勉强看得出，用户的反馈就是「没有
+ * 任何效果」。这是界面不是天文馆：一圈十几二十秒才读得出「它是活的」。
+ */
+export const PLANET_SPIN_MIN_PERIOD_MS = 18_000
 /** 周期抖动范围：各行星转速不同，否则整屏同步转很假。 */
-export const PLANET_SPIN_PERIOD_SPAN_MS = 45_000
+export const PLANET_SPIN_PERIOD_SPAN_MS = 14_000
 
 const TWO_PI = Math.PI * 2
 

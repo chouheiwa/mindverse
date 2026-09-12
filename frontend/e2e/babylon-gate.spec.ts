@@ -737,9 +737,27 @@ test('at planet focus a drag walks you around the planet, and the planet turns o
     return now.some((value, index) => Math.abs(value - spinBefore[index]!) > 1e-4)
   }, { timeout: 20_000, intervals: [200] }).toBe(true)
 
-  // 拖动：转的是相机绕行星的方位角，不是网格。
-  // 必须等聚焦过渡走完 —— entering 期间拖动会被忽略（相机还在飞向它）。
+  // 不碰任何输入时，跟着行星走的卡片不许抖。
+  //
+  // 注意这条在 SwiftShader 上抓不到真正的回归：抖动来自「rAF 60fps 采样 vs 渲染节流到
+  // 30fps」的拍频 —— 有些帧拿的是上一次渲染留下的视图矩阵，配这一帧已经前进的行星位置，
+  // 锚点于是在两簇值之间跳（Metal 实测 641.46/642.17，肉眼可见）。SwiftShader 一帧上百
+  // 毫秒，拍频不成立，去掉修复它照样绿。修复本身是在 Metal 上实测的：抖动 1.4px → 0。
+  // 留着它是防更粗的回归（锚点接错东西），不是防那个拍频。
   await expect.poll(async () => (await snapshot(page))!.lifecycle.focusState, { timeout: 20_000 }).toBe('focused')
+  await page.waitForTimeout(400)
+  const anchors: number[] = []
+  for (let sample = 0; sample < 14; sample += 1) {
+    const box = await page.locator('.qpc').boundingBox()
+    if (box) anchors.push(box.x)
+    await page.waitForTimeout(90)
+  }
+  expect(anchors.length).toBeGreaterThan(8)
+  const jitter = Math.max(...anchors) - Math.min(...anchors)
+  process.stdout.write(`[anchor] jitter ${jitter.toFixed(3)} over ${anchors.length} samples\n`)
+  expect(jitter).toBeLessThan(0.25)
+
+  // 拖动：转的是相机绕行星的方位角，不是网格。
   const before = (await snapshot(page))!.scene
   await canvas(page).hover({ position: { x: 400, y: 360 } })
   await page.mouse.down()

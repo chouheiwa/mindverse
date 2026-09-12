@@ -941,6 +941,9 @@ test('question planets and their orbits ride along with a drifting star', async 
   await page.getByRole('button', { name: /固定地层问题/ }).click()
   await expect.poll(async () => (await snapshot(page))!.planet.selectedQuestionId).toBe('question:7')
   await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+  // 必须等聚焦过渡走完：entering 期间相机还在飞向行星，采到的位置是半路的
+  // （实测偶发 38.9px 的位移，单跑复现不出来）。
+  await expect.poll(async () => (await snapshot(page))!.lifecycle.focusState, { timeout: 20_000 }).toBe('focused')
 
   const sample = async () => {
     const current = (await snapshot(page))!

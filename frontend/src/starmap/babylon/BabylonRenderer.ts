@@ -22,7 +22,7 @@ import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPi
 import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
-import { backdropGain } from '../backdropVisibility'
+import { backdropGain, BACKDROP_STAR_FOCUS_GAIN } from '../backdropVisibility'
 import {
   INITIAL_ORBIT_CLOCK, orbitClockTime, orbitTempoFor, planetSpinAngle, retimeOrbitClock,
   type OrbitClockState,
@@ -37,6 +37,7 @@ import {
   advanceDescent, descentEase, descentProgress, IDLE_DESCENT_CLOCK, type DescentClock,
 } from './surfaceDescent'
 import { layoutSurfaceTrail } from './surfaceTrail'
+import { surfaceEntryNearPlane, surfaceEntryPose, surfaceEntryPresentation } from './surfaceEntry'
 import { formatTraceMonth } from '../../domain/questionProvenance'
 import type { SurfaceLabel } from './labelLayer'
 import { layoutSurfaceMarks, surfaceMarksFor } from './surfaceMarks'
@@ -258,7 +259,8 @@ interface PlanetVisualRecord {
 }
 
 /** 轨道俯冲到站立的时长。与大气层穿越同量级，让落地有过程感。 */
-const SURFACE_DESCENT_MS = 1100
+/** 俯冲全程。1100ms 只够「切过去」；从宇宙飞进来要看得完一条航线。 */
+const SURFACE_DESCENT_MS = 2400
 /** 宇宙视角的近裁剪面。地表阶段按眼高另算，退场时还原。 */
 const UNIVERSE_CAMERA_MIN_Z = 0.1
 /** 宇宙视角的最近机位。地表阶段相机贴着地面，这个下限必须让开。 */
@@ -356,6 +358,13 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceMarks: PlanetSurfaceMarks | null = null
   /** 天上的邻居：同恒星系的问题、虫洞通向的星群。 */
   private surfaceBeacons: PlanetSurfaceBeacons | null = null
+  /**
+   * 地表家具（旗、石堆、天上的邻居、小径与路牌）的总开关。
+   *
+   * 俯冲途中不能出现：它们是「站在地面上看出去」的东西，而 2D 标签没有深度测试 ——
+   * 实测在 3.2 倍半径处，邻居的名字糊了半屏，恒星名还穿透行星画在了它正面。
+   */
+  private surfaceFurniture: TransformNode | null = null
   /** 指向下一站的小径与路牌。 */
   private surfaceTrail: PlanetSurfaceTrail | null = null
   private surfaceSignpost: { questionId: string; starId: string; text: string } | null = null
@@ -380,6 +389,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private lastFrameDeltaMs = 16
   /** 上一帧的宇宙背景增益。地表阶段必须是 0 —— 这是「没有宇宙视角」的判据。 */
   private backdropGainValue = 1
+  /** 俯冲途中宇宙背景的残留比例：1 起飞、0 穿过大气。不在俯冲里就是 0。 */
+  private entryBackdrop = 0
   private workspaceOpen = false
   private reducedMotion: boolean
   private planetExitPending = false
@@ -1265,7 +1276,8 @@ export class BabylonRenderer implements MindverseRenderer {
     const focusRetreat = backdropGain(this.diagnosticPhase() === 'universe'
       ? (this.selected ? 'planet-focus' : this.focusedStar ? 'star-focus' : 'panorama')
       : 'strata')
-    this.backdropGainValue = focusRetreat
+    // 俯冲途中宇宙不能瞬间关掉 —— 那样你从没看见过太空。从恒星系的档位一路淡到 0。
+    this.backdropGainValue = Math.max(focusRetreat, BACKDROP_STAR_FOCUS_GAIN * this.entryBackdrop)
     const modeGain = this.mode === 'all' ? 1 : 0.48
     this.nebula?.setDim(modeGain * nearK * focusRetreat)
     this.nebula?.update(this.motionTime() * 0.001)
@@ -1337,8 +1349,9 @@ export class BabylonRenderer implements MindverseRenderer {
     // 会让字在两个位置之间来回跳。投影前统一刷新到当前相机。
     this.scene.updateTransformMatrix()
     // 地表阶段没有星群名与恒星名 —— 那是宇宙导航信息，站在行星上不成立。
-    // 有的是天上的邻居：同恒星系的问题、虫洞通向的星群。
-    if (this.backdropGainValue <= 0) {
+    // 俯冲途中也一样：2D 标签没有深度测试，实测恒星名会穿透行星画在它正面。
+    // 有的是天上的邻居：同恒星系的问题、虫洞通向的星群，落地之后才出现。
+    if (this.backdropGainValue <= 0 || surfaceWorldVisible(this.surfaceStage)) {
       this.labels.draw({
         clusters: [], stars: [], near, far, tooClose: radius * 0.2,
         surface: this.surfaceLabels(),
@@ -1437,7 +1450,10 @@ export class BabylonRenderer implements MindverseRenderer {
       }))
       const planet = questionPlanetPresentation({ ...state, ownerKey })
       visual.visual.setReveal(planet.reveal)
-      visual.visual.setVisible(planet.visible)
+      // 地表世界在场时，选中的那颗行星在轨道视角里的 shader 球要藏起来：它和地形是
+      // 同一颗星球，重叠会打架。
+      visual.visual.setVisible(planet.visible
+        && !(surfaceWorldVisible(this.surfaceStage) && visual === this.selectedVisual))
       for (const mesh of visual.visual.meshes) mesh.isPickable = planet.pickable && !mesh.name.includes(':atmosphere')
     }
   }
@@ -1850,6 +1866,11 @@ export class BabylonRenderer implements MindverseRenderer {
     const root = new TransformNode('planet-surface-root', this.scene)
     root.position.copyFrom(centre)
     this.surfaceRoot = root
+    // 地表家具挂在这个子节点下，落地之前整棵关掉。
+    const furniture = new TransformNode('planet-surface-furniture', this.scene)
+    furniture.parent = root
+    furniture.setEnabled(false)
+    this.surfaceFurniture = furniture
     this.surfaceRadius = this.selectedPlanetWorldRadius()
     this.surfaceDisplacement = displacement
     this.surfaceGround = new PlanetGround(this.scene, {
@@ -1908,7 +1929,7 @@ export class BabylonRenderer implements MindverseRenderer {
         clusters: this.universe?.clusters ?? [],
         wormholes: this.universe?.wormholes ?? [],
       })
-    this.surfaceBeacons = new PlanetSurfaceBeacons(this.scene, root, {
+    this.surfaceBeacons = new PlanetSurfaceBeacons(this.scene, furniture, {
       radius: this.surfaceRadius,
       origin: [landing[0] * this.surfaceRadius, landing[1] * this.surfaceRadius, landing[2] * this.surfaceRadius],
       beacons,
@@ -1921,7 +1942,7 @@ export class BabylonRenderer implements MindverseRenderer {
     if (next && nextPlanet) {
       const target = this.planetWorldPositionAt(nextPlanet, frameTimeMs, orbitTimeMs)
       nextBearing = [target.x - centre.x, target.y - centre.y, target.z - centre.z]
-      this.surfaceTrail = new PlanetSurfaceTrail(this.scene, root, {
+      this.surfaceTrail = new PlanetSurfaceTrail(this.scene, furniture, {
         field, radius: this.surfaceRadius, displacement, layout: layoutSurfaceTrail(landing, nextBearing),
       })
       this.surfaceSignpost = {
@@ -1934,7 +1955,7 @@ export class BabylonRenderer implements MindverseRenderer {
     const facingHint = nextBearing ?? (beacons.find(({ kind }) => kind === 'planet') ?? beacons[0])?.direction
     this.surfacePose = standAt(landing, this.surfaceRadius * 0.012, facingHint)
     // 你留下的痕迹就在落点前方的视野里。
-    this.surfaceMarks = new PlanetSurfaceMarks(this.scene, root, {
+    this.surfaceMarks = new PlanetSurfaceMarks(this.scene, furniture, {
       field, radius: this.surfaceRadius, displacement,
       // 有小径时把痕迹让到小径右侧 40°，否则第一面旗正好插在路牌上。
       placements: layoutSurfaceMarks(
@@ -2052,6 +2073,8 @@ export class BabylonRenderer implements MindverseRenderer {
 
   /** 地表阶段画的字：天上的邻居、地上的路牌。 */
   private surfaceLabels(): readonly SurfaceLabel[] {
+    // 落地之前不画：俯冲途中它们会糊在行星正面。
+    if (this.surfaceStage.phase !== 'walking') return []
     const labels: SurfaceLabel[] = this.surfaceBeaconProjections().map((beacon) => ({
       text: beacon.label, x: beacon.x, y: beacon.y - 14, tone: beacon.kind === 'wormhole' ? 'wormhole' : 'sibling',
     }))
@@ -2128,17 +2151,41 @@ export class BabylonRenderer implements MindverseRenderer {
     })
   }
 
+  /**
+   * 俯冲途中的呈现：宇宙背景淡出、行星天空淡入、穿过大气之后宇宙层才整个退场。
+   * 每帧调用，因为它跟着俯冲进度连续变化。
+   */
+  private applyEntryPresentation(): void {
+    const stage = this.surfaceStage
+    const root = this.surfaceRoot
+    // 高度（行星半径的倍数）才是这件事的物理量：站在地面上约等于 1。没有 root 时
+    // 当作已经落地，免得把宇宙留在场上。
+    const altitude = root
+      ? Vector3.Distance(this.camera.globalPosition, root.position) / Math.max(1e-6, this.surfaceRadius)
+      : 1
+    const entry = surfaceEntryPresentation(altitude)
+    // 家具只在落地之后出现。
+    this.surfaceFurniture?.setEnabled(stage.phase === 'walking')
+    this.entryBackdrop = entry.backdrop
+    this.surfaceSky?.setDim(surfaceSkyVisible(stage) ? entry.sky : 0)
+    this.universeRoot.setEnabled(entry.universeVisible)
+  }
+
   private applySurfaceVisibility(): void {
     const present = surfaceWorldVisible(this.surfaceStage)
     this.surfaceRoot?.setEnabled(present)
-    this.surfaceSky?.setDim(surfaceSkyVisible(this.surfaceStage) ? 1 : 0)
-    // 站在地表上时宇宙必须整个退场 —— 这个阶段没有轨道视角。
+    // 站在地表上时宇宙必须整个退场 —— 这个阶段没有轨道视角。俯冲途中则由
+    // applyEntryPresentation 按进度交叉淡出：瞬间关掉就等于从没看见过太空。
     // 但**不能反过来主动点亮**：往下挖时 present 变 false，而那一刻 universeVisible
     // 还是 true（setUniverseVisible(false) 由地层过渡稍后才调），照着点亮会把整个
     // 宇宙塞回洞穴里。宇宙的开关归 setUniverseVisible 管，这里只负责按下去。
-    if (present) this.universeRoot.setEnabled(false)
-    else if (this.surfaceStage.phase === 'idle' && this.universeVisible) {
-      this.universeRoot.setEnabled(true)
+    if (present) this.applyEntryPresentation()
+    else {
+      this.entryBackdrop = 0
+      this.surfaceSky?.setDim(0)
+      if (this.surfaceStage.phase === 'idle' && this.universeVisible) {
+        this.universeRoot.setEnabled(true)
+      }
     }
     // 地表不再驱动相机时，把 up 轴交还给世界 Y。地表相机只往 upVector 里写脚下的法线，
     // 从不还原 —— 洞穴的相机只摆位置和目标，会原样继承那个倾角。
@@ -2170,6 +2217,8 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceBeacons = null
     this.surfaceTrail?.dispose()
     this.surfaceTrail = null
+    this.surfaceFurniture?.dispose(false, false)
+    this.surfaceFurniture = null
     this.surfaceSignpost = null
     this.surfaceSun?.dispose()
     this.surfaceSun = null
@@ -2223,9 +2272,17 @@ export class BabylonRenderer implements MindverseRenderer {
         reducedMotion: this.reducedMotion,
       })
       const progress = descentProgress(this.descentClock, SURFACE_DESCENT_MS, this.reducedMotion)
-      const eased = descentEase(progress)
-      this.camera.setPosition(Vector3.Lerp(descent.from, landed, eased))
-      this.camera.setTarget(Vector3.Lerp(descent.fromTarget, landedTarget, eased))
+      // 航线：高空绕到落点正上方，再沿半径落下去。直线插值会从行星内部穿过去。
+      const pose = surfaceEntryPose({
+        from: [descent.from.x, descent.from.y, descent.from.z],
+        fromTarget: [descent.fromTarget.x, descent.fromTarget.y, descent.fromTarget.z],
+        standing: [landed.x, landed.y, landed.z],
+        standingTarget: [landedTarget.x, landedTarget.y, landedTarget.z],
+        centre: [root.position.x, root.position.y, root.position.z],
+        progress: descentEase(progress),
+      })
+      this.camera.setPosition(new Vector3(pose.position[0], pose.position[1], pose.position[2]))
+      this.camera.setTarget(new Vector3(pose.target[0], pose.target[1], pose.target[2]))
       // upVector 必须整体赋值：ArcRotateCamera 的 setter 会重建 _upToYMatrix 缓存，
       // 原地 .set() 绕过 setter，缓存保持 undefined，真引擎上抛
       // "Cannot read properties of undefined (reading 'm')" 并整页掉进文本降级。
@@ -2244,6 +2301,15 @@ export class BabylonRenderer implements MindverseRenderer {
       this.camera.setTarget(landedTarget)
       this.camera.setPosition(landed)
     }
+    // 呈现每帧都要跟：只在俯冲分支里更新的话，落地后它会停在最后一个值上
+    // —— 实测 backdropGain 残留 0.0021，而地表阶段的判据是它必须为 0。
+    this.applyEntryPresentation()
+    // 近裁剪面跟着离地高度走：高空还带着地表那个 0.0004 量级，宇宙尺度的深度精度会崩。
+    this.camera.minZ = surfaceEntryNearPlane(
+      Math.max(0, Vector3.Distance(this.camera.globalPosition, root.position) - frame.groundRadius),
+      surfaceNearPlane(pose.eyeHeight),
+      UNIVERSE_CAMERA_MIN_Z,
+    )
     const sun = this.surfaceSunDirection()
     this.surfaceSky?.setSun(sun)
     this.surfaceGround?.setSun(sun)

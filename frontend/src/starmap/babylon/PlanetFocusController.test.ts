@@ -14,6 +14,7 @@ function setup(reducedMotion = false) {
     readPose: vi.fn(() => currentPose),
     writePose: vi.fn((next) => { currentPose = { target: { ...next.target }, radius: next.radius } }),
     stopInertia: vi.fn(),
+    orbit: vi.fn(),
   }
   const visual: FocusPlanetVisualPort = {
     radius: 2,
@@ -126,24 +127,26 @@ describe('PlanetFocusController input', () => {
     expect(camera.writePose).not.toHaveBeenCalled()
   })
 
-  test('supports pointer and keyboard rotation with reduced-motion-safe inertia', () => {
-    const { controller, visual } = setup()
+  test('supports pointer and keyboard orbiting with reduced-motion-safe inertia', () => {
+    // 拖动与方向键都是「绕着行星走」，转的是相机不是网格。
+    const { controller, camera, visual } = setup()
     controller.enter(visual)
     controller.update(100)
 
     expect(controller.drag(20, -10)).toBe(true)
-    expect(visual.rotate).toHaveBeenLastCalledWith(-0.1, 0.05)
+    expect(camera.orbit).toHaveBeenLastCalledWith(-0.1, 0.05)
     controller.update(16)
-    expect(visual.rotate).toHaveBeenCalledTimes(2)
+    expect(camera.orbit).toHaveBeenCalledTimes(2)
     expect(controller.keyDown('ArrowRight')).toBe(true)
     expect(controller.keyDown('w')).toBe(true)
-    expect(visual.rotate).toHaveBeenCalledWith(0.08, 0)
-    expect(visual.rotate).toHaveBeenCalledWith(0, 0.08)
+    expect(camera.orbit).toHaveBeenCalledWith(0.08, 0)
+    expect(camera.orbit).toHaveBeenCalledWith(0, 0.08)
 
     controller.setReducedMotion(true)
-    const calls = vi.mocked(visual.rotate).mock.calls.length
+    const calls = vi.mocked(camera.orbit).mock.calls.length
     controller.update(16)
-    expect(visual.rotate).toHaveBeenCalledTimes(calls)
+    expect(camera.orbit).toHaveBeenCalledTimes(calls)
+    expect(visual.rotate).not.toHaveBeenCalled()
   })
 
   test('clamps wheel and pinch zoom to 2.2R..8R', () => {
@@ -170,5 +173,68 @@ describe('PlanetFocusController input', () => {
     expect(onExit).toHaveBeenCalledTimes(1)
     expect(controller.keyDown('Escape')).toBe(true)
     expect(onExit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('dragging moves you around the planet, not the planet under you', () => {
+  // 之前拖动转的是行星网格。太阳在世界空间固定，于是明暗与轮廓一点不变，只有表面
+  // 花纹在滑 —— 读起来就是「纹理跟着我转，但星球没动」。绕着它走才会看到新的一面。
+  const focused = () => {
+    const kit = setup()
+    kit.controller.enter(kit.visual, 3.4)
+    kit.controller.update(1000)
+    return kit
+  }
+
+  test('a drag orbits the camera and never spins the mesh', () => {
+    const { controller, camera, visual } = focused()
+    expect(controller.drag(30, -12)).toBe(true)
+    expect(camera.orbit).toHaveBeenCalledTimes(1)
+    const [yaw, pitch] = (camera.orbit as ReturnType<typeof vi.fn>).mock.calls[0]!
+    expect(yaw).toBeLessThan(0)
+    expect(pitch).toBeGreaterThan(0)
+    expect(visual.rotate).not.toHaveBeenCalled()
+  })
+
+  test('inertia keeps orbiting after the finger lifts, and decays', () => {
+    const { controller, camera, visual } = focused()
+    controller.drag(40, 0)
+    const afterDrag = (camera.orbit as ReturnType<typeof vi.fn>).mock.calls.length
+    controller.update(16)
+    controller.update(16)
+    const calls = (camera.orbit as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls.length).toBeGreaterThan(afterDrag)
+    expect(Math.abs(calls[calls.length - 1]![0])).toBeLessThan(Math.abs(calls[afterDrag - 1]![0]))
+    expect(visual.rotate).not.toHaveBeenCalled()
+  })
+
+  test('inertia carries less than the drag itself, even on slow frames', () => {
+    const { controller, camera } = focused()
+    controller.drag(240, 0)
+    const dragYaw = Math.abs((camera.orbit as ReturnType<typeof vi.fn>).mock.calls[0]![0])
+    // 慢硬件：一帧 100ms。跑到停下来为止，惯性总量不得超过拖动本身的一半。
+    let tail = 0
+    for (let frame = 0; frame < 60; frame += 1) {
+      const before = (camera.orbit as ReturnType<typeof vi.fn>).mock.calls.length
+      controller.update(100)
+      const calls = (camera.orbit as ReturnType<typeof vi.fn>).mock.calls
+      if (calls.length > before) tail += Math.abs(calls[calls.length - 1]![0])
+    }
+    expect(tail).toBeGreaterThan(0)
+    expect(tail).toBeLessThan(dragYaw * 0.5)
+  })
+
+  test('arrow keys orbit too', () => {
+    const { controller, camera, visual } = focused()
+    expect(controller.keyDown('ArrowLeft')).toBe(true)
+    expect(camera.orbit).toHaveBeenCalled()
+    expect(visual.rotate).not.toHaveBeenCalled()
+  })
+
+  test('a drag does nothing before focus settles', () => {
+    const { controller, camera, visual } = setup()
+    expect(controller.drag(30, 30)).toBe(false)
+    expect(camera.orbit).not.toHaveBeenCalled()
+    expect(visual.rotate).not.toHaveBeenCalled()
   })
 })

@@ -592,6 +592,9 @@ describe('Babylon stellar motion runtime', () => {
     renderer.camera = { fov: THREE_VERTICAL_FOV }
     renderer.cameraFlightController = { cancel: vi.fn() }
     renderer.callbacks = {}; renderer.syncOrbitPresentation = vi.fn()
+    // 选中行星现在会同步相机控制权（聚焦时由控制器独占环绕），夹具给个空实现。
+    renderer.planetFocusController = { state: 'idle', enter: vi.fn() }
+    renderer.syncCameraControl = vi.fn()
     renderer.resetView = vi.fn(() => { renderer.focusedStar = null })
 
     const expectedExtent = planets[0]!.orbitR + planets[0]!.radius
@@ -813,8 +816,9 @@ describe('Babylon stellar motion runtime', () => {
     renderer.overviewTarget = Vector3.Zero(); renderer.overviewRadius = 300
     renderer.planets = [{ star: datum, orbitR: 100, radius: 4 }]
     renderer.clearPlanet = (BabylonRenderer.prototype as any).clearPlanet
-    // clearPlanet 现在先离开行星地表；这个夹具没有地表，给个空实现。
+    // clearPlanet 现在先离开行星地表、再同步相机控制权；这个夹具两者都没有。
     renderer.exitPlanetSurface = () => {}
+    renderer.syncCameraControl = () => {}
 
     expect(renderer.focusStar('alpha')).toBe(datum.s)
     const systemRadius = renderer.activeFlight.flight.to.radius

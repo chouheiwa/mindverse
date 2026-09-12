@@ -28,6 +28,9 @@ export interface RenderSnapshot {
     clickEvents?: number
     lastPick?: 'none' | 'star' | 'planet' | 'specimen' | 'other'
     surfacePickCalls?: number
+    orbitCalls?: number
+    /** 行星聚焦状态：entering 期间拖动会被忽略（相机还在飞向它）。 */
+    focusState?: string
   }
   planet: {
     selectedQuestionId: string | null

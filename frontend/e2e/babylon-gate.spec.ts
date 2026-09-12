@@ -719,6 +719,53 @@ test('cluster structure rings leave the frame as the camera zooms in from panora
   expect(zoomed.resources.clusterRingCount).toBe(panorama.resources.clusterRingCount)
 })
 
+test('at planet focus a drag walks you around the planet, and the planet turns on its own', async ({ page }) => {
+  // 之前拖动转的是行星网格：太阳在世界空间固定，明暗与轮廓一点不变，只有表面花纹在滑 ——
+  // 读起来就是「纹理跟着我转，但星球没动」。松开手它又完全静止（选中时公转是冻住的）。
+  await openBabylonUniverse(page, '', 'no-preference')
+  await expectReady(page)
+  await openStar(page)
+  await page.getByRole('button', { name: /固定地层问题/ }).click()
+  await expect.poll(async () => (await snapshot(page))!.planet.selectedQuestionId).toBe('question:7')
+  await expect.poll(async () => (await snapshot(page))!.stellar.approachProgress).toBe(1)
+  await expect.poll(async () => (await snapshot(page))!.planet.rotation !== null).toBe(true)
+
+  // 自转：不碰任何输入，行星的姿态也要变。
+  const spinBefore = (await snapshot(page))!.planet.rotation!
+  await expect.poll(async () => {
+    const now = (await snapshot(page))!.planet.rotation!
+    return now.some((value, index) => Math.abs(value - spinBefore[index]!) > 1e-4)
+  }, { timeout: 20_000, intervals: [200] }).toBe(true)
+
+  // 拖动：转的是相机绕行星的方位角，不是网格。
+  // 必须等聚焦过渡走完 —— entering 期间拖动会被忽略（相机还在飞向它）。
+  await expect.poll(async () => (await snapshot(page))!.lifecycle.focusState, { timeout: 20_000 }).toBe('focused')
+  const before = (await snapshot(page))!.scene
+  await canvas(page).hover({ position: { x: 400, y: 360 } })
+  await page.mouse.down()
+  await page.mouse.move(640, 360, { steps: 10 })
+  await page.mouse.up()
+  const after = (await snapshot(page))!.scene
+  const settled = (await snapshot(page))!
+  const bounds = settled.projectedBounds.selectedPlanet!
+  process.stdout.write(`[orbit] alpha ${before.cameraAlpha} -> ${after.cameraAlpha} orbitCalls ${settled.lifecycle.orbitCalls} bounds ${JSON.stringify(bounds)}\n`)
+  // 环绕归聚焦控制器独占。若它没接手，Babylon 自带的指针环绕会和它各转一遍。
+  expect(settled.lifecycle.orbitCalls!).toBeGreaterThan(0)
+  const swing = Math.abs(after.cameraAlpha! - before.cameraAlpha!)
+  expect(swing).toBeGreaterThan(0.05)
+  // 240px 的拖动只该转约 1.2 弧度。被 Babylon 自带的环绕叠一遍就是 3 倍速 ——
+  // 实测拖 320px 相机绕了 4.6 弧度（265°），恒星甩满半屏、行星飞出画面。
+  expect(swing).toBeLessThan(1.8)
+  // 行星始终被框住：绕着它走，它就该一直在画面里、大小不变。
+  expect(bounds.x).toBeGreaterThan(0)
+  expect(bounds.x).toBeLessThan(1280)
+  expect(bounds.y).toBeGreaterThan(0)
+  expect(bounds.y).toBeLessThan(720)
+  // 俯仰始终离极点有余量，否则上向量会翻面、画面猛跳。
+  expect(after.cameraBeta!).toBeGreaterThan(0.07)
+  expect(after.cameraBeta!).toBeLessThan(Math.PI - 0.07)
+})
+
 test('entering a question planet is a descent you can watch, not a freeze then a cut', async ({ page }) => {
   // 实测（Metal 真机，rAF 采样 472 帧）：修复前进入那一帧 2086.5ms，其余 <= 14.2ms —— 同一帧
   // 建了 303 个地形块。墙钟在卡顿期间照走，卡完之后 8 次渲染就把 1100ms 的俯冲放完。

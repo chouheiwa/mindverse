@@ -289,6 +289,18 @@ export class PlanetVisual {
     return true
   }
 
+  /**
+   * 自转到某个绝对角度（绕本地 Y）。
+   *
+   * 与增量的 rotate 不同，这里是绝对量：自转由时钟单独驱动，不和别的来源叠加。
+   * 拖动已经改成绕行星转相机，不再动网格，所以旋转四元数归自转独占。
+   */
+  setSpin(angle: number): void {
+    if (!Number.isFinite(angle)) return
+    const spin = Quaternion.RotationAxis(Vector3.Up(), angle)
+    for (const mesh of this.meshes) mesh.rotationQuaternion = spin.clone()
+  }
+
   rotate(yawDelta: number, pitchDelta: number): void {
     if (!Number.isFinite(yawDelta) || !Number.isFinite(pitchDelta)) return
     const yaw = Quaternion.RotationAxis(Vector3.Up(), yawDelta)

@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "babylon-planets-baseline.v1",
+  "fixtureVersion": "planet-render-gate.v1",
+  "rendererKind": "babylon",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "samples": {
+    "magma": {
+      "thermal": "magma",
+      "bodyDiameter": 47.00819722938518,
+      "dayNightContrast": 0.1031775558193489,
+      "lightAlignment": 0.1031775558193489,
+      "atmosphereEdgeRatio": 0.116233564189383,
+      "bloomHighlightRatio": 0.06097560975609756,
+      "colorVariance": 0.061202010655417194,
+      "meanColor": [
+        0.5774934906211804,
+        0.21652850842234006,
+        0.07009139699240229
+      ],
+      "roughnessContrast": 0.03053961528242739
+    },
+    "desert": {
+      "thermal": "desert",
+      "bodyDiameter": 47.0062788153648,
+      "dayNightContrast": 0.2410450669102917,
+      "lightAlignment": 0.2410450669102917,
+      "atmosphereEdgeRatio": 0.11759813176470578,
+      "bloomHighlightRatio": 0,
+      "colorVariance": 0.029159680718474558,
+      "meanColor": [
+        0.2521111022427976,
+        0.19502221512757117,
+        0.11253624923510888
+      ],
+      "roughnessContrast": 0.023238847473860676
+    },
+    "rock": {
+      "thermal": "rock",
+      "bodyDiameter": 37.384392853460305,
+      "dayNightContrast": 0.16997493375975442,
+      "lightAlignment": 0.16997493375975442,
+      "atmosphereEdgeRatio": 0.12364900110367498,
+      "bloomHighlightRatio": 0,
+      "colorVariance": 0.015830944323639014,
+      "meanColor": [
+        0.13058069381598905,
+        0.15586978381096137,
+        0.17873722138428122
+      ],
+      "roughnessContrast": 0.025914862577509672
+    },
+    "tundra": {
+      "thermal": "tundra",
+      "bodyDiameter": 29.63517316738722,
+      "dayNightContrast": 0.22741302816185177,
+      "lightAlignment": 0.22741302816185177,
+      "atmosphereEdgeRatio": 0.2014667507002802,
+      "bloomHighlightRatio": 0,
+      "colorVariance": 0.029180154435131736,
+      "meanColor": [
+        0.13587276394537653,
+        0.21027675825810976,
+        0.20567404027378322
+      ],
+      "roughnessContrast": 0.03259750950633204
+    },
+    "ice": {
+      "thermal": "ice",
+      "bodyDiameter": 21.928768481178306,
+      "dayNightContrast": 0.2900208508464359,
+      "lightAlignment": 0.2900208508464359,
+      "atmosphereEdgeRatio": 0.21557183231913446,
+      "bloomHighlightRatio": 0,
+      "colorVariance": 0.04105563863592634,
+      "meanColor": [
+        0.1610377073906489,
+        0.24247360482654634,
+        0.2796983408748117
+      ],
+      "roughnessContrast": 0.04139577435897435
+    }
+  },
+  "far": {
+    "thermal": "rock",
+    "surfaceLevel": "low",
+    "highPlanetCount": 0,
+    "highFrequencyDetail": false,
+    "silhouetteDrift": 0,
+    "lightAlignment": 0.0964279720279721,
+    "lightDirectionFlip": -0.8720267372614423
+  },
+  "commitSha": "7db04bcce024f39e2501df5ffbea48c9ed0fc5be"
+}

@@ -23,7 +23,10 @@ import { selectPlanetData, type UniverseIndex } from '../../domain/universe'
 import type { Mode, Star, Universe } from '../../types'
 import { buildMaterialTimeline, planetMaterialInput, planetWorldRadius } from '../gl/planetMaterials'
 import { backdropGain } from '../backdropVisibility'
-import { INITIAL_ORBIT_CLOCK, orbitClockTime, orbitTempoFor, retimeOrbitClock, type OrbitClockState } from './planetMotion'
+import {
+  INITIAL_ORBIT_CLOCK, orbitClockTime, orbitTempoFor, planetSpinAngle, retimeOrbitClock,
+  type OrbitClockState,
+} from './planetMotion'
 import { PlanetSky, thermalGroundAlbedo } from './planetSky'
 import { PlanetGround } from './planetGround'
 import { PlanetSurfaceMarks } from './planetSurfaceMarks'
@@ -264,6 +267,8 @@ const UNIVERSE_LOWER_RADIUS_LIMIT = 1.2
 const SURFACE_MARK_PICK_RADIUS_PX = 22
 const SURFACE_MARK_PICK_LIFT_PX = 8
 const SURFACE_BEACON_PICK_RADIUS_PX = 26
+/** 绕行星转动时俯仰离极点留的余量，避免上向量翻面。 */
+const PLANET_ORBIT_BETA_MARGIN = 0.08
 
 export class BabylonRenderer implements MindverseRenderer {
   private readonly runtime: BabylonRuntime
@@ -355,6 +360,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceTrail: PlanetSurfaceTrail | null = null
   private surfaceSignpost: { questionId: string; starId: string; text: string } | null = null
   private diagnosticSurfacePickCalls = 0
+  private diagnosticOrbitCalls = 0
+  /** 相机指针控制当前是否挂着。构造时 attachControl 过一次。 */
+  private cameraControlAttached = true
   /** 地表的太阳与天光。地形块用 StandardMaterial，场景里没有灯它就是一片黑。 */
   private surfaceSun: DirectionalLight | null = null
   private surfaceAmbient: HemisphericLight | null = null
@@ -486,6 +494,14 @@ export class BabylonRenderer implements MindverseRenderer {
           camera.setTarget(new Vector3(pose.target.x, pose.target.y, pose.target.z))
           camera.radius = pose.radius
         },
+        orbit: (yawDelta, pitchDelta) => {
+          this.diagnosticOrbitCalls += 1
+          if (!Number.isFinite(yawDelta) || !Number.isFinite(pitchDelta)) return
+          camera.alpha += yawDelta
+          // 夹住俯仰：贴到极点时 ArcRotateCamera 的上向量会翻面，画面猛地一跳。
+          camera.beta = Math.min(Math.PI - PLANET_ORBIT_BETA_MARGIN,
+            Math.max(PLANET_ORBIT_BETA_MARGIN, camera.beta + pitchDelta))
+        },
         stopInertia: () => {
           camera.inertialAlphaOffset = 0
           camera.inertialBetaOffset = 0
@@ -560,6 +576,8 @@ export class BabylonRenderer implements MindverseRenderer {
                 clickEvents: this.diagnosticClickEvents,
                 lastPick: this.diagnosticLastPick,
                 surfacePickCalls: this.diagnosticSurfacePickCalls,
+                orbitCalls: this.diagnosticOrbitCalls,
+                focusState: this.planetFocusController.state,
               }
             },
             stellar: () => this.diagnosticStellar(),
@@ -715,6 +733,7 @@ export class BabylonRenderer implements MindverseRenderer {
   clearPlanet(): void {
     // 取消选中行星就是离开它的地表；否则宇宙一直关着、相机一直被地表占着。
     this.exitPlanetSurface()
+    this.syncCameraControl()
     if (this.destroyed || !this.selected) return
     this.planetFocusController.suspend()
     this.selectedVisual?.visual.setSelected(false)
@@ -749,6 +768,7 @@ export class BabylonRenderer implements MindverseRenderer {
         this.selectedVisual.visual, framing.distance, { low: framing.low, high: framing.high },
       )
     }
+    this.syncCameraControl()
     this.syncOrbitPresentation()
     this.callbacks.onPickPlanet?.(planet)
     return planet
@@ -762,8 +782,7 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.destroyed) return
     this.workspaceOpen = open
     this.canvas.style.pointerEvents = open ? 'none' : ''
-    if (open) this.camera.detachControl()
-    else if (this.universeVisible) this.camera.attachControl(this.canvas, true)
+    this.syncCameraControl()
     this.applyCameraViewport()
     // Three pulls in to PLANET_NEAR so the planet stays readable beside the panel.
     if (open && this.selected && !surfaceCameraOwned(this.surfaceStage)) this.camera.radius = PLANET_NEAR
@@ -774,6 +793,25 @@ export class BabylonRenderer implements MindverseRenderer {
    * 工作台打开时把 3D 视口让给右侧面板；站在地表上时视口占满 —— 那是主画面，
    * 面板只是叠在上面的 HUD。
    */
+  /**
+   * 相机的指针控制归谁。
+   *
+   * 聚焦一颗行星时，环绕由 PlanetFocusController 驱动（它同时管半径夹取、惯性、键盘）；
+   * 此时若还留着 ArcRotateCamera 自带的指针环绕，一次拖动会被转两遍 —— 实测拖 320px
+   * 相机绕了 4.6 弧度（265°），恒星甩满半屏、选中的行星直接飞出画面。站在地表上同理。
+   */
+  private syncCameraControl(): void {
+    const owned = this.planetFocusController.state !== 'idle' || surfaceCameraOwned(this.surfaceStage)
+    const attach = this.universeVisible && !this.workspaceOpen && !owned
+    // 幂等：稳态下是空操作，所以可以每帧调。聚焦的进入/退出是一段过渡，状态在几帧之后
+    // 才落到 idle —— 只在离散时刻同步就会把控制权永远关着（实测退回恒星后滚轮失灵，
+    // 相机半径卡在 16 不动，再也退不回全景）。
+    if (attach === this.cameraControlAttached) return
+    this.cameraControlAttached = attach
+    if (attach) this.camera.attachControl(this.canvas, true)
+    else this.camera.detachControl()
+  }
+
   private applyCameraViewport(): void {
     const open = this.workspaceOpen && !surfaceCameraOwned(this.surfaceStage)
     this.camera.viewport = open && this.engine.getRenderWidth() > 760
@@ -1410,6 +1448,7 @@ export class BabylonRenderer implements MindverseRenderer {
     this.elapsedMs += this.reducedMotion || this.diagnosticApproachProgressOverride != null ? 0 : deltaTime
     this.updateCameraFlight()
     this.planetFocusController.update(deltaTime)
+    this.syncCameraControl()
     if (this.planetExitPending && this.planetFocusController.state === 'idle') {
       this.planetExitPending = false
       this.finishPlanetExit()
@@ -1660,6 +1699,9 @@ export class BabylonRenderer implements MindverseRenderer {
       this.planetStarPositionScratch,
     )
     visual.visual.setPosition(orbitPositionOf(datum, starPosition, orbitTimeMs, this.planetPositionScratch))
+    // 自转用活时钟：选中时公转停住（不再是移动靶），但它得继续转，否则就是一颗死球。
+    // 自转不改变屏幕位置，点击精度不受影响。
+    visual.visual.setSpin(planetSpinAngle(datum.material.seed, frameTimeMs))
     visual.orbit.position.set(
       starPosition.x - datum.star.p[0],
       starPosition.y - datum.star.p[1],
@@ -1683,6 +1725,7 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private finishPlanetExit(): void {
+    this.syncCameraControl()
     const record = this.selectedVisual
     if (!record) return
     record.visual.setSelected(false)
@@ -2103,6 +2146,7 @@ export class BabylonRenderer implements MindverseRenderer {
     // 贴不到地面，只能悬在半径 0.18 的星球外一米多，连天空球都在身后。
     this.camera.lowerRadiusLimit = owned ? null : UNIVERSE_LOWER_RADIUS_LIMIT
     this.applyCameraViewport()
+    this.syncCameraControl()
   }
 
   private disposeSurfaceWorld(): void {
@@ -2226,8 +2270,7 @@ export class BabylonRenderer implements MindverseRenderer {
     }
     this.caveRoot?.setEnabled(!visible)
     this.scene.fogEnabled = !visible
-    if (visible && !this.workspaceOpen) this.camera.attachControl(this.canvas, true)
-    else this.camera.detachControl()
+    this.syncCameraControl()
     if (visible && this.selectedVisual && this.planetFocusController.state === 'idle') {
       const framing = this.selected ? this.planetFraming(this.selected) : null
       this.planetFocusController.enter(
@@ -2938,6 +2981,14 @@ export class BabylonRenderer implements MindverseRenderer {
     this.cancelFlight('user')
     if (this.planetFocusController.wheel(event.deltaY)) {
       event.preventDefault()
+      return
+    }
+    // 聚焦行星时已经滚到最远、还在继续外滚 —— 那就是要离开这颗行星。
+    // 以前这一步能走通是因为 Babylon 自带的指针缩放也在推半径，把它顶过了退出阈值；
+    // 环绕归控制器独占之后就没人推了，得把这个意图写明白。
+    if (this.planetFocusController.state === 'focused' && event.deltaY > 0) {
+      event.preventDefault()
+      this.exitHierarchy()
       return
     }
     const threshold = wheelExitThreshold(this.framingPhase(), {

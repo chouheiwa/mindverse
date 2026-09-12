@@ -14,6 +14,14 @@ export interface FocusCameraPort {
   readPose(): FocusCameraPose
   writePose(pose: FocusCameraPose): void
   stopInertia(): void
+  /**
+   * 绕注视点转动相机（弧度）。
+   *
+   * 聚焦一颗行星时拖动应当是「绕着它走」。之前转的是行星网格 —— 太阳在世界空间
+   * 固定，于是明暗与轮廓一点不变，只有表面花纹在滑，读起来就是「纹理跟着我转，
+   * 但星球没动」。绕着走才会看到新的一面，晨昏线也才会移。
+   */
+  orbit(yawDelta: number, pitchDelta: number): void
 }
 
 /** Adapter boundary implemented by a PlanetVisual without exposing Babylon meshes. */
@@ -48,6 +56,13 @@ const copyPose = (pose: FocusCameraPose): FocusCameraPose => ({
   target: { ...pose.target },
   radius: pose.radius,
 })
+
+/** 松手后带走多少上一帧的角速度。 */
+const INERTIA_CARRY = 0.45
+/** 单帧最多按几倍 16ms 消耗惯性；慢硬件上放太大会一帧甩出去。 */
+const INERTIA_MAX_FRAME_SCALE = 3
+/** 每「一帧 16ms」消耗剩余量的比例。 */
+const INERTIA_CONSUME_PER_FRAME = 0.35
 
 const lerp = (from: number, to: number, amount: number) => from + (to - from) * amount
 
@@ -164,11 +179,17 @@ export class PlanetFocusController {
 
     if (this.state === 'focused' && !this.reducedMotion && this.visual
       && (Math.abs(this.yawVelocity) > 0.0001 || Math.abs(this.pitchVelocity) > 0.0001)) {
-      const frameScale = Math.max(0, Math.min(4, deltaMs / 16))
-      this.visual.rotate(this.yawVelocity * frameScale, this.pitchVelocity * frameScale)
-      const damping = Math.pow(0.84, frameScale)
-      this.yawVelocity *= damping
-      this.pitchVelocity *= damping
+      // 惯性的尾巴必须短于拖动本身。以前它转的是网格，没人看得出来；改成绕行星转相机
+      // 之后就露馅了：慢硬件上一帧 100ms，frameScale 被放大到 4、阻尼又慢，实测 240px
+      // 的拖动最后绕了 4.95 弧度（284°），行星直接甩出画面。
+      // yawVelocity/pitchVelocity 是「还欠多少角度没转完」，每帧消耗其中一部分。
+      // 这样惯性的总量等于松手时存下的那个值，与帧率无关 —— 之前是「每帧固定量 ×
+      // 帧缩放」，慢硬件上总量发散。
+      const frameScale = Math.max(0, Math.min(INERTIA_MAX_FRAME_SCALE, deltaMs / 16))
+      const consume = Math.max(0, Math.min(1, frameScale * INERTIA_CONSUME_PER_FRAME))
+      this.camera.orbit(this.yawVelocity * consume, this.pitchVelocity * consume)
+      this.yawVelocity *= 1 - consume
+      this.pitchVelocity *= 1 - consume
     }
   }
 
@@ -176,10 +197,11 @@ export class PlanetFocusController {
     if (this.state !== 'focused' || !this.visual || !Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return false
     const yaw = -deltaX * this.pointerRadiansPerPixel
     const pitch = -deltaY * this.pointerRadiansPerPixel
-    this.visual.rotate(yaw, pitch)
+    this.camera.orbit(yaw, pitch)
     if (!this.reducedMotion) {
-      this.yawVelocity = yaw
-      this.pitchVelocity = pitch
+      // 只带走一部分：松手后是收势，不是继续甩。
+      this.yawVelocity = yaw * INERTIA_CARRY
+      this.pitchVelocity = pitch * INERTIA_CARRY
     }
     return true
   }
@@ -226,7 +248,7 @@ export class PlanetFocusController {
     }
     const delta = rotation[normalized]
     if (!delta) return false
-    this.visual.rotate(delta[0], delta[1])
+    this.camera.orbit(delta[0], delta[1])
     return true
   }
 

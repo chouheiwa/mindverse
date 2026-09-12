@@ -46,3 +46,28 @@ export function orbitTempoFor(input: Readonly<{ starFocused: boolean; planetSele
   if (input.starFocused) return ORBIT_TEMPO.starFocus
   return ORBIT_TEMPO.panorama
 }
+
+// 自转。
+//
+// 选中行星时公转停住（否则它是移动靶，点中全靠运气），但自转必须继续 —— 自转不改变
+// 它在屏幕上的位置，点击一样准，而画面里它是活的。之前连自转都没有：拖动转的是网格，
+// 太阳在世界空间固定，明暗与轮廓一点不变，松手之后它就是一颗死球。
+
+/** 最慢的一圈：45 秒。 */
+export const PLANET_SPIN_MIN_PERIOD_MS = 45_000
+/** 周期抖动范围：各行星转速不同，否则整屏同步转很假。 */
+export const PLANET_SPIN_PERIOD_SPAN_MS = 45_000
+
+const TWO_PI = Math.PI * 2
+
+/** 自转角（弧度，落在 [0, 2π)）。周期由 seed 决定，稳定可复现。 */
+export function planetSpinAngle(seed: number, frameTimeMs: number): number {
+  const safeSeed = Number.isFinite(seed) ? Math.abs(Math.trunc(seed)) : 0
+  const time = Number.isFinite(frameTimeMs) ? frameTimeMs : 0
+  // 取一个与 seed 相关但分布均匀的比例：整数哈希后落到 [0,1)。
+  const mixed = Math.imul(safeSeed ^ 0x9e3779b9, 0x85ebca6b) >>> 0
+  const periodMs = PLANET_SPIN_MIN_PERIOD_MS + PLANET_SPIN_PERIOD_SPAN_MS * (mixed / 0x1_0000_0000)
+  const angle = (time / periodMs) * TWO_PI
+  const wrapped = angle % TWO_PI
+  return Number.isFinite(wrapped) ? (wrapped < 0 ? wrapped + TWO_PI : wrapped) : 0
+}

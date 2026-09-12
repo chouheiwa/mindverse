@@ -64,6 +64,21 @@ describe('LabelLayer', () => {
     expect(context.fillText).toHaveBeenCalledWith('地层测试星群', 640, expect.any(Number))
   })
 
+  it('paints surface labels (neighbours in the sky, signposts) with their own tone', () => {
+    // 地表阶段没有星群名与恒星名，但天上的邻居、地上的路牌要有字。
+    const { layer, context } = setup()
+    const count = layer.draw(input({
+      clusters: [],
+      surface: [
+        { text: '为什么大语言模型能写正则…', x: 300, y: 200, tone: 'sibling' },
+        { text: '→ 正则', x: 900, y: 180, tone: 'wormhole' },
+      ],
+    }))
+    expect(count).toBe(2)
+    expect(context.fillText).toHaveBeenCalledWith('为什么大语言模型能写正则…', 300, 200)
+    expect(context.fillText).toHaveBeenCalledWith('→ 正则', 900, 180)
+  })
+
   it('drops a centroid that has come too close to sit across the frame', () => {
     const { layer } = setup()
     expect(layer.draw(input({ project: () => ({ x: 640, y: 360, depth: 0.5, distance: 4 }) }))).toBe(0)

@@ -17,6 +17,8 @@ export interface RenderSnapshot {
     }[]
     /** 落点旁的旗与石堆在屏幕上的位置。 */
     surfaceMarks?: readonly { answerId: string, x: number, y: number }[]
+    /** 天上的邻居在屏幕上的位置。 */
+    surfaceBeacons?: readonly { kind: 'planet' | 'wormhole', label: string, x: number, y: number }[]
   }
   lifecycle: {
     rafLoops: number
@@ -77,6 +79,7 @@ export interface RenderSnapshot {
       cameraAltitude?: number
       sunElevation?: number
       markCount?: number
+      beaconCount?: number
     }
     renderCostMs?: number
     maxRenderCostMs?: number

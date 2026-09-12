@@ -27,6 +27,9 @@ import { INITIAL_ORBIT_CLOCK, orbitClockTime, orbitTempoFor, retimeOrbitClock, t
 import { PlanetSky, thermalGroundAlbedo } from './planetSky'
 import { PlanetGround } from './planetGround'
 import { PlanetSurfaceMarks } from './planetSurfaceMarks'
+import { PlanetSurfaceBeacons } from './planetSurfaceBeacons'
+import { surfaceBeaconsFor } from './surfaceBeacons'
+import type { SurfaceLabel } from './labelLayer'
 import { layoutSurfaceMarks, surfaceMarksFor } from './surfaceMarks'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
 import { createPlanetTerrainSource } from './planetTerrainSource'
@@ -52,6 +55,7 @@ import type {
   StrataMoveIntent,
   StrataRequest,
   StrataToken,
+  SurfacePick,
 } from '../rendererContract'
 import { BabylonRuntime, BabylonWebGL2RequiredError } from './runtime'
 import {
@@ -252,6 +256,7 @@ const UNIVERSE_LOWER_RADIUS_LIMIT = 1.2
 /** 旗与石堆的屏幕空间命中半径与上抬量（像素）。 */
 const SURFACE_MARK_PICK_RADIUS_PX = 22
 const SURFACE_MARK_PICK_LIFT_PX = 8
+const SURFACE_BEACON_PICK_RADIUS_PX = 26
 
 export class BabylonRenderer implements MindverseRenderer {
   private readonly runtime: BabylonRuntime
@@ -337,6 +342,8 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceGround: PlanetGround | null = null
   /** 落点旁你留下的痕迹：创作是旗、收藏是石堆。 */
   private surfaceMarks: PlanetSurfaceMarks | null = null
+  /** 天上的邻居：同恒星系的问题、虫洞通向的星群。 */
+  private surfaceBeacons: PlanetSurfaceBeacons | null = null
   private diagnosticSurfacePickCalls = 0
   /** 地表的太阳与天光。地形块用 StandardMaterial，场景里没有灯它就是一片黑。 */
   private surfaceSun: DirectionalLight | null = null
@@ -529,6 +536,7 @@ export class BabylonRenderer implements MindverseRenderer {
                 firstAnswerSpecimen: this.firstAnswerSpecimenBounds(answerSpecimens),
                 answerSpecimens,
                 surfaceMarks: this.surfaceMarkProjections(),
+                surfaceBeacons: this.surfaceBeaconProjections().map(({ kind, label, x, y }) => ({ kind, label, x, y })),
               }
             },
             lifecycle: () => {
@@ -1275,9 +1283,11 @@ export class BabylonRenderer implements MindverseRenderer {
   private drawLabels(radius: number, near: number, far: number): void {
     if (!this.labels) return
     // 地表阶段没有星群名与恒星名 —— 那是宇宙导航信息，站在行星上不成立。
+    // 有的是天上的邻居：同恒星系的问题、虫洞通向的星群。
     if (this.backdropGainValue <= 0) {
       this.labels.draw({
         clusters: [], stars: [], near, far, tooClose: radius * 0.2,
+        surface: this.surfaceLabels(),
         project: () => ({ x: 0, y: 0, depth: -1, distance: 0 }),
         projectStar: () => ({ x: 0, y: 0, depth: -1, distance: 1, radiusPx: 0 }),
       })
@@ -1635,19 +1645,18 @@ export class BabylonRenderer implements MindverseRenderer {
       this.reducedMotion ? 0 : 1.35,
       this.planetStarPositionScratch,
     )
-    const angle = datum.phase + Math.PI * 2 / datum.period * (orbitTimeMs / 1000)
-    const cosine = Math.cos(angle)
-    const sine = Math.sin(angle)
-    visual.visual.setPosition(this.planetPositionScratch.set(
-      starPosition.x + (datum.u[0] * cosine + datum.v[0] * sine) * datum.orbitR,
-      starPosition.y + (datum.u[1] * cosine + datum.v[1] * sine) * datum.orbitR,
-      starPosition.z + (datum.u[2] * cosine + datum.v[2] * sine) * datum.orbitR,
-    ))
+    visual.visual.setPosition(orbitPositionOf(datum, starPosition, orbitTimeMs, this.planetPositionScratch))
     visual.orbit.position.set(
       starPosition.x - datum.star.p[0],
       starPosition.y - datum.star.p[1],
       starPosition.z - datum.star.p[2],
     )
+  }
+
+  /** 某颗行星此刻的世界位置（不依赖它是否已实体化）。 */
+  private planetWorldPositionAt(datum: PlanetDatum, frameTimeMs: number, orbitTimeMs: number): Vector3 {
+    const starPosition = starWorldPosition(datum.star, frameTimeMs, this.reducedMotion ? 0 : 1.35, new Vector3())
+    return orbitPositionOf(datum, starPosition, orbitTimeMs, new Vector3())
   }
 
   private refreshPlanetMeshIndex(record: PlanetVisualRecord): void {
@@ -1810,8 +1819,37 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceAmbient.intensity = 0.42
     this.surfaceAmbient.groundColor = new Color3(0.05, 0.045, 0.04)
     this.surfaceField = field
+    // 天上的邻居：同恒星系的其他问题按此刻的真实方向挂在天上；选中行星时公转停住，
+    // 恒星漂移带着整个系一起走，方向在这次停留里不变。
+    const selectedStar = this.selectedVisual.datum.star
+    const frameTimeMs = this.reducedMotion ? 0 : this.elapsedMs
+    const orbitTimeMs = this.reducedMotion ? 0 : orbitClockTime(this.orbitClock, frameTimeMs)
+    const beacons = surfaceBeaconsFor({
+        centre: [centre.x, centre.y, centre.z],
+        up: landing,
+        questionId,
+        clusterId: selectedStar.s.g,
+        siblings: this.planets
+          .filter((planet) => planet.star === selectedStar && 'id' in planet.star.s)
+          .map((planet) => {
+            const position = this.planetWorldPositionAt(planet, frameTimeMs, orbitTimeMs)
+            return {
+              questionId: planet.question.id, starId: (planet.star.s as { id: string }).id,
+              title: planet.question.title, position: [position.x, position.y, position.z] as const,
+            }
+          }),
+        clusters: this.universe?.clusters ?? [],
+        wormholes: this.universe?.wormholes ?? [],
+      })
+    this.surfaceBeacons = new PlanetSurfaceBeacons(this.scene, root, {
+      radius: this.surfaceRadius,
+      origin: [landing[0] * this.surfaceRadius, landing[1] * this.surfaceRadius, landing[2] * this.surfaceRadius],
+      beacons,
+    })
     // 站在落点上，眼高按行星半径取比例，换一颗大小不同的行星观感一致。
-    this.surfacePose = standAt(landing, this.surfaceRadius * 0.012)
+    // 朝向天上第一个邻居（同恒星系的问题优先），落地那一眼就有它。
+    const facingHint = (beacons.find(({ kind }) => kind === 'planet') ?? beacons[0])?.direction
+    this.surfacePose = standAt(landing, this.surfaceRadius * 0.012, facingHint)
     // 你留下的痕迹就在落点前方的视野里。
     this.surfaceMarks = new PlanetSurfaceMarks(this.scene, root, {
       field, radius: this.surfaceRadius, displacement,
@@ -1853,22 +1891,61 @@ export class BabylonRenderer implements MindverseRenderer {
    *
    * 屏幕空间邻近拾取，不逐像素打网格：旗杆只有几像素宽，逐像素就又是「点击区域太小」。
    */
-  pickPlanetSurface(clientX: number, clientY: number): string | null {
-    if (this.destroyed || !this.surfaceMarks || !surfaceCameraOwned(this.surfaceStage)) return null
+  pickPlanetSurface(clientX: number, clientY: number): SurfacePick | null {
+    if (this.destroyed || !surfaceCameraOwned(this.surfaceStage)) return null
     const rect = this.canvas.getBoundingClientRect()
     const x = clientX - rect.left
     const y = clientY - rect.top
-    let winner: string | null = null
     this.diagnosticSurfacePickCalls += 1
+    let winner: SurfacePick | null = null
     let best = SURFACE_MARK_PICK_RADIUS_PX * SURFACE_MARK_PICK_RADIUS_PX
     for (const mark of this.surfaceMarkProjections()) {
       // 锚点在杆底；旗和石堆都往上长，命中区往上偏一点。
       const dx = mark.x - x
       const dy = mark.y - SURFACE_MARK_PICK_LIFT_PX - y
       const distance = dx * dx + dy * dy
-      if (distance <= best) { best = distance; winner = mark.answerId }
+      if (distance <= best) { best = distance; winner = { kind: 'mark', answerId: mark.answerId } }
+    }
+    if (winner) return winner
+    best = SURFACE_BEACON_PICK_RADIUS_PX * SURFACE_BEACON_PICK_RADIUS_PX
+    for (const beacon of this.surfaceBeaconProjections()) {
+      const dx = beacon.x - x
+      const dy = beacon.y - y
+      const distance = dx * dx + dy * dy
+      if (distance > best) continue
+      best = distance
+      winner = beacon.kind === 'wormhole'
+        ? { kind: 'wormhole', wormholeIndex: beacon.wormholeIndex ?? 0 }
+        : { kind: 'planet', questionId: beacon.questionId ?? '', starId: beacon.starId ?? '' }
     }
     return winner
+  }
+
+  /** 天上信标在屏幕上的位置（只含相机前方的）。 */
+  private surfaceBeaconProjections(): readonly {
+    kind: 'planet' | 'wormhole'; key: string; label: string; x: number; y: number
+    questionId?: string; starId?: string; wormholeIndex?: number
+  }[] {
+    const beacons = this.surfaceBeacons
+    const root = this.surfaceRoot
+    if (!beacons || !root || !surfaceCameraOwned(this.surfaceStage)) return []
+    return beacons.anchors().flatMap(({ beacon, local }) => {
+      const projected = this.projectToCss(local.addInPlace(root.position))
+      if (!(projected.z > 0 && projected.z < 1)) return []
+      return [{
+        kind: beacon.kind, key: beacon.key, label: beacon.label, x: projected.x, y: projected.y,
+        ...(beacon.questionId === undefined ? {} : { questionId: beacon.questionId }),
+        ...(beacon.starId === undefined ? {} : { starId: beacon.starId }),
+        ...(beacon.wormholeIndex === undefined ? {} : { wormholeIndex: beacon.wormholeIndex }),
+      }]
+    })
+  }
+
+  /** 地表阶段画的字：天上的邻居。 */
+  private surfaceLabels(): readonly SurfaceLabel[] {
+    return this.surfaceBeaconProjections().map((beacon) => ({
+      text: beacon.label, x: beacon.x, y: beacon.y - 14, tone: beacon.kind === 'wormhole' ? 'wormhole' : 'sibling',
+    }))
   }
 
   /** 标记在屏幕上的位置，供门禁去点。 */
@@ -1900,6 +1977,7 @@ export class BabylonRenderer implements MindverseRenderer {
     /** 太阳相对脚下法线的高度角余弦。负数是夜面。 */
     sunElevation: number
     markCount: number
+    beaconCount: number
   }> {
     const world = this.surfaceWorld?.diagnostics()
     const frame = this.surfacePose && this.surfaceField
@@ -1924,6 +2002,7 @@ export class BabylonRenderer implements MindverseRenderer {
         return frame.up[0] * sun[0] + frame.up[1] * sun[1] + frame.up[2] * sun[2]
       })() : 0,
       markCount: this.surfaceMarks?.diagnostics().markCount ?? 0,
+      beaconCount: this.surfaceBeacons?.diagnostics().beaconCount ?? 0,
     })
   }
 
@@ -1964,6 +2043,8 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceGround = null
     this.surfaceMarks?.dispose()
     this.surfaceMarks = null
+    this.surfaceBeacons?.dispose()
+    this.surfaceBeacons = null
     this.surfaceSun?.dispose()
     this.surfaceSun = null
     this.surfaceAmbient?.dispose()
@@ -2984,6 +3065,18 @@ function unsupported(message: string): Error {
   const cause = new Error(message)
   cause.name = 'UnsupportedRendererFeatureError'
   return cause
+}
+
+/** 行星在轨道上此刻的位置：恒星位置 + 轨道相位。 */
+function orbitPositionOf(datum: PlanetDatum, starPosition: Vector3, orbitTimeMs: number, out: Vector3): Vector3 {
+  const angle = datum.phase + Math.PI * 2 / datum.period * (orbitTimeMs / 1000)
+  const cosine = Math.cos(angle)
+  const sine = Math.sin(angle)
+  return out.set(
+    starPosition.x + (datum.u[0] * cosine + datum.v[0] * sine) * datum.orbitR,
+    starPosition.y + (datum.u[1] * cosine + datum.v[1] * sine) * datum.orbitR,
+    starPosition.z + (datum.u[2] * cosine + datum.v[2] * sine) * datum.orbitR,
+  )
 }
 
 function pointerKind(value: string): PointerInputKind {

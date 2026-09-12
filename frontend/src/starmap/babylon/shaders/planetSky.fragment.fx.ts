@@ -24,7 +24,7 @@ void main(void) {
   float mieBase = max(1.64 - 1.6 * mu, 0.04);
   float mie = 0.36 / max(pow(mieBase, 1.5), 0.008);
   float daylight = smoothstep(-0.15, 0.1, dot(sun, up));
-  color += uSunColor * clamp(mie * 0.06, 0.0, 1.0) * daylight;
+  color += uSunColor * clamp(mie * 0.035, 0.0, 1.0) * daylight;
   // 白天整体亮起来，夜面回落到深色 —— 天的亮度跟着太阳高度走。
   color *= 0.35 + 0.65 * daylight;
   float alpha = clamp(uDim, 0.0, 1.0);

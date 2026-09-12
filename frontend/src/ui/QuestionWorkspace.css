@@ -21,6 +21,8 @@
 .uv-workspace-open > .ql,
 .uv-workspace-open > .qpc,
 .uv-workspace-open > .pnl { visibility: hidden }
+/* 站在地表上：天上的邻居要有名字，标签画布得露出来。 */
+.uv-workspace-open.uv-surface-open > .uv-labels { visibility: visible }
 .qw-planet-stage { position: relative; grid-column: 1; grid-row: 1 / 3; min-width: 0; overflow: hidden; cursor: grab;
   touch-action: none; user-select: none; border-right: 1px solid rgb(172 190 231 / 12%) }
 .qw-planet-stage:active { cursor: grabbing }

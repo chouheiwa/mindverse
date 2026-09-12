@@ -759,6 +759,34 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   await expect(page.getByRole('button', { name: '关闭答案证据板' })).toBeVisible()
   await page.getByRole('button', { name: '关闭答案证据板' }).click()
 
+  // 天上挂着同恒星系的邻居（夹具里另一个问题「当前表层问题」）。
+  const surfaceNow = (await snapshot(page))!
+  expect(surfaceNow.resources.surfaceStage!.beaconCount!).toBeGreaterThan(0)
+  const beacons = surfaceNow.projectedBounds.surfaceBeacons ?? []
+  process.stdout.write(`[surface] beacons ${JSON.stringify(beacons)}\n`)
+  expect(beacons.some(({ kind }) => kind === 'planet')).toBe(true)
+  // 落地朝向天上第一个邻居；点它就飞过去，落到它的地表上。
+  const neighbour = beacons.find(({ kind }) => kind === 'planet')!
+  expect(neighbour.x).toBeGreaterThan(0)
+  expect(neighbour.x).toBeLessThan(1280)
+  expect(neighbour.y).toBeGreaterThan(0)
+  expect(neighbour.y).toBeLessThan(360)
+  await page.mouse.click(neighbour.x, neighbour.y)
+  await expect(page.getByRole('heading', { name: '当前表层问题' })).toBeVisible()
+  await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase, { timeout: 30_000 }).toBe('walking')
+  await expect.poll(async () => (await snapshot(page))?.planet.selectedQuestionId).toBe('question:8')
+  // 回到原来那颗，后面的断言接着用它。落地朝向它，但投影要等到落地后的第一帧。
+  let back: { x: number; y: number } | null = null
+  await expect.poll(async () => {
+    const list = (await snapshot(page))?.projectedBounds.surfaceBeacons ?? []
+    process.stdout.write(`[surface] beacons@8 ${JSON.stringify(list)}\n`)
+    back = list.find(({ label }) => label === '固定地层问题') ?? null
+    return back !== null
+  }, { timeout: 10_000, intervals: [200] }).toBe(true)
+  await page.mouse.click(back!.x, back!.y)
+  await expect(page.getByRole('heading', { name: '固定地层问题' })).toBeVisible()
+  await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase, { timeout: 30_000 }).toBe('walking')
+
   // 资料默认折成小卡，阅读面板不挡地表；按 I 铺开，Esc 折回。
   await expect(page.getByRole('tablist')).toHaveCount(0)
   await page.keyboard.press('i')
@@ -772,6 +800,11 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   expect(surface.lightCount!).toBeGreaterThanOrEqual(1)
   // 落点得在白天那一面：正对镜头的一面是夜面（恒星在行星背后），实测太阳高度角余弦 −0.73。
   expect(surface.sunElevation!).toBeGreaterThan(0.3)
+  // 落地朝向天上的邻居时可能抬着头；像素剖面按「看着地面」量，先低头。
+  await page.keyboard.down('q')
+  await page.waitForTimeout(500)
+  await page.keyboard.up('q')
+  await page.waitForTimeout(200)
   const lit = await nonBackgroundRatio(page)
   process.stdout.write(`[surface] nonBackground ${lit.toFixed(4)}\n`)
   const profile = await canvas(page).evaluate(readFreshLuminanceProfile, 12)

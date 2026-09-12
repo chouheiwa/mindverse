@@ -93,6 +93,12 @@ export interface RendererCallbacks {
   }) => void
 }
 
+/** 地表上点到的东西。 */
+export type SurfacePick =
+  | Readonly<{ kind: 'mark'; answerId: string }>
+  | Readonly<{ kind: 'planet'; questionId: string; starId: string }>
+  | Readonly<{ kind: 'wormhole'; wormholeIndex: number }>
+
 export interface MindverseRenderer {
   start(): void
   stop(): void
@@ -126,8 +132,8 @@ export interface MindverseRenderer {
   walkPlanetSurface?(input: Readonly<{
     forward: number; strafe: number; turn: number; tilt: number
   }>): boolean
-  /** 点到落点旁的旗或石堆：返回那条回答的 id；没点中返回 null。 */
-  pickPlanetSurface?(clientX: number, clientY: number): string | null
+  /** 地表上的点击落在什么上：旗/石堆（一条回答）、天上的邻居行星、虫洞通向的星群；没点中返回 null。 */
+  pickPlanetSurface?(clientX: number, clientY: number): SurfacePick | null
 
   enterStrata(request: StrataRequest): void
   moveStrata(input: StrataMoveIntent): void

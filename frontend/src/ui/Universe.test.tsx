@@ -34,7 +34,7 @@ const testState = vi.hoisted(() => ({
   strataEnterCalls: [] as unknown[],
   surfaceEnterCalls: [] as string[],
   surfaceExitCalls: 0,
-  surfacePickAnswerId: null as string | null,
+  surfacePick: null as { kind: 'mark'; answerId: string } | { kind: 'planet'; questionId: string; starId: string } | { kind: 'wormhole'; wormholeIndex: number } | null,
   strataMoveCalls: [] as unknown[],
   strataExitCalls: [] as number[],
   closeSpecimenCalls: 0,
@@ -93,7 +93,7 @@ vi.mock('virtual:mindverse-renderer', async () => {
     orbitWorkspace(dx: number, dy: number) { testState.orbitCalls.push([dx, dy]) }
     enterPlanetSurface(questionId: string) { testState.surfaceEnterCalls.push(questionId); return true }
     exitPlanetSurface() { testState.surfaceExitCalls += 1 }
-    pickPlanetSurface() { return testState.surfacePickAnswerId }
+    pickPlanetSurface() { return testState.surfacePick }
     enterStrata(request: unknown) { testState.strataEnterCalls.push(request) }
     moveStrata(intent: unknown) { testState.strataMoveCalls.push(intent) }
     exitStrata(token: number) { testState.strataExitCalls.push(token) }
@@ -167,7 +167,7 @@ beforeEach(() => {
   testState.strataEnterCalls = []
   testState.surfaceEnterCalls = []
   testState.surfaceExitCalls = 0
-  testState.surfacePickAnswerId = null
+  testState.surfacePick = null
   testState.strataMoveCalls = []
   testState.strataExitCalls = []
   testState.closeSpecimenCalls = 0
@@ -597,7 +597,7 @@ test('entering a question planet lands on its surface, and digging is a separate
   expect(testState.strataEnterCalls).toHaveLength(0)
 
   // 点到落点旁的旗：打开那条回答的证据板；关掉回到地表。
-  testState.surfacePickAnswerId = 'answer:8'
+  testState.surfacePick = { kind: 'mark', answerId: 'answer:8' }
   const stage = await screen.findByRole('region', { name: '行星地表' })
   fireEvent(stage, new MouseEvent('pointerdown', { bubbles: true, clientX: 300, clientY: 300 }))
   fireEvent(stage, new MouseEvent('pointerup', { bubbles: true, clientX: 301, clientY: 300 }))

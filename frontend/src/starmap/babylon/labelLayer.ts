@@ -19,8 +19,25 @@ export interface LabelProjection {
   readonly distance: number
 }
 
+export type SurfaceLabelTone = 'sibling' | 'wormhole' | 'signpost'
+
+/** 地表阶段的字：天上的邻居、地上的路牌。x/y 已是最终落笔位置。 */
+export interface SurfaceLabel {
+  readonly text: string
+  readonly x: number
+  readonly y: number
+  readonly tone: SurfaceLabelTone
+}
+
+const SURFACE_TINT: Record<SurfaceLabelTone, readonly [number, number, number]> = {
+  sibling: [0.72, 0.84, 1],
+  wormhole: [0.35, 0.95, 0.85],
+  signpost: [0.98, 0.84, 0.46],
+}
+
 export interface LabelFrame {
   readonly clusters: readonly Cluster[]
+  readonly surface?: readonly SurfaceLabel[]
   readonly stars: readonly StarLabelVisibility[]
   readonly near: number
   readonly far: number
@@ -90,6 +107,10 @@ export class LabelLayer {
         opacity,
         tint: [0.48, 0.62, 1],
       })
+    }
+
+    for (const label of frame.surface ?? []) {
+      labels.push({ text: label.text, x: label.x, y: label.y, opacity: 0.94, tint: SURFACE_TINT[label.tone] })
     }
 
     return paintLabels(this.context, { width: this.width, height: this.height }, labels)

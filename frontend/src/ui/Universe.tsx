@@ -487,9 +487,26 @@ export function PrivateUniverseView() {
   /** 在地表上点开的旗/石堆：那条回答的证据板。 */
   const [surfaceEvidenceAnswerId, setSurfaceEvidenceAnswerId] = useState<string | null>(null)
   const pickSurface = useCallback((clientX: number, clientY: number) => {
-    const answerId = rendererRef.current?.pickPlanetSurface?.(clientX, clientY) ?? null
-    if (answerId) setSurfaceEvidenceAnswerId(answerId)
-  }, [])
+    const picked = rendererRef.current?.pickPlanetSurface?.(clientX, clientY) ?? null
+    if (!picked) return
+    if (picked.kind === 'mark') {
+      setSurfaceEvidenceAnswerId(picked.answerId)
+    } else if (picked.kind === 'planet') {
+      // 天上的邻居：飞过去，落到它的地表上。
+      const selected = rendererRef.current?.selectQuestionPlanet(picked.starId, picked.questionId)
+      if (selected) {
+        setPlanet(null)
+        setQuestionEntry(selected)
+      }
+    } else {
+      // 虫洞通向的星群：离开地表，切到虫洞视图。
+      rendererRef.current?.exitPlanetSurface?.()
+      setQuestionEntry(null)
+      setPlanet(null)
+      setMode('worm')
+      setWormIdx(picked.wormholeIndex)
+    }
+  }, [setMode, setPlanet, setQuestionEntry, setWormIdx])
   useEffect(() => {
     const questionId = questionEntry?.question.id ?? null
     if (!questionId) {
@@ -608,7 +625,7 @@ export function PrivateUniverseView() {
   const y1 = hasSpan ? new Date(m.span[1] * 1000).getFullYear() : null
 
   return (
-    <div className={[questionWorkspaceVisible ? 'uv-workspace-open' : '', strataState ? 'uv-strata-open' : ''].filter(Boolean).join(' ') || undefined}
+    <div className={[questionWorkspaceVisible ? 'uv-workspace-open' : '', surfaceLanded ? 'uv-surface-open' : '', strataState ? 'uv-strata-open' : ''].filter(Boolean).join(' ') || undefined}
       data-testid="universe-root" data-render-state={uiState.renderPhase}>
       <canvas ref={canvasRef} className="uv-canvas" tabIndex={0} aria-label="认知宇宙三维星图" />
       <canvas ref={labelRef} className="uv-canvas uv-labels" />

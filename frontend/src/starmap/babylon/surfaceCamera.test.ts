@@ -117,6 +117,22 @@ describe('walking a sphere means the local frame travels with you', () => {
     expect(frame.target.every((value) => Number.isFinite(value))).toBe(true)
   })
 
+  it('faces the hint on landing, so the first view has the neighbour in it', () => {
+    // 落地朝向若随意，天上的邻居多半在身后或画面外；朝向天上最重要的那个邻居。
+    const pose = standAt([0, 1, 0], 0.12, [0.6, 0.8, 0])
+    expect(pose.facing[0]).toBeCloseTo(1, 9)
+    expect(pose.facing[1]).toBeCloseTo(0, 9)
+    // 邻居在 53° 高：抬头到 33°，它落在视线之上 20°。低于 20° 的不抬头；接近头顶的封顶 75°。
+    expect(pose.pitch).toBeCloseTo(Math.atan2(0.8, 0.6) - Math.PI * 20 / 180, 9)
+    expect(standAt([0, 1, 0], 0.12, [0.95, 0.2, 0]).pitch).toBe(0)
+    const overhead = standAt([0, 1, 0], 0.12, [0.02, 1, 0])
+    expect(overhead.pitch).toBeCloseTo(Math.atan2(1, 0.02) - Math.PI * 20 / 180, 6)
+    expect(overhead.pitch).toBeLessThanOrEqual(Math.PI * 75 / 180)
+    // 提示与脚下法线共线：退回朝北。
+    const fallback = standAt([0, 1, 0], 0.12, [0, 1, 0])
+    expect(fallback.facing).toEqual(standAt([0, 1, 0], 0.12).facing)
+  })
+
   it('puts the near clip plane well inside the horizon of a small planet', () => {
     // 行星世界半径只有 0.18，眼高按比例是 0.0022，地平线距离 sqrt(2·R·h) ≈ 0.028 ——
     // 相机沿用宇宙的 minZ = 0.1 时，整个可见地面都在近裁剪面之内，画布全黑。

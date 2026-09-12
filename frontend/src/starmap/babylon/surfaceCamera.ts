@@ -180,10 +180,31 @@ export function surfaceFrame(
 }
 
 /** 在给定点面朝局部北站好，作为落地时的初始姿态。 */
-export function standAt(direction: Vec3, eyeHeight: number): SurfacePose {
+/**
+ * 站到落点上。`facingHint` 给出想面朝的世界方向（比如天上最重要的那个邻居），
+ * 投到切平面上作为朝向；没有或与脚下法线共线时朝北。
+ */
+export function standAt(direction: Vec3, eyeHeight: number, facingHint?: Vec3): SurfacePose {
   const { up, north } = surfaceBasis(direction)
-  return Object.freeze({ direction: up, facing: north, pitch: 0, eyeHeight })
+  let facing = north
+  let pitch = 0
+  if (facingHint && facingHint.every(Number.isFinite)) {
+    const along = facingHint[0] * up[0] + facingHint[1] * up[1] + facingHint[2] * up[2]
+    const tangent: Vec3 = [facingHint[0] - up[0] * along, facingHint[1] - up[1] * along, facingHint[2] - up[2] * along]
+    const length = Math.hypot(tangent[0], tangent[1], tangent[2])
+    if (length > 1e-6) {
+      facing = [tangent[0] / length, tangent[1] / length, tangent[2] / length]
+      // 邻居挂得高（甚至接近头顶）时只转身看不到它：抬头，让它落在画面中上部
+      // （视线之上 20°），上限 75°。
+      const elevation = Math.atan2(along, length)
+      pitch = clampPitch(Math.max(0, Math.min(LANDING_MAX_PITCH, elevation - LANDING_TARGET_ABOVE_EYE)))
+    }
+  }
+  return Object.freeze({ direction: up, facing, pitch, eyeHeight })
 }
+
+const LANDING_TARGET_ABOVE_EYE = Math.PI * 20 / 180
+const LANDING_MAX_PITCH = Math.PI * 75 / 180
 
 /**
  * 站在地表时相机的近裁剪面。

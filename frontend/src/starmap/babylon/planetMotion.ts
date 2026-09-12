@@ -14,7 +14,10 @@ export interface OrbitClockState {
   readonly tempo: number
 }
 
-export const ORBIT_TEMPO = Object.freeze({ panorama: 1, starFocus: 0.25, held: 0 })
+// 进了恒星系放慢，但**不停**。选中一颗行星后相机锁着它，它在屏幕上是定住的，点击
+// 精度不受公转影响；反过来把公转冻成 0，整个星系就死了 —— 用户的话是「看不出来围着
+// 太阳转」。held 保留给减弱动效之类真的要静止的场合。
+export const ORBIT_TEMPO = Object.freeze({ panorama: 1, starFocus: 0.4, selected: 0.15, held: 0 })
 
 export const INITIAL_ORBIT_CLOCK: OrbitClockState = Object.freeze({
   anchorElapsedMs: 0, anchorOrbitMs: 0, tempo: ORBIT_TEMPO.panorama,
@@ -42,9 +45,10 @@ export function retimeOrbitClock(state: OrbitClockState, elapsedMs: number, temp
 
 /** 节奏由用户在做什么决定。 */
 export function orbitTempoFor(input: Readonly<{ starFocused: boolean; planetSelected: boolean }>): number {
-  if (input.planetSelected) return ORBIT_TEMPO.held
-  if (input.starFocused) return ORBIT_TEMPO.starFocus
-  return ORBIT_TEMPO.panorama
+  // 选中一颗行星后相机锁着它：你看到的是恒星绕着自己转。0.4 下 5 秒能扫过 785px，晕；
+  // 0.15 大约 295px —— 看得出在走，又不至于把人晃晕。
+  if (input.planetSelected) return ORBIT_TEMPO.selected
+  return input.starFocused ? ORBIT_TEMPO.starFocus : ORBIT_TEMPO.panorama
 }
 
 // 自转。

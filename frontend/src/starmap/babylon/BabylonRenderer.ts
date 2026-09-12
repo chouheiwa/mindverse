@@ -1333,6 +1333,9 @@ export class BabylonRenderer implements MindverseRenderer {
    */
   private drawLabels(radius: number, near: number, far: number): void {
     if (!this.labels) return
+    // 与锚点同理：这段跑在 scene.render 之前，渲染又被节流，旧的视图矩阵配新的天体位置
+    // 会让字在两个位置之间来回跳。投影前统一刷新到当前相机。
+    this.scene.updateTransformMatrix()
     // 地表阶段没有星群名与恒星名 —— 那是宇宙导航信息，站在行星上不成立。
     // 有的是天上的邻居：同恒星系的问题、虫洞通向的星群。
     if (this.backdropGainValue <= 0) {

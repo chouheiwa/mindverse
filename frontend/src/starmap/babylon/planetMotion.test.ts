@@ -43,7 +43,13 @@ describe('the orbit clock changes tempo without ever jumping', () => {
   it('picks the tempo from what the user is doing', () => {
     expect(orbitTempoFor({ starFocused: false, planetSelected: false })).toBe(ORBIT_TEMPO.panorama)
     expect(orbitTempoFor({ starFocused: true, planetSelected: false })).toBe(ORBIT_TEMPO.starFocus)
-    expect(orbitTempoFor({ starFocused: true, planetSelected: true })).toBe(ORBIT_TEMPO.held)
+    // 选中一颗行星**不再**把公转冻住：相机锁着它，它在屏幕上定住，点击精度不受影响；
+    // 冻住反而让整个星系看起来是死的。
+    expect(orbitTempoFor({ starFocused: true, planetSelected: true })).toBe(ORBIT_TEMPO.selected)
+    // 都必须大于 0：冻住就「看不出来围着太阳转」。选中时更缓，因为相机锁着行星，
+    // 你看到的是恒星绕着自己转，太快会晕。
+    expect(ORBIT_TEMPO.selected).toBeGreaterThan(0)
+    expect(ORBIT_TEMPO.selected).toBeLessThan(ORBIT_TEMPO.starFocus)
   })
 })
 

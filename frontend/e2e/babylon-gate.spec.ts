@@ -957,11 +957,21 @@ test('question planets and their orbits ride along with a drifting star', async 
   const first = await sample()
   await expect.poll(async () => (await sample()).frames, { timeout: 10_000 }).toBeGreaterThan(first.frames + 12)
   const second = await sample()
-  process.stdout.write(`[ride-along] star ${JSON.stringify(first.star)} -> ${JSON.stringify(second.star)} planet ${JSON.stringify(first.planet)} -> ${JSON.stringify(second.planet)}\n`)
-  // 镜头跟着恒星：恒星在屏幕上不动。
-  expect(Math.hypot(second.star.x - first.star.x, second.star.y - first.star.y)).toBeLessThan(1.5)
-  // 行星也必须不动 —— 它和轨道盘要跟着恒星一起走。
+  const gap = (s: Awaited<ReturnType<typeof sample>>) =>
+    Math.hypot(s.planet.x - s.star.x, s.planet.y - s.star.y)
+  process.stdout.write(`[ride-along] gap ${gap(first).toFixed(1)} -> ${gap(second).toFixed(1)} planet ${JSON.stringify(second.planet)}\n`)
+  // 相机锁着选中的行星，所以它在屏幕上定住；恒星则因为公转在画面里缓缓移动。
   expect(Math.hypot(second.planet.x - first.planet.x, second.planet.y - first.planet.y)).toBeLessThan(1.5)
+  // 真正要钉的是「行星没有被恒星甩下」：两者的屏幕间距始终是这条轨道该有的量级。
+  // 修复前恒星位置用了冻结时钟，镜头带着恒星飞走、行星留在原地，间距会一路发散。
+  expect(gap(first)).toBeGreaterThan(0)
+  expect(gap(second)).toBeGreaterThan(0)
+  expect(Math.abs(gap(second) - gap(first))).toBeLessThan(gap(first) * 0.35)
+  // 行星始终在画面里。
+  expect(second.planet.x).toBeGreaterThan(0)
+  expect(second.planet.x).toBeLessThan(1280)
+  expect(second.planet.y).toBeGreaterThan(0)
+  expect(second.planet.y).toBeLessThan(720)
 })
 
 test('a near miss on a question planet selects it instead of ejecting you to the universe', async ({ page }) => {

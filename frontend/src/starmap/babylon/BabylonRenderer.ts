@@ -29,6 +29,9 @@ import { PlanetGround } from './planetGround'
 import { PlanetSurfaceMarks } from './planetSurfaceMarks'
 import { PlanetSurfaceBeacons } from './planetSurfaceBeacons'
 import { surfaceBeaconsFor } from './surfaceBeacons'
+import { PlanetSurfaceTrail } from './planetSurfaceTrail'
+import { layoutSurfaceTrail } from './surfaceTrail'
+import { formatTraceMonth } from '../../domain/questionProvenance'
 import type { SurfaceLabel } from './labelLayer'
 import { layoutSurfaceMarks, surfaceMarksFor } from './surfaceMarks'
 import { PlanetSurfaceWorld } from './planetSurfaceWorld'
@@ -56,6 +59,7 @@ import type {
   StrataRequest,
   StrataToken,
   SurfacePick,
+  PlanetSurfaceEntry,
 } from '../rendererContract'
 import { BabylonRuntime, BabylonWebGL2RequiredError } from './runtime'
 import {
@@ -344,6 +348,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceMarks: PlanetSurfaceMarks | null = null
   /** 天上的邻居：同恒星系的问题、虫洞通向的星群。 */
   private surfaceBeacons: PlanetSurfaceBeacons | null = null
+  /** 指向下一站的小径与路牌。 */
+  private surfaceTrail: PlanetSurfaceTrail | null = null
+  private surfaceSignpost: { questionId: string; starId: string; text: string } | null = null
   private diagnosticSurfacePickCalls = 0
   /** 地表的太阳与天光。地形块用 StandardMaterial，场景里没有灯它就是一片黑。 */
   private surfaceSun: DirectionalLight | null = null
@@ -537,6 +544,7 @@ export class BabylonRenderer implements MindverseRenderer {
                 answerSpecimens,
                 surfaceMarks: this.surfaceMarkProjections(),
                 surfaceBeacons: this.surfaceBeaconProjections().map(({ kind, label, x, y }) => ({ kind, label, x, y })),
+                surfaceSignpost: this.surfaceSignpostProjection(),
               }
             },
             lifecycle: () => {
@@ -1763,7 +1771,7 @@ export class BabylonRenderer implements MindverseRenderer {
    * 落点取当前相机方向在行星上的投影 —— 你从哪个方向飞下去，就落在那一面，
    * 而不是每次都落在同一个「默认点」。
    */
-  enterPlanetSurface(questionId: string): boolean {
+  enterPlanetSurface(questionId: string, options: PlanetSurfaceEntry = {}): boolean {
     if (this.destroyed || !this.selectedVisual) return false
     if (this.selectedVisual.datum.question.id !== questionId) return false
     const { field, displacement } = createPlanetTerrainSource(
@@ -1846,14 +1854,34 @@ export class BabylonRenderer implements MindverseRenderer {
       origin: [landing[0] * this.surfaceRadius, landing[1] * this.surfaceRadius, landing[2] * this.surfaceRadius],
       beacons,
     })
+    // 下一站：从落点铺一条小径指向你在时间上接着看的那个问题，尽头一块路牌。
+    const next = options.nextStation ?? null
+    const nextPlanet = next ? this.planets.find((planet) => planet.question.id === next.questionId) ?? null : null
+    this.surfaceSignpost = null
+    let nextBearing: readonly [number, number, number] | null = null
+    if (next && nextPlanet) {
+      const target = this.planetWorldPositionAt(nextPlanet, frameTimeMs, orbitTimeMs)
+      nextBearing = [target.x - centre.x, target.y - centre.y, target.z - centre.z]
+      this.surfaceTrail = new PlanetSurfaceTrail(this.scene, root, {
+        field, radius: this.surfaceRadius, displacement, layout: layoutSurfaceTrail(landing, nextBearing),
+      })
+      this.surfaceSignpost = {
+        questionId: next.questionId, starId: next.starId,
+        text: `${formatTraceMonth(next.at)} 你从这里去了 → 《${next.title.length > 16 ? `${next.title.slice(0, 16)}…` : next.title}》`,
+      }
+    }
     // 站在落点上，眼高按行星半径取比例，换一颗大小不同的行星观感一致。
-    // 朝向天上第一个邻居（同恒星系的问题优先），落地那一眼就有它。
-    const facingHint = (beacons.find(({ kind }) => kind === 'planet') ?? beacons[0])?.direction
+    // 朝向：有下一站就面朝那条小径（落地就看见自己走过的路）；否则朝天上第一个邻居。
+    const facingHint = nextBearing ?? (beacons.find(({ kind }) => kind === 'planet') ?? beacons[0])?.direction
     this.surfacePose = standAt(landing, this.surfaceRadius * 0.012, facingHint)
     // 你留下的痕迹就在落点前方的视野里。
     this.surfaceMarks = new PlanetSurfaceMarks(this.scene, root, {
       field, radius: this.surfaceRadius, displacement,
-      placements: layoutSurfaceMarks(landing, this.surfacePose.facing, surfaceMarksFor(this.selectedVisual.datum.answers)),
+      // 有小径时把痕迹让到小径右侧 40°，否则第一面旗正好插在路牌上。
+      placements: layoutSurfaceMarks(
+        landing, this.surfacePose.facing, surfaceMarksFor(this.selectedVisual.datum.answers),
+        this.surfaceTrail ? Math.PI * 40 / 180 : 0,
+      ),
     })
     this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
       kind: 'enter', questionId, landing,
@@ -1907,6 +1935,14 @@ export class BabylonRenderer implements MindverseRenderer {
       if (distance <= best) { best = distance; winner = { kind: 'mark', answerId: mark.answerId } }
     }
     if (winner) return winner
+    const signpost = this.surfaceSignpostProjection()
+    if (signpost && this.surfaceSignpost) {
+      const dx = signpost.x - x
+      const dy = signpost.y - SURFACE_MARK_PICK_LIFT_PX - y
+      if (dx * dx + dy * dy <= SURFACE_BEACON_PICK_RADIUS_PX * SURFACE_BEACON_PICK_RADIUS_PX) {
+        return { kind: 'signpost', questionId: this.surfaceSignpost.questionId, starId: this.surfaceSignpost.starId }
+      }
+    }
     best = SURFACE_BEACON_PICK_RADIUS_PX * SURFACE_BEACON_PICK_RADIUS_PX
     for (const beacon of this.surfaceBeaconProjections()) {
       const dx = beacon.x - x
@@ -1941,11 +1977,26 @@ export class BabylonRenderer implements MindverseRenderer {
     })
   }
 
-  /** 地表阶段画的字：天上的邻居。 */
+  /** 路牌在屏幕上的位置（相机前方时）。 */
+  private surfaceSignpostProjection(): { x: number; y: number; text: string } | null {
+    const trail = this.surfaceTrail
+    const root = this.surfaceRoot
+    const signpost = this.surfaceSignpost
+    if (!trail || !root || !signpost || !surfaceCameraOwned(this.surfaceStage)) return null
+    const anchor = trail.signpost()
+    if (!anchor) return null
+    const projected = this.projectToCss(anchor.addInPlace(root.position))
+    return projected.z > 0 && projected.z < 1 ? { x: projected.x, y: projected.y, text: signpost.text } : null
+  }
+
+  /** 地表阶段画的字：天上的邻居、地上的路牌。 */
   private surfaceLabels(): readonly SurfaceLabel[] {
-    return this.surfaceBeaconProjections().map((beacon) => ({
+    const labels: SurfaceLabel[] = this.surfaceBeaconProjections().map((beacon) => ({
       text: beacon.label, x: beacon.x, y: beacon.y - 14, tone: beacon.kind === 'wormhole' ? 'wormhole' : 'sibling',
     }))
+    const signpost = this.surfaceSignpostProjection()
+    if (signpost) labels.push({ text: signpost.text, x: signpost.x, y: signpost.y - 26, tone: 'signpost' })
+    return labels
   }
 
   /** 标记在屏幕上的位置，供门禁去点。 */
@@ -1978,6 +2029,7 @@ export class BabylonRenderer implements MindverseRenderer {
     sunElevation: number
     markCount: number
     beaconCount: number
+    trailSteps: number
   }> {
     const world = this.surfaceWorld?.diagnostics()
     const frame = this.surfacePose && this.surfaceField
@@ -2003,6 +2055,7 @@ export class BabylonRenderer implements MindverseRenderer {
       })() : 0,
       markCount: this.surfaceMarks?.diagnostics().markCount ?? 0,
       beaconCount: this.surfaceBeacons?.diagnostics().beaconCount ?? 0,
+      trailSteps: this.surfaceTrail?.diagnostics().stepCount ?? 0,
     })
   }
 
@@ -2045,6 +2098,9 @@ export class BabylonRenderer implements MindverseRenderer {
     this.surfaceMarks = null
     this.surfaceBeacons?.dispose()
     this.surfaceBeacons = null
+    this.surfaceTrail?.dispose()
+    this.surfaceTrail = null
+    this.surfaceSignpost = null
     this.surfaceSun?.dispose()
     this.surfaceSun = null
     this.surfaceAmbient?.dispose()

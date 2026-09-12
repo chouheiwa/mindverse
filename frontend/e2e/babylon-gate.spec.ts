@@ -759,6 +759,13 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   await expect(page.getByRole('button', { name: '关闭答案证据板' })).toBeVisible()
   await page.getByRole('button', { name: '关闭答案证据板' }).click()
 
+  // 地上一条小径指向下一站：夹具里你 2025.12 在「固定地层问题」留下痕迹、2026.01 去了「当前表层问题」。
+  expect(atPlanet.resources.surfaceStage!.trailSteps!).toBeGreaterThan(0)
+  const signpost = (await snapshot(page))!.projectedBounds.surfaceSignpost
+  process.stdout.write(`[surface] signpost ${JSON.stringify(signpost)}\n`)
+  expect(signpost).not.toBeNull()
+  expect(signpost!.text).toMatch(/^2026\.01 你从这里去了 → 《当前表层问题》$/)
+
   // 天上挂着同恒星系的邻居（夹具里另一个问题「当前表层问题」）。
   const surfaceNow = (await snapshot(page))!
   expect(surfaceNow.resources.surfaceStage!.beaconCount!).toBeGreaterThan(0)

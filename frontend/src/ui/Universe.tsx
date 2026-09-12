@@ -23,6 +23,7 @@ import { buildStrataSceneModel, type StrataSceneModel } from '../domain/strata'
 import { StrataHud } from './StrataHud'
 import { AnswerEvidencePanel } from './AnswerEvidencePanel'
 import { describeQuestionProvenance } from '../domain/questionProvenance'
+import { nextStationAfter } from '../domain/nextStation'
 import './Universe.css'
 
 const reduceMotion = () =>
@@ -491,8 +492,8 @@ export function PrivateUniverseView() {
     if (!picked) return
     if (picked.kind === 'mark') {
       setSurfaceEvidenceAnswerId(picked.answerId)
-    } else if (picked.kind === 'planet') {
-      // 天上的邻居：飞过去，落到它的地表上。
+    } else if (picked.kind === 'planet' || picked.kind === 'signpost') {
+      // 天上的邻居 / 小径尽头的路牌：飞过去，落到它的地表上。
       const selected = rendererRef.current?.selectQuestionPlanet(picked.starId, picked.questionId)
       if (selected) {
         setPlanet(null)
@@ -519,10 +520,12 @@ export function PrivateUniverseView() {
     autoEnteredQuestionRef.current = questionId
     // 先站到地表上。可环绕地表是 Babylon 独有能力；Three 没有 CPU 地形，
     // 拿不到这个方法时退回旧路径（直接进答案地层），而不是把人晾在轨道视角。
-    const landed = rendererRef.current?.enterPlanetSurface?.(questionId) ?? false
+    const landed = rendererRef.current?.enterPlanetSurface?.(questionId, {
+      nextStation: universeIndex ? nextStationAfter(universeIndex, questionId) : null,
+    }) ?? false
     setSurfaceLanded(landed)
     if (!landed) enterStrata(questionId)
-  }, [enterStrata, questionEntry])
+  }, [enterStrata, questionEntry, universeIndex])
 
   const moveStrata = useCallback((intent: Parameters<MindverseRenderer['moveStrata']>[0]) => {
     rendererRef.current?.moveStrata(intent)

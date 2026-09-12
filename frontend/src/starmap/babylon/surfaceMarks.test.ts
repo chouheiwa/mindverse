@@ -47,6 +47,17 @@ describe('surface marks', () => {
     }
   })
 
+  it('can swing the whole fan aside so the first flag does not stand on the signpost', () => {
+    const facing: Vec3 = [0, 0, 1]
+    const right: Vec3 = [1, 0, 0]
+    const swung = layoutSurfaceMarks([0, 1, 0], facing, [{ answerId: 'a', kind: 'flag' }], Math.PI / 4)
+    const tangent = [swung[0]!.direction[0], 0, swung[0]!.direction[2]] as Vec3
+    const length = Math.hypot(...tangent)
+    // 第一枚在正前方偏 45°（左右由切平面的手性决定，这里只看角度）。
+    expect(Math.abs(dot(tangent, right)) / length).toBeCloseTo(Math.sin(Math.PI / 4), 6)
+    expect(dot(tangent, facing) / length).toBeCloseTo(Math.cos(Math.PI / 4), 6)
+  })
+
   it('survives a degenerate facing and an empty list', () => {
     expect(layoutSurfaceMarks([0, 1, 0], [0, 1, 0], [])).toEqual([])
     const placed = layoutSurfaceMarks([0, 1, 0], [0, 0, 0], [{ answerId: 'a', kind: 'flag' }])

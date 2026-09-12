@@ -19,6 +19,8 @@ export interface RenderSnapshot {
     surfaceMarks?: readonly { answerId: string, x: number, y: number }[]
     /** 天上的邻居在屏幕上的位置。 */
     surfaceBeacons?: readonly { kind: 'planet' | 'wormhole', label: string, x: number, y: number }[]
+    /** 小径尽头的路牌在屏幕上的位置与文字。 */
+    surfaceSignpost?: { x: number, y: number, text: string } | null
   }
   lifecycle: {
     rafLoops: number
@@ -80,6 +82,7 @@ export interface RenderSnapshot {
       sunElevation?: number
       markCount?: number
       beaconCount?: number
+      trailSteps?: number
     }
     renderCostMs?: number
     maxRenderCostMs?: number

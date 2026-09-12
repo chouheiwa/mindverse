@@ -46,7 +46,13 @@ export function surfaceMarksFor(
  * 把标记铺在落点前方的扇面里：按黄金角错开方位、按序号由近到远，彼此不挤。
  * `facing` 与落点方向共线（退化）时任取一个切向作为前方。
  */
-export function layoutSurfaceMarks(landing: Vec3, facing: Vec3, marks: readonly SurfaceMark[]): SurfaceMarkPlacement[] {
+/**
+ * `azimuthOffset`：整个扇面绕脚下法线转开的角度。有小径时把痕迹让到小径右侧，
+ * 否则第一面旗正好插在路牌上。
+ */
+export function layoutSurfaceMarks(
+  landing: Vec3, facing: Vec3, marks: readonly SurfaceMark[], azimuthOffset = 0,
+): SurfaceMarkPlacement[] {
   const up = normalize(landing)
   let forward = normalize([
     facing[0] - up[0] * dot(facing, up),
@@ -60,7 +66,8 @@ export function layoutSurfaceMarks(landing: Vec3, facing: Vec3, marks: readonly 
   const count = marks.length
   return marks.map((mark, index) => {
     // 方位：第一枚正前方，其后用低差异序列在扇面里向两侧错开；距离由近到远。
-    const azimuth = (((index * 0.6180339887498949 + 0.5) % 1) - 0.5) * 2 * FAN_HALF_ANGLE
+    const offset = Number.isFinite(azimuthOffset) ? azimuthOffset : 0
+    const azimuth = offset + (((index * 0.6180339887498949 + 0.5) % 1) - 0.5) * 2 * FAN_HALF_ANGLE
     const distance = count <= 1 ? (NEAR_ANGLE + FAR_ANGLE) / 2 : NEAR_ANGLE + (FAR_ANGLE - NEAR_ANGLE) * (index / (count - 1))
     const tangent: Vec3 = [
       forward[0] * Math.cos(azimuth) + right[0] * Math.sin(azimuth),

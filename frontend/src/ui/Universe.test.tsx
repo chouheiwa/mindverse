@@ -34,7 +34,7 @@ const testState = vi.hoisted(() => ({
   strataEnterCalls: [] as unknown[],
   surfaceEnterCalls: [] as string[],
   surfaceExitCalls: 0,
-  surfacePick: null as { kind: 'mark'; answerId: string } | { kind: 'planet'; questionId: string; starId: string } | { kind: 'wormhole'; wormholeIndex: number } | null,
+  surfacePick: null as { kind: 'mark'; answerId: string } | { kind: 'planet'; questionId: string; starId: string } | { kind: 'wormhole'; wormholeIndex: number } | { kind: 'signpost'; questionId: string; starId: string } | null,
   strataMoveCalls: [] as unknown[],
   strataExitCalls: [] as number[],
   closeSpecimenCalls: 0,

@@ -93,11 +93,18 @@ export interface RendererCallbacks {
   }) => void
 }
 
+/** 进入地表时带上的上下文。 */
+export interface PlanetSurfaceEntry {
+  /** 你在时间上接着看的那个问题：从落点铺一条小径指向它，尽头一块路牌。 */
+  readonly nextStation?: Readonly<{ questionId: string; starId: string; title: string; at: number }> | null
+}
+
 /** 地表上点到的东西。 */
 export type SurfacePick =
   | Readonly<{ kind: 'mark'; answerId: string }>
   | Readonly<{ kind: 'planet'; questionId: string; starId: string }>
   | Readonly<{ kind: 'wormhole'; wormholeIndex: number }>
+  | Readonly<{ kind: 'signpost'; questionId: string; starId: string }>
 
 export interface MindverseRenderer {
   start(): void
@@ -125,7 +132,7 @@ export interface MindverseRenderer {
    * 进入可环绕地表。**可选能力**：Three 渲染器没有 CPU 地形，不实现它。
    * 调用方拿不到这个方法时应退回「直接进答案地层」的旧路径，而不是报错。
    */
-  enterPlanetSurface?(questionId: string): boolean
+  enterPlanetSurface?(questionId: string, options?: PlanetSurfaceEntry): boolean
   /** 离开地表回到轨道。俯冲途中也必须能退。 */
   exitPlanetSurface?(): void
   /** 地表行走输入。返回 false 表示当前阶段不接受（俯冲中或下潜中）。 */

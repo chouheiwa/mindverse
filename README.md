@@ -53,6 +53,27 @@ go run ./cmd/server
 Access Secret 由官方 zhihu Skill 用 go-keyring 存入，值带 `go-keyring-base64:` 前缀，
 所以要先剥前缀再 base64 解码。部署到线上时把这两个密钥写进平台的 Secret 配置，不要打进代码包。
 
+## 部署
+
+线上地址 <https://mindverse.chouheiwa.top>（阿里云 Ubuntu 24.04）。
+
+```bash
+scripts/deploy.sh          # 构建、上传、重启、健康检查
+```
+
+服务器布局：二进制与静态资源在 `/opt/mindverse`，以专用系统用户 `mindverse` 运行，
+systemd 单元 `mindverse.service` 只允许写 `/opt/mindverse/data`。nginx 反代到本地 8080，
+并把 `X-Forwarded-Proto` 传给 Go 服务，OAuth 回调与 Secure Cookie 依赖它。
+
+两个密钥和回调地址只在服务器的 `/etc/mindverse/env`（0640，root:mindverse），不进仓库。
+**回调地址不要写进 `hackathon.config.json`**：那会让本地开发也判定为非 LocalOnly，
+Cookie 带上 Secure 之后在 http 本地就失效了。
+
+证书用 acme.sh 从 **ZeroSSL** 签发，不是 Let's Encrypt —— 实测这台机器到
+`acme-v02.api.letsencrypt.org` 的 TLS 握手挂死（TCP 能连上，50 秒无响应），
+而 ZeroSSL 正常。acme.sh 的 cron 每天四次检查，到期前 30 天自动续并 reload nginx。
+`/.well-known/acme-challenge/` 在 80 端口保持明文可达，不能加跳转，否则续期会失败。
+
 ## 本地数据库
 
 `data/mindverse.db`（SQLite，路径可用 `MINDVERSE_DB_PATH` 覆盖）只存一类数据：问题下别人的

@@ -184,13 +184,67 @@ type Followee struct {
 
 // Profile 账号资料。
 //
-// 官方文档没有给出 /user 的正式响应 schema，只有实测提示。
-// 因此这里全部字段可空：取不到时降级为不展示，绝不伪造，也绝不阻断主流程。
+// 字段以《获取授权用户基础信息》为准：fullname、avatar_path、headline、description、url，
+// 另有 uid 与 hash_id 两个标识。旧实现取的是 name 与 avatar_url，服务端并不返回这两个名字，
+// 于是 Profile 长期静默降级为 nil；这里保留它们作为兼容回退，优先用文档字段。
+//
+// 全部字段可空：取不到时降级为不展示，绝不伪造，也绝不阻断主流程。
 type Profile struct {
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatar_url"`
-	Headline  string `json:"headline"`
-	URL       string `json:"url"`
+	// UID 是 int64，可能超出 JavaScript 安全整数范围，因此全程以字符串原文保存和传递。
+	UID       string
+	HashID    string
+	Name      string
+	AvatarURL string
+	Headline  string
+	Desc      string
+	URL       string
+}
+
+// UnmarshalJSON 同时接受文档字段与旧实现字段，并无损保留 uid。
+func (p *Profile) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		UID        json.Number `json:"uid"`
+		HashID     string      `json:"hash_id"`
+		Fullname   string      `json:"fullname"`
+		AvatarPath string      `json:"avatar_path"`
+		Headline   string      `json:"headline"`
+		Desc       string      `json:"description"`
+		URL        string      `json:"url"`
+		// 兼容回退，不是文档字段。
+		LegacyName   string `json:"name"`
+		LegacyAvatar string `json:"avatar_url"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	// json.Number 保留字面量，不经 float64，避免 int64 精度丢失。
+	// uid 缺失时是空串，显式写 0 时也不是有效标识，一并归一成空。
+	if uid := strings.TrimSpace(raw.UID.String()); uid != "" && strings.Trim(uid, "0") != "" {
+		p.UID = uid
+	}
+	p.HashID = raw.HashID
+	p.Name = firstNonEmpty(raw.Fullname, raw.LegacyName)
+	p.AvatarURL = firstNonEmpty(raw.AvatarPath, raw.LegacyAvatar)
+	p.Headline = raw.Headline
+	p.Desc = raw.Desc
+	p.URL = raw.URL
+	return nil
+}
+
+// Identified 报告响应里是否带回了可用的用户标识。
+//
+// 文档要求建立会话前确认存在有效标识，不能只看 HTTP 200。
+func (p Profile) Identified() bool {
+	return strings.TrimSpace(p.UID) != "" || strings.TrimSpace(p.HashID) != "" || strings.TrimSpace(p.Name) != ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 type contentsData struct {

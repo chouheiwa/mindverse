@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -263,8 +262,16 @@ func (c *Client) Followees(ctx context.Context, maxPages int) ([]Followee, error
 
 // Profile 读取账号资料。
 //
-// /user 没有正式 schema，失败一律降级为 nil，绝不阻断主流程。
+// 《获取授权用户基础信息》明确：openapi.zhihu.com/user 只认 OAuth access token，
+// 不需要 Access Secret、X-OAuth-Token 或 X-Request-Timestamp。旧实现发的是
+// Access Secret 加那两个头，服务端不认，于是这个接口从来没成功过 —— 而失败被
+// 降级成 nil，所以一直没人发现。
+//
+// 失败仍一律降级为 nil，绝不阻断主流程。
 func (c *Client) Profile(ctx context.Context) *Profile {
+	if c.OAuthToken == "" {
+		return nil
+	}
 	base := openBase
 	if c.BaseURL != "" {
 		base = c.BaseURL
@@ -273,12 +280,7 @@ func (c *Client) Profile(ctx context.Context) *Profile {
 	if err != nil {
 		return nil
 	}
-	req.Header.Set("Authorization", "Bearer "+c.AccessSecret)
-	req.Header.Set("X-Request-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
-	req.Header.Set("Content-Type", "application/json")
-	if c.OAuthToken != "" {
-		req.Header.Set("X-OAuth-Token", c.OAuthToken)
-	}
+	req.Header.Set("Authorization", "Bearer "+c.OAuthToken)
 	cl := c.HTTP
 	if cl == nil {
 		cl = &http.Client{Timeout: 15 * time.Second}
@@ -292,6 +294,10 @@ func (c *Client) Profile(ctx context.Context) *Profile {
 	if err != nil {
 		return nil
 	}
+	// 文档要求同时检查 HTTP 状态和响应内容，不能只凭 200 判断成功。
+	if resp.StatusCode/100 != 2 {
+		return nil
+	}
 	// 响应包裹层实测不统一，逐层尝试，取不到就算了。
 	var probe map[string]json.RawMessage
 	if json.Unmarshal(body, &probe) != nil {
@@ -303,12 +309,12 @@ func (c *Client) Profile(ctx context.Context) *Profile {
 			continue
 		}
 		var p Profile
-		if json.Unmarshal(raw, &p) == nil && strings.TrimSpace(p.Name) != "" {
+		if json.Unmarshal(raw, &p) == nil && p.Identified() {
 			return &p
 		}
 	}
 	var p Profile
-	if json.Unmarshal(body, &p) == nil && strings.TrimSpace(p.Name) != "" {
+	if json.Unmarshal(body, &p) == nil && p.Identified() {
 		return &p
 	}
 	return nil

@@ -168,6 +168,15 @@ type FetchPlan struct {
 // DefaultPlan 是典型用户的采集计划，约 35 次请求、200–800 条语料。
 func DefaultPlan() FetchPlan { return FetchPlan{FavlistPages: 4, ContentPages: 6, FolloweePages: 2} }
 
+// MinimumCalls 是这份计划无论如何都要用掉的 user_data 请求数下界。
+//
+// 收藏夹数量要发过请求才知道，所以真实开销只会更高；这里按「至少一个收藏夹」估。
+// 它的用途是开跑前判断「这次肯定跑不完」，不是预算估算，因此必须取下界而非均值。
+func (p FetchPlan) MinimumCalls() int64 {
+	// 收藏夹列表 1 + 近期收藏 1 + 一个收藏夹的翻页 + 创作翻页 + 关注翻页。
+	return int64(2 + p.FavlistPages + p.ContentPages + p.FolloweePages)
+}
+
 // LiveProvider 通过 OAuth 读取真实用户数据。
 type LiveProvider struct {
 	Client *Client

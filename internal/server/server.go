@@ -30,6 +30,10 @@ const maxSessionCount = 10000
 const sessionCleanupInterval = time.Minute
 const oauthStateTTL = 10 * time.Minute
 
+// quotaCacheTTL 是额度快照的有效期。额度查询不消耗业务额度，但仍是一次往返：
+// 每次生成前查一次就够，不做定时轮询 —— 没人使用时轮询只会白白产生请求。
+const quotaCacheTTL = 60 * time.Second
+
 // genState 是一次星图生成的状态。生成要跑模型，必然慢，所以异步 + 轮询。
 type genState string
 
@@ -96,6 +100,7 @@ type Server struct {
 	registry *sessionRegistry
 	ext      extract.Extractor
 	seed     *seed.Builder
+	quota    *zhihu.QuotaGate
 
 	mu                 sync.Mutex
 	ownerMu            sync.Mutex
@@ -134,6 +139,7 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 		cfg: cfg, store: store, ext: ext,
 		registry:    registry,
 		seed:        seed.NewBuilder(zhihu.NewClient(cfg.AccessSecret, "")),
+		quota:       zhihu.NewQuotaGate(zhihu.NewClient(cfg.AccessSecret, ""), quotaCacheTTL),
 		oauth:       &zhihu.OAuth{AppID: cfg.AppID, AppKey: cfg.AppKey, RedirectURI: cfg.RedirectURI},
 		sess:        map[string]*session{},
 		maxSessions: maxSessionCount,
@@ -536,6 +542,17 @@ func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.RedirectURI != "" && !s.cfg.LocalOnly() && !s.cfg.OAuthReady() {
 		warns = append(warns, map[string]string{"code": "OAUTH_NOT_READY", "message": "OAuth 配置尚未满足安全登录要求。"})
 	}
+	// 额度见底要让用户先知道，而不是等生成失败才知道。查询不消耗业务额度。
+	if s.cfg.Source == config.SourceLive && authorized {
+		if snap, err := s.quota.Snapshot(r.Context()); err == nil {
+			for _, item := range snap.Low(zhihu.LowQuotaRatio) {
+				warns = append(warns, map[string]string{
+					"code":    "QUOTA_LOW",
+					"message": fmt.Sprintf("%s今日额度只剩 %d/%d 次，相关功能可能不可用。", item.APIName, item.Remaining, item.Total),
+				})
+			}
+		}
+	}
 	writeJSON(w, 200, map[string]any{
 		"configured":       s.cfg.OAuthReady(),
 		"localOnly":        s.cfg.LocalOnly(),
@@ -847,6 +864,18 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 	fail := func(err error) {
 		log.Printf("生成失败: %v", err)
 		updateGeneration(sess, epoch, func() { sess.gen = generation{State: genFailed, Error: err.Error()} })
+	}
+
+	// 额度不够就别开跑：抓到一半失败留下的是半份语料和一个看不懂的报错。
+	// 额度查询本身不消耗业务额度。
+	if prov.Kind() == "live" {
+		if snap, qerr := s.quota.Snapshot(ctx); qerr != nil {
+			log.Printf("额度查询失败，继续生成: %v", qerr)
+		} else if need := zhihu.DefaultPlan().MinimumCalls(); !snap.EnoughFor(zhihu.QuotaUserData, need) {
+			remaining, _ := snap.Remaining(zhihu.QuotaUserData)
+			fail(fmt.Errorf("今天的知乎用户数据额度只剩 %d 次，这次采集至少要 %d 次。额度每天重置，明天再试", remaining, need))
+			return
+		}
 	}
 
 	corpus, err := prov.Fetch(ctx)

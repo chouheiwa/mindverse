@@ -27,6 +27,32 @@ go run ./cmd/server
 
 `localhost` 或 `127.0.0.1` 回调只能预览，不会被界面标记为已可完成真实登录。
 
+### 凭证从哪来
+
+`hackathon.config.json` 里只放公开值：App ID 与回调地址。两个密钥只走环境变量，绝不进仓库。
+
+| 凭证 | 来源 | 存放 |
+|---|---|---|
+| App ID | 赛事页面创建项目后分配 | `hackathon.config.json` |
+| App Key | 同上 | macOS 钥匙串，运行时导出为环境变量 |
+| Access Secret | <https://developer.zhihu.com/profile> | macOS 钥匙串（由官方 zhihu Skill 写入） |
+| 回调地址 | 部署后取得的公网 HTTPS 域名，须与赛事页面登记值逐字符一致 | `hackathon.config.json` 或环境变量 |
+
+从钥匙串取出并启动：
+
+```bash
+export ZHIHU_OAUTH_APP_KEY="$(security find-generic-password \
+  -s 'zhihu-hackathon:知乎精神宇宙:c1fd867a34' -a oauth-app-key -w)"
+export ZHIHU_ACCESS_SECRET="$(security find-generic-password \
+  -s zhihu-cli -a access-secret -w | sed 's/^go-keyring-base64://' | base64 -d)"
+export ZHIHU_OAUTH_REDIRECT_URI=https://<公网域名>/auth/callback
+export MINDVERSE_SOURCE=live
+go run ./cmd/server
+```
+
+Access Secret 由官方 zhihu Skill 用 go-keyring 存入，值带 `go-keyring-base64:` 前缀，
+所以要先剥前缀再 base64 解码。部署到线上时把这两个密钥写进平台的 Secret 配置，不要打进代码包。
+
 ## 本地数据库
 
 `data/mindverse.db`（SQLite，路径可用 `MINDVERSE_DB_PATH` 覆盖）只存一类数据：问题下别人的

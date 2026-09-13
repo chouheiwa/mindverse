@@ -1,8 +1,13 @@
 {
+  "schemaVersion": 1,
   "projectName": "知乎精神宇宙",
+  "projectSlug": "知乎精神宇宙",
   "port": 4173,
   "oauth": {
-    "appId": "",
-    "redirectUri": ""
+    "enabled": true,
+    "appId": "489",
+    "redirectUri": "",
+    "credentialService": "zhihu-hackathon:知乎精神宇宙:c1fd867a34",
+    "credentialAccount": "oauth-app-key"
   }
 }

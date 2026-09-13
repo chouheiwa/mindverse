@@ -74,11 +74,22 @@ export class PlanetSurfaceTrail {
     if (signDirection.lengthSquared() > 1e-12) {
       signDirection.normalize()
       const node = plant('surface-trail:signpost', signDirection)
+      // f=720/(2tan30°)=623.54px；眼高 0.012R、θ=0.060，横板中心高 0.0141R。
+      // z=(1+0.0141)R·sinθ≈0.0609R，宽 0.024R 投影 f·w/z≈246px —— 正好装下那行标签
+      // （实测「2026.01 你从这里去了 → 《当前表层问题》」约 246px 宽、28px 高）。
+      // 板子要装得下字，否则又变回「只剩一行字浮在半空」。厚度不承担可见性，必须让宽面朝落点。
+      const observer = Vector3.FromArray(options.layout.landing ?? options.layout.steps[0] ?? options.layout.signpost)
+      const towardObserver = observer.subtract(signDirection.scale(Vector3.Dot(observer, signDirection)))
+      if (towardObserver.lengthSquared() > 1e-12) {
+        const front = towardObserver.normalize()
+        const right = Vector3.Cross(signDirection, front).normalize()
+        node.rotationQuaternion = Quaternion.RotationQuaternionFromAxis(right, signDirection, front)
+      }
       const poleHeight = radius * 0.016
-      const pole = CreateCylinder(`${node.name}:pole`, { height: poleHeight, diameter: radius * 0.001, tessellation: 6 }, scene)
+      const pole = CreateCylinder(`${node.name}:pole`, { height: poleHeight, diameter: radius * 0.0007, tessellation: 6 }, scene)
       pole.position.y = poleHeight / 2
       pole.material = post
-      const plank = CreateBox(`${node.name}:board`, { width: radius * 0.012, height: radius * 0.0045, depth: radius * 0.0006 }, scene)
+      const plank = CreateBox(`${node.name}:board`, { width: radius * 0.024, height: radius * 0.0075, depth: radius * 0.0010 }, scene)
       plank.position.y = poleHeight * 0.88
       plank.material = board
       for (const body of [pole, plank] as Mesh[]) {
@@ -86,7 +97,9 @@ export class PlanetSurfaceTrail {
         body.isPickable = true
         this.signpostMeshIds.add(body.uniqueId)
       }
-      this.signpostAnchor = node.position.clone()
+      // 标签要落在横板上，不是落在杆脚下。锚在地面时字会掉到板子下方一大截，
+      // 读起来是「一块空白广告牌 + 一行无关的字」，正是这次要修的观感问题。
+      this.signpostAnchor = node.position.add(signDirection.scale(plank.position.y))
     }
   }
 

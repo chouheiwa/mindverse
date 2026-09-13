@@ -21,7 +21,10 @@ export interface PlanetSurfaceMarksOptions {
 /**
  * 落点旁你留下的痕迹：创作的回答是旗，收藏的是石堆。贴地放置，可点。
  *
- * 尺寸按行星半径取比例：旗杆高 0.02R（眼高 0.012R 的人抬头能看到），石堆 0.01R。
+ * 尺寸按行星半径取比例：旗杆高 0.032R，旗面 0.018R×0.012R，石堆底石直径 0.014R。
+ * 针孔焦距 f=720/(2tan30°)=623.54px；眼高 e=0.012R，角距 θ=0.034。
+ * 杆底/顶投影 y(h)=f·((R+h)cosθ−(R+e))/((R+h)sinθ)，
+ * y(0.032R)−y(0)≈576px；最远 θ=0.070 时仍约 280px，旗面高约 104px。
  */
 export class PlanetSurfaceMarks {
   private readonly nodes: TransformNode[] = []
@@ -58,20 +61,29 @@ export class PlanetSurfaceMarks {
       node.rotationQuaternion = quaternionFromYTo(direction)
       const bodies: Mesh[] = []
       if (placement.kind === 'flag') {
-        const poleHeight = radius * 0.02
-        const shaft = CreateCylinder(`${node.name}:pole`, { height: poleHeight, diameter: radius * 0.0012, tessellation: 6 }, scene)
+        // f=720/(2tan30°)=623.5px/rad：0.007R 的杆在最近 0.034R 处约 128px、最远 0.070R 处约 62px。
+        // 杆径按 9px 反解，避免近处读成柱子。
+        const poleHeight = radius * 0.007
+        const shaft = CreateCylinder(`${node.name}:pole`, { height: poleHeight, diameter: radius * 0.0005, tessellation: 6 }, scene)
         shaft.position.y = poleHeight / 2
         shaft.material = pole
-        const cloth = CreatePlane(`${node.name}:banner`, { width: radius * 0.009, height: radius * 0.005 }, scene)
-        cloth.position.set(radius * 0.0045, poleHeight * 0.86, 0)
+        const cloth = CreatePlane(`${node.name}:banner`, { width: radius * 0.0040, height: radius * 0.0026 }, scene)
+        cloth.position.set(radius * 0.0020, poleHeight * 0.80, 0)
         cloth.material = banner
         bodies.push(shaft, cloth)
       } else {
-        const stones = [radius * 0.006, radius * 0.0045, radius * 0.003]
+        // 底石接地，上层略微相交承托，横向错位使轮廓能读成石堆而不是串珠。
+        // 底石 0.0038R 在最近 0.034R 处约 70px、最远 0.070R 处约 34px 宽，与眼高 0.012R 一起读成膝高石堆。
+        const stones = [
+          { diameter: 0.0038, x: 0, z: 0 },
+          { diameter: 0.0027, x: 0.0005, z: 0.00027 },
+          { diameter: 0.0019, x: -0.00027, z: 0.0004 },
+        ] as const
         let y = 0
-        stones.forEach((diameter, index) => {
+        stones.forEach(({ diameter: ratio, x, z }, index) => {
+          const diameter = radius * ratio
           const rock = CreateSphere(`${node.name}:stone:${index}`, { diameter, segments: 6 }, scene)
-          rock.position.y = y + diameter / 2
+          rock.position.set(radius * x, y + diameter / 2, radius * z)
           rock.material = stone
           bodies.push(rock)
           y += diameter * 0.8

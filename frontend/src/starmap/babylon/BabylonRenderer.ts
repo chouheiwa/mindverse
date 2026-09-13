@@ -266,6 +266,8 @@ const UNIVERSE_CAMERA_MIN_Z = 0.1
 /** 宇宙视角的最近机位。地表阶段相机贴着地面，这个下限必须让开。 */
 const UNIVERSE_LOWER_RADIUS_LIMIT = 1.2
 /** 旗与石堆的屏幕空间命中半径与上抬量（像素）。 */
+/** 有小径时标记扇面整体让开的角度，避免第一面旗插在路牌上又被画面边缘切掉。 */
+const MARK_FAN_OFFSET_WITH_TRAIL = Math.PI * 24 / 180
 const SURFACE_MARK_PICK_RADIUS_PX = 22
 const SURFACE_MARK_PICK_LIFT_PX = 8
 const SURFACE_BEACON_PICK_RADIUS_PX = 26
@@ -1957,10 +1959,13 @@ export class BabylonRenderer implements MindverseRenderer {
     // 你留下的痕迹就在落点前方的视野里。
     this.surfaceMarks = new PlanetSurfaceMarks(this.scene, furniture, {
       field, radius: this.surfaceRadius, displacement,
-      // 有小径时把痕迹让到小径右侧 40°，否则第一面旗正好插在路牌上。
+      // 有小径时把痕迹让开，否则第一面旗正好插在路牌上。偏多少由画面决定：
+      // 竖直 FOV 60°、16:9 时水平半视场 45.75°，路牌 246px 宽只占中心 ±11°。
+      // 偏 40° 会把旗顶到画面边缘切掉一半（实测投影 x=117/1280）；24° 落在 x≈363，
+      // 既让开路牌又留足边距。
       placements: layoutSurfaceMarks(
         landing, this.surfacePose.facing, surfaceMarksFor(this.selectedVisual.datum.answers),
-        this.surfaceTrail ? Math.PI * 40 / 180 : 0,
+        this.surfaceTrail ? MARK_FAN_OFFSET_WITH_TRAIL : 0,
       ),
     })
     this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
@@ -2079,7 +2084,8 @@ export class BabylonRenderer implements MindverseRenderer {
       text: beacon.label, x: beacon.x, y: beacon.y - 14, tone: beacon.kind === 'wormhole' ? 'wormhole' : 'sibling',
     }))
     const signpost = this.surfaceSignpostProjection()
-    if (signpost) labels.push({ text: signpost.text, x: signpost.x, y: signpost.y - 26, tone: 'signpost' })
+    // 锚点已经是横板中心，字就写在板上；再往上抬会把字顶出板外，重新变成悬空的一行。
+    if (signpost) labels.push({ text: signpost.text, x: signpost.x, y: signpost.y, tone: 'signpost' })
     return labels
   }
 

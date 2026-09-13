@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Scene } from '@babylonjs/core/scene'
+import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { PlanetGround, PLANET_GROUND_UNIFORMS } from './planetGround'
 import { planetGroundVertexShader } from './shaders/planetGround.vertex.fx'
@@ -98,9 +99,41 @@ describe('PlanetGround', () => {
     expect(ground.material.backFaceCulling).toBe(true)
   })
 
+  it('culls two close-range noise octaves before sampling and fades their albedo contribution', () => {
+    const source = planetGroundFragmentShader.replace(/\/\/[^\n]*/g, '')
+    // 钉住距离淡出、分支内两次采样和最终乘法，避免只声明淡出却仍让远处铺满高频。
+    expect(source).toContain('float detailFade = 1.0 - smoothstep(0.025, 0.16, relativeDistance)')
+    const detailBlock = source.match(/if \(detailFade > 0\.0\)\s*\{([^}]+)\}/)?.[1] ?? ''
+    expect(detailBlock.match(/valueNoise\(/g)).toHaveLength(2)
+    expect(detailBlock).toContain('fineDetail * detailFade * uDetailStrength')
+    expect(source).toContain('relativeDistance = eyeDistance / max(radius, 0.0001)')
+    expect(source).toContain('albedo *= detailModulation')
+  })
+
+  it('uses sun-facing relief, bounded foot darkening and horizon-directed thermal haze', () => {
+    const source = planetGroundFragmentShader
+    expect(source).toContain('daylight * 1.6')
+    expect(source).toContain('0.24 + skyLight * uHorizonColor * 0.35')
+    expect(source).toContain('lit *= 1.0 - 0.12 * contactShade')
+    expect(source).toContain('1.0 - smoothstep(0.006, 0.035, footprintDistance)')
+    expect(source).toContain('1.0 - smoothstep(0.06, 0.4, abs(dot(viewDirection, cameraUp)))')
+    expect(source).toContain('mix(1.0, 2.8, horizonView)')
+    expect(source).toContain('uHorizonColor * vec3(1.08, 1.0, 0.92)')
+  })
+
+  it('initializes the added detail uniform internally', () => {
+    const floatSpy = vi.spyOn(ShaderMaterial.prototype, 'setFloat')
+    try {
+      setup()
+      expect(floatSpy).toHaveBeenCalledWith('uDetailStrength', 0.42)
+    } finally {
+      floatSpy.mockRestore()
+    }
+  })
+
   it('keeps its shader numerically safe', () => {
     const fragment = planetGroundFragmentShader.replace(/\/\/[^\n]*/g, '')
-    expect(fragment).not.toMatch(/\b(?:atan|acos|asin|normalize)\s*\(/)
+    expect(`${planetGroundVertexShader}\n${fragment}`).not.toMatch(/\b(?:atan|acos|asin|normalize)\s*\(/)
     const calls = [...fragment.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g)]
     expect(calls).toHaveLength((fragment.match(/smoothstep\(/g) ?? []).length)
     for (const [, low, high] of calls) expect(Number(low)).toBeLessThan(Number(high))
@@ -108,7 +141,7 @@ describe('PlanetGround', () => {
     // WebGL2 走 GLSL ES 3.00：`sample` 是保留字，内置函数名（distance/length/…）不能拿来当变量。
     // 实测用了就是 "Error compiling effect"，整块地表在真机上一片黑，而 NullEngine 测不出来。
     const source = `${planetGroundVertexShader}\n${fragment}`
-    for (const reserved of ['sample', 'distance', 'length', 'mix', 'step', 'fract', 'floor', 'normal']) {
+    for (const reserved of ['sample', 'distance', 'length', 'mix', 'step', 'fract', 'floor', 'normal', 'smoothstep', 'clamp', 'dot', 'abs', 'max', 'min', 'texture', 'input', 'output']) {
       expect(source, reserved).not.toMatch(new RegExp(`\\b(?:float|vec[234]|int)\\s+${reserved}\\s*=`))
     }
   })
@@ -124,13 +157,13 @@ describe('PlanetGround', () => {
     expect(magma.base[0]).toBeGreaterThan(magma.base[2]!)
   })
 
-  it('writes finite uniforms for degenerate sun, camera and thermal input', () => {
+  it.each([0, Number.NaN])('writes finite uniforms for degenerate input with radius %s', (radius) => {
     const { ground } = setup()
     const vectorSpy = vi.spyOn(ground.material, 'setVector3')
     const floatSpy = vi.spyOn(ground.material, 'setFloat')
     ground.setSun([0, 0, 0])
     ground.setSun([Number.NaN, Infinity, 0])
-    ground.setCamera([Number.NaN, 0, 0], [0, 0, 0], Number.NaN)
+    ground.setCamera([Number.NaN, 0, 0], [Number.NaN, Infinity, 0], radius)
     ground.setThermal({ magma: Number.NaN, desert: Infinity, rock: -1, tundra: 0, ice: 0 })
     for (const [, vector] of vectorSpy.mock.calls) expect([vector.x, vector.y, vector.z].every(Number.isFinite)).toBe(true)
     for (const [, value] of floatSpy.mock.calls) expect(Number.isFinite(value)).toBe(true)

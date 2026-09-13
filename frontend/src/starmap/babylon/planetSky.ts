@@ -19,7 +19,13 @@ export interface PlanetSkyOptions {
 export const PLANET_SKY_UNIFORMS = [
   'worldViewProjection', 'uUp', 'uSunDirection', 'uZenithColor',
   'uHorizonColor', 'uSunColor', 'uDim',
+  'uDaylight', 'uSunDiscCos', 'uSunHaloCos', 'uSunDiscGain',
 ] as const
+
+/** 太阳的角半径（弧度）。比真实太阳略大一点，小了在 720p 上只有几个像素。 */
+const SUN_ANGULAR_RADIUS = 0.028
+/** 光晕外缘：日面角半径的倍数。 */
+const SUN_HALO_SCALE = 3.4
 
 const ROCK: ThermalWeights = { magma: 0, desert: 0, rock: 1, tundra: 0, ice: 0 }
 // 与地表热型保持同族色相；降低天顶亮度才能让地平线的空气厚度可读。
@@ -28,6 +34,12 @@ const PALETTE: Record<keyof ThermalWeights, Vec3> = {
   rock: [0.31, 0.34, 0.40], tundra: [0.20, 0.46, 0.39], ice: [0.42, 0.70, 0.96],
 }
 const clamp01 = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0
+/** 把 value 从 edge0→edge1 抹平到 0→1。两端夹住；非有限输入落到 0。 */
+const smoothstep01 = (value: number, edge0: number, edge1: number): number => {
+  const v = Number.isFinite(value) ? value : edge0
+  const t = Math.min(1, Math.max(0, (v - edge0) / Math.max(1e-6, edge1 - edge0)))
+  return t * t * (3 - 2 * t)
+}
 
 /** 按热型权重混出的地平线色（也是地表的基色来源）。 */
 export function thermalHorizonColor(weights: ThermalWeights): Vec3 {
@@ -69,6 +81,8 @@ export class PlanetSky {
   private zenith = Vector3.Zero()
   private horizon = Vector3.Zero()
   private sunColor = Vector3.One()
+  private daylight = 1
+  private sunDiscGain = 1
 
   constructor(scene: Scene, parent: TransformNode, options: PlanetSkyOptions = {}) {
     this.scene = scene
@@ -103,6 +117,8 @@ export class PlanetSky {
       const radial = camera.globalPosition.subtract(center)
       this.up = direction([radial.x, radial.y, radial.z])
       this.material.setVector3('uUp', this.up)
+      // 观察者换了地方，太阳的高度角就变了 —— 昼夜要跟着重算。
+      this.applySunLighting()
       // 球壳必须落在相机裁剪范围内，短远裁剪距离的近景也需要完整天空。
       const near = Math.max(0.001, camera.minZ)
       const far = camera.maxZ > near ? camera.maxZ : Math.max(this.radius * 2, near * 4)
@@ -118,6 +134,26 @@ export class PlanetSky {
     if (this.disposed) return
     this.sun = direction(value)
     this.material.setVector3('uSunDirection', this.sun)
+    this.applySunLighting()
+  }
+
+  /**
+   * 昼夜由 TS 侧算，着色器只做逐像素的事。
+   *
+   * 这样「太阳落到地平线以下就不画日面」「太阳越低整体越暗」这些判断是可测的纯数值，
+   * 不用去断言像素。
+   */
+  private applySunLighting(): void {
+    if (this.disposed) return
+    const elevation = Math.min(1, Math.max(-1, Vector3.Dot(this.sun, this.up)))
+    // 黄昏比正午暗得多，但地平线以下也不是纯黑 —— 着色器里还留 0.12 的余晖。
+    this.daylight = smoothstep01(elevation, -0.18, 0.22)
+    // 日面沉到地平线以下就整个不画，不能透地。
+    this.sunDiscGain = smoothstep01(elevation, -0.015, 0.03)
+    this.material.setFloat('uDaylight', this.daylight)
+    this.material.setFloat('uSunDiscGain', this.sunDiscGain)
+    this.material.setFloat('uSunDiscCos', Math.cos(SUN_ANGULAR_RADIUS))
+    this.material.setFloat('uSunHaloCos', Math.cos(SUN_ANGULAR_RADIUS * SUN_HALO_SCALE))
   }
 
   setThermal(weights: ThermalWeights): void {
@@ -150,6 +186,8 @@ export class PlanetSky {
     return { disposed: this.disposed, visible: !this.disposed && this.mesh.isVisible,
       dim: this.dim, sun: this.sun.asArray(), up: this.up.asArray(),
       zenith: this.zenith.asArray(), horizon: this.horizon.asArray(), sunColor: this.sunColor.asArray(),
+      // 昼夜在 TS 侧算，测试断这两个数而不是断像素。
+      daylight: this.daylight, sunDiscGain: this.sunDiscGain,
       uniforms: [...PLANET_SKY_UNIFORMS] }
   }
 

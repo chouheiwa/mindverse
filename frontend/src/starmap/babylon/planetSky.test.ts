@@ -111,4 +111,54 @@ describe('PlanetSky', () => {
       zenith.forEach((value, i) => expect(value).toBeLessThan(horizon[i]!))
     }
   })
+
+  it('hides the sun disc once it drops below the horizon', () => {
+    // 之前天空只有一条 mix，太阳没有实体。加了日面就必须保证它不会透地。
+    const { sky } = setup()
+    sky.setSun([0, 1, 0])
+    expect(sky.diagnostics().sunDiscGain).toBeCloseTo(1, 6)
+    sky.setSun([1, 0, 0])
+    expect(sky.diagnostics().sunDiscGain).toBeGreaterThan(0)
+    sky.setSun([0, -1, 0])
+    expect(sky.diagnostics().sunDiscGain).toBe(0)
+    expect(sky.diagnostics().daylight).toBe(0)
+  })
+
+  it('dims monotonically as the sun sinks', () => {
+    const { sky } = setup()
+    let previous = Number.POSITIVE_INFINITY
+    for (let elevation = 1; elevation >= -1.0001; elevation -= 0.1) {
+      sky.setSun([Math.sqrt(Math.max(0, 1 - elevation * elevation)), elevation, 0])
+      const now = sky.diagnostics().daylight
+      expect(now).toBeLessThanOrEqual(previous + 1e-9)
+      expect(now).toBeGreaterThanOrEqual(0)
+      expect(now).toBeLessThanOrEqual(1)
+      previous = now
+    }
+    expect(previous).toBe(0)
+  })
+
+  it('keeps the horizon brighter and warmer than the zenith for every thermal', () => {
+    // 地平线看穿的空气最厚 —— 它必须更亮、更暖，否则天读起来还是一张平涂的纸。
+    const { sky } = setup()
+    const lum = (c: readonly number[]) => c[0]! * 0.2126 + c[1]! * 0.7152 + c[2]! * 0.0722
+    for (const key of ['magma', 'desert', 'rock', 'tundra', 'ice'] as const) {
+      sky.setThermal({ magma: 0, desert: 0, rock: 0, tundra: 0, ice: 0, [key]: 1 })
+      const { zenith, horizon } = sky.diagnostics()
+      expect(lum(horizon), key).toBeGreaterThan(lum(zenith))
+      // 更暖：地平线的红蓝比高于天顶。
+      const warmth = (c: readonly number[]) => c[0]! / Math.max(1e-6, c[2]!)
+      expect(warmth(horizon), key).toBeGreaterThan(warmth(zenith))
+    }
+  })
+
+  it('writes finite sun lighting for degenerate input', () => {
+    const { sky } = setup()
+    const floats = vi.spyOn(sky.material, 'setFloat')
+    for (const bad of [[0, 0, 0], [Number.NaN, 1, 0], [Infinity, Infinity, 0]] as const) sky.setSun(bad)
+    sky.setDim(Number.NaN)
+    for (const [, value] of floats.mock.calls) expect(Number.isFinite(value)).toBe(true)
+    expect(Number.isFinite(sky.diagnostics().daylight)).toBe(true)
+    expect(Number.isFinite(sky.diagnostics().sunDiscGain)).toBe(true)
+  })
 })

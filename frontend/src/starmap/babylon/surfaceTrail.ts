@@ -4,16 +4,19 @@ import type { Vec3 } from './cubeSphere'
 // 这是「看见自己在往哪走」最直接的画面：一个人站在自己的问题上，看见自己走过的路。
 
 export interface SurfaceTrailLayout {
+  /** 保留落点以让横板正对观察者；手工布局可以省略，回退到第一枚脚印。 */
+  readonly landing?: Vec3
   /** 每个脚印的单位方向（星心指向），由近到远。 */
   readonly steps: readonly Vec3[]
   /** 路牌的单位方向。 */
   readonly signpost: Vec3
 }
 
-const TRAIL_START = 0.015
-const TRAIL_END = 0.09
+// 眼高 0.012R 时地平线约 0.155 rad；路牌收近到 0.060 rad，留出遮挡余量。
+const TRAIL_START = 0.012
+const TRAIL_END = 0.054
 const TRAIL_STEP = 0.006
-const SIGNPOST_ANGLE = 0.105
+const SIGNPOST_ANGLE = 0.060
 /** 脚印左右交替错开的幅度（弧度）。 */
 const STRIDE_SWAY = 0.0025
 
@@ -51,5 +54,5 @@ export function layoutSurfaceTrail(landing: Vec3, bearing: Vec3): SurfaceTrailLa
     // 左右脚交替：偏移是角度而不是位置，换一颗大小不同的行星步幅观感一致。
     steps.push(at(angle, (index % 2 === 0 ? 1 : -1) * STRIDE_SWAY / Math.max(angle, TRAIL_START)))
   }
-  return Object.freeze({ steps: Object.freeze(steps), signpost: at(SIGNPOST_ANGLE, 0) })
+  return Object.freeze({ landing: up, steps: Object.freeze(steps), signpost: at(SIGNPOST_ANGLE, 0) })
 }

@@ -854,7 +854,9 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   expect(surface.markCount!).toBeGreaterThan(0)
   const marks = atPlanet.projectedBounds.surfaceMarks ?? []
   process.stdout.write(`[surface] marks ${JSON.stringify(marks)}\n`)
-  const onScreen = marks.filter(({ x, y }) => x > 0 && x < 1280 && y > 0 && y < 720)
+  // 「在画面内」不够：扇面偏 40° 时旗的落点投在 x=117、旗面左缘约 69px，整面旗挤在画面最外侧
+  // 13% 里贴着边缘，这条门禁照样绿。要求落点离两侧各留 140px，贴边就红（偏 24° 时投在 x=362）。
+  const onScreen = marks.filter(({ x, y }) => x > 140 && x < 1140 && y > 0 && y < 720)
   expect(onScreen.length).toBeGreaterThan(0)
   await page.mouse.click(onScreen[0]!.x, onScreen[0]!.y - 6)
   await expect(page.getByRole('button', { name: '关闭答案证据板' })).toBeVisible()

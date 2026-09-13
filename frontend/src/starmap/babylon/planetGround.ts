@@ -16,7 +16,7 @@ export interface PlanetGroundOptions {
 
 export const PLANET_GROUND_UNIFORMS = [
   'worldViewProjection', 'world', 'uSunDirection', 'uCameraPosition', 'uPlanetCenter',
-  'uPlanetRadius', 'uBaseColor', 'uAccentColor', 'uRockColor', 'uHorizonColor', 'uSeed',
+  'uPlanetRadius', 'uBaseColor', 'uAccentColor', 'uRockColor', 'uHorizonColor', 'uSeed', 'uDetailStrength',
 ] as const
 
 const clamp01 = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0
@@ -45,6 +45,7 @@ export class PlanetGround {
       vertexSource: planetGroundVertexShader, fragmentSource: planetGroundFragmentShader,
     }, { attributes: ['position', 'normal'], uniforms: [...PLANET_GROUND_UNIFORMS] })
     this.material.backFaceCulling = true
+    this.material.setFloat('uDetailStrength', 0.42)
     this.material.setFloat('uSeed', finite(options.seed ?? 0, 0) % 1000)
     this.setThermal(options.thermal)
     this.setSun([0, 1, 0])

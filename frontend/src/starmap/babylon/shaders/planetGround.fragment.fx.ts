@@ -9,6 +9,7 @@ uniform vec3 uAccentColor;
 uniform vec3 uRockColor;
 uniform vec3 uHorizonColor;
 uniform float uSeed;
+uniform float uDetailStrength;
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 
@@ -56,24 +57,44 @@ void main(void) {
   vec3 sun = safeDirection(uSunDirection);
   float radius = max(uPlanetRadius, 0.0001);
   // 以行星半径为单位取样：换一颗大小不同的行星，岩理密度看起来一致。
-  vec3 probe = local * (48.0 / radius);
+  vec3 probe = local * (48.0 / max(radius, 0.0001));
+  vec3 eyeOffset = vWorldPosition - uCameraPosition;
+  float eyeDistance = length(eyeOffset);
+  float relativeDistance = eyeDistance / max(radius, 0.0001);
+  // 场景实测半径 0.18–0.30、眼高 0.012R；淡出覆盖约 2–13 个眼高，远景不再采高频。
+  float detailFade = 1.0 - smoothstep(0.025, 0.16, relativeDistance);
+  float detailModulation = 1.0;
+  if (detailFade > 0.0) {
+    float fineDetail = (valueNoise(probe * 7.0) - 0.5) * 0.7
+      + (valueNoise(probe * 17.0) - 0.5) * 0.3;
+    detailModulation += fineDetail * detailFade * uDetailStrength;
+  }
   float grain = fbm(probe);
-  float fine = valueNoise(probe * 7.0) * 0.7 + valueNoise(probe * 29.0) * 0.3;
   float patches = fbm(probe * 0.11);
   // 坡向露岩：越陡越露出深色岩石；噪声让边界不规则。
   float slope = 1.0 - clamp(dot(surfaceNormal, up), 0.0, 1.0);
   float rocky = smoothstep(0.05, 0.28, slope + (grain - 0.5) * 0.18);
   vec3 albedo = mix(uBaseColor, uAccentColor, smoothstep(0.35, 0.72, patches + (grain - 0.5) * 0.4));
   albedo = mix(albedo, uRockColor, rocky);
-  albedo *= 0.8 + 0.4 * fine;
-  // 光照：太阳的朗伯项 + 半球天光（朝天亮、朝地暗）。
+  albedo *= detailModulation;
+  // 拉开坡面朝向的明暗，同时保留天光，避免背光面失去岩理。
   float daylight = clamp(dot(surfaceNormal, sun), 0.0, 1.0);
-  float skyLight = 0.5 + 0.5 * dot(surfaceNormal, up);
-  vec3 lit = albedo * (daylight * 1.25 + skyLight * uHorizonColor * 0.9 + 0.04);
-  // 远处融进地平线的空气：距离按行星半径计。
-  float eyeDistance = length(vWorldPosition - uCameraPosition);
-  float haze = 1.0 - exp(-eyeDistance / (radius * 0.55));
-  vec3 color = mix(lit, uHorizonColor * (0.55 + 0.45 * clamp(dot(up, sun), 0.0, 1.0)), haze * 0.6);
+  float skyLight = 0.5 + 0.5 * clamp(dot(surfaceNormal, up), -1.0, 1.0);
+  vec3 lit = albedo * (daylight * 1.6 + 0.24 + skyLight * uHorizonColor * 0.35);
+  vec3 cameraUp = safeDirection(uCameraPosition - uPlanetCenter);
+  // 在相机径向的切平面量距离，脚下形成柔和暗部；距离门限排除行星背面的投影。
+  vec3 footprintOffset = eyeOffset - cameraUp * dot(eyeOffset, cameraUp);
+  float footprintDistance = length(footprintOffset) / max(radius, 0.0001);
+  float contactShade = (1.0 - smoothstep(0.006, 0.035, footprintDistance))
+    * (1.0 - smoothstep(0.025, 0.06, relativeDistance));
+  lit *= 1.0 - 0.12 * contactShade;
+  // 掠向地平线时穿过更多空气；暖色仍从热型地平线色派生，呼应天空亮带。
+  vec3 viewDirection = safeDirection(eyeOffset);
+  float horizonView = 1.0 - smoothstep(0.06, 0.4, abs(dot(viewDirection, cameraUp)));
+  float haze = 1.0 - exp(-relativeDistance * mix(1.0, 2.8, horizonView) / max(0.55, 0.0001));
+  vec3 hazeColor = uHorizonColor * vec3(1.08, 1.0, 0.92)
+    * (0.55 + 0.45 * clamp(dot(up, sun), 0.0, 1.0));
+  vec3 color = mix(lit, hazeColor, clamp(haze * mix(0.6, 0.85, horizonView), 0.0, 1.0));
   gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 `

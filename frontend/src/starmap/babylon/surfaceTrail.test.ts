@@ -37,3 +37,10 @@ describe('surface trail', () => {
     }
   })
 })
+
+
+it('ends the walk near the observer rather than near the horizon', () => {
+  const layout = layoutSurfaceTrail([0, 1, 0], [0, 0, 1])
+  expect(angleBetween(layout.steps[0]!, [0, 1, 0])).toBeLessThanOrEqual(0.013)
+  expect(angleBetween(layout.signpost, [0, 1, 0])).toBeLessThanOrEqual(0.065)
+})

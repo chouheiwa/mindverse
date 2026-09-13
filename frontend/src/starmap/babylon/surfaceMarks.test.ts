@@ -65,3 +65,14 @@ describe('surface marks', () => {
     expect(unit(placed[0]!.direction)).toBeCloseTo(1, 9)
   })
 })
+
+
+it.each([0, 40 * Math.PI / 180])('keeps the nearest mark off the sightline with fan offset %s', (offset) => {
+  const placements = layoutSurfaceMarks([0, 1, 0], [0, 0, 1], Array.from({ length: 7 }, (_, i) => ({ answerId: `${i}`, kind: 'flag' as const })), offset)
+  const nearest = [...placements].sort((a, b) => b.direction[1] - a.direction[1])[0]!
+  const azimuth = Math.atan2(Math.abs(nearest.direction[0]), nearest.direction[2])
+  expect(azimuth).toBeGreaterThan(Math.PI / 12)
+  expect(azimuth).toBeLessThanOrEqual(55 * Math.PI / 180)
+  expect(Math.atan2(-placements[0]!.direction[0], placements[0]!.direction[2])).toBeCloseTo(offset, 9)
+  for (const placement of placements) expect(Math.acos(placement.direction[1])).toBeLessThanOrEqual(0.071)
+})

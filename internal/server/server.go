@@ -22,6 +22,7 @@ import (
 	"github.com/chouheiwa/mindverse/internal/extract"
 	"github.com/chouheiwa/mindverse/internal/seed"
 	"github.com/chouheiwa/mindverse/internal/share"
+	"github.com/chouheiwa/mindverse/internal/store"
 	"github.com/chouheiwa/mindverse/internal/zhihu"
 )
 
@@ -101,6 +102,7 @@ type Server struct {
 	ext      extract.Extractor
 	seed     *seed.Builder
 	quota    *zhihu.QuotaGate
+	db       *store.DB
 
 	mu                 sync.Mutex
 	ownerMu            sync.Mutex
@@ -135,8 +137,12 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 	if err := registry.retainOwners(remaining); err != nil {
 		return nil, fmt.Errorf("reconcile session registry: %w", err)
 	}
+	db, err := openLocalDB(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
-		cfg: cfg, store: store, ext: ext,
+		cfg: cfg, store: store, ext: ext, db: db,
 		registry:    registry,
 		seed:        seed.NewBuilder(zhihu.NewClient(cfg.AccessSecret, "")),
 		quota:       zhihu.NewQuotaGate(zhihu.NewClient(cfg.AccessSecret, ""), quotaCacheTTL),
@@ -918,7 +924,12 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 		opt.MinSupport = 2
 		opt.MinCluster = 2
 	}
-	u, err := engine.Run(engine.Input{Items: corpus.Items, Concepts: concepts}, opt, namer)
+	// 别人的回答挂到我已经留下痕迹的那些行星上；它们不进概念抽取，恒星仍然只是我的。
+	public := s.publicAnswersFor(corpus.Items)
+	if len(public) > 0 {
+		log.Printf("带入 %d 条同题公共回答", len(public))
+	}
+	u, err := engine.Run(engine.Input{Items: corpus.Items, Concepts: concepts, PublicAnswers: public}, opt, namer)
 	if err != nil {
 		fail(err)
 		return

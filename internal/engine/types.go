@@ -29,6 +29,15 @@ const (
 type Input struct {
 	Items    []zhihu.Item
 	Concepts [][]string // Concepts[i] 是 Items[i] 抽出的概念
+
+	// PublicAnswers 是同一批问题下别人的回答。
+	//
+	// 它们和 Items 分开走，因为恒星是「你的」私有概念：别人的回答不参与概念抽取，
+	// 不参与聚类，也不参与虫洞判据，否则星图画的就不是你了。它们只做一件事 ——
+	// 挂到已经存在的问题行星上，让那颗行星下面不止你一条回答。
+	//
+	// 这里不带 Concepts：公共回答没有概念，也不该有。
+	PublicAnswers []zhihu.Item
 }
 
 // Options 控制引擎行为。零值会被 withDefaults 补全。

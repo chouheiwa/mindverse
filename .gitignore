@@ -11,3 +11,5 @@ data/snapshots/*.owner-proof-missing*
 .env
 .env.*
 !.env.example
+data/mindverse.db-wal
+data/mindverse.db-shm

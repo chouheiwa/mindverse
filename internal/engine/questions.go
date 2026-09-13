@@ -160,6 +160,31 @@ func projectKnowledgeObjects(in Input, stars []Star, itemsByStarID map[string][]
 		}
 	}
 
+	// 公共回答：只挂到已经存在的问题行星上。
+	//
+	// 行星之所以存在，是因为你在那儿留过痕迹；别人的回答不能凭空造出一颗行星。
+	// 同样，它们不参与作者冲突判定和星群归属 —— 那两件事只关乎你的语料。
+	for i := range in.PublicAnswers {
+		item := in.PublicAnswers[i]
+		answerID, questionID, _, ok := parseAdmittedAnswer(item)
+		if !ok || conflictedAnswers[answerID] {
+			continue
+		}
+		questionRef := "question:" + questionID
+		if questions[questionRef] == nil {
+			continue
+		}
+		if _, mine := answers[answerID]; mine {
+			// 我自己的那条也在接口返回里；已有的以我的语料为准，不被摘要覆盖。
+			continue
+		}
+		if questionAnswerSets[questionRef] == nil {
+			questionAnswerSets[questionRef] = map[string]struct{}{}
+		}
+		questionAnswerSets[questionRef][answerID] = struct{}{}
+		answers[answerID] = answerFromItem(item, answerID, questionRef, false)
+	}
+
 	starQuestionSets := make([]map[string]struct{}, len(stars))
 	starProbeSets := make([]map[string]struct{}, len(stars))
 	for i := range stars {

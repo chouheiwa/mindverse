@@ -38,8 +38,12 @@ type Config struct {
 	MockPath     string
 	ConceptsPath string // 离线概念标注，模型不可用时的兜底
 
-	WebDir        string
-	SnapshotDir   string
+	WebDir      string
+	SnapshotDir string
+	// DBPath 是本地 SQLite 的位置：存「抓回来就不该再抓一次」的公共数据
+	// （问题下的回答摘要）。question_answers 每天只有 100 次额度，
+	// 不落盘就是每次演示重烧一遍，而三百多个问题一天也抓不完。
+	DBPath        string
 	MaxPerUserDay int // 每用户每日生成上限，防刷
 }
 
@@ -57,7 +61,7 @@ func Load(path string) (*Config, error) {
 	c := &Config{
 		Port: 4173, Source: SourceMock,
 		MockPath: "testdata/corpus_sample.json", ConceptsPath: "testdata/concepts_sample.json",
-		WebDir: "web", SnapshotDir: "data/snapshots", MaxPerUserDay: 3,
+		WebDir: "web", SnapshotDir: "data/snapshots", DBPath: "data/mindverse.db", MaxPerUserDay: 3,
 	}
 	if b, err := os.ReadFile(path); err == nil {
 		var fc fileConfig
@@ -85,6 +89,7 @@ func Load(path string) (*Config, error) {
 	c.ConceptsPath = env("MINDVERSE_CONCEPTS_PATH", c.ConceptsPath)
 	c.WebDir = env("MINDVERSE_WEB_DIR", c.WebDir)
 	c.SnapshotDir = env("MINDVERSE_SNAPSHOT_DIR", c.SnapshotDir)
+	c.DBPath = env("MINDVERSE_DB_PATH", c.DBPath)
 	if v := env("MINDVERSE_SOURCE", string(c.Source)); v != "" {
 		c.Source = Source(v)
 	}

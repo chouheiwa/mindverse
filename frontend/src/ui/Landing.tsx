@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { getOAuthStatus } from '../api'
 import type { OAuthStatus } from '../types'
 import { makeGas, makeField } from '../starmap/layers'
+import { KanshanIcon } from './KanshanIcon'
 import './Landing.css'
 
 /** 落地页背景：和星图同一套图层，让入口就已经在宇宙里。 */
@@ -83,6 +84,10 @@ export function Landing() {
 
       <div className="lp-wrap">
         <div>
+          <div className="lp-guide">
+            <KanshanIcon variant="guide" size={80} />
+            <div><span>知见宇宙 · Mindverse</span><p>和看山一起，从好奇心出发。</p></div>
+          </div>
           <h1>你以为你在<br />关注很多件事</h1>
           <p className="lp-lede">
             把你的知乎收藏和创作放进来，它们会坍缩成一片星空。

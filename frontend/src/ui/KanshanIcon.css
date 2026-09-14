@@ -1,0 +1,11 @@
+.kanshan-icon {
+  display: block;
+  flex: none;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  /* Opaque night-sky artwork: feather only its outer margin into the page. */
+  mask-image: linear-gradient(to right, transparent, #000 12% 88%, transparent),
+    linear-gradient(to bottom, transparent, #000 4% 96%, transparent);
+  mask-composite: intersect;
+}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getSeedTopics, submitSeed, type SeedTopic } from '../api'
+import { KanshanIcon } from './KanshanIcon'
 import './Seed.css'
 
 /**
@@ -41,6 +42,7 @@ export function Seed({ onDone }: { onDone: () => void }) {
   return (
     <div className="sd">
       <div className="sd-box">
+        <KanshanIcon variant={busy ? 'analyze' : 'discover'} size={112} className="sd-companion" />
         <div className="lbl">游客模式 · 种子星</div>
         <h1>先挑几个你真的感兴趣的方向</h1>
         <p className="sd-lede">

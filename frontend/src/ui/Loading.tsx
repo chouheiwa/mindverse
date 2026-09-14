@@ -1,4 +1,5 @@
 import { useRef, useState, type CSSProperties, type PointerEvent } from 'react'
+import { KanshanIcon } from './KanshanIcon'
 import './Loading.css'
 
 interface Props {
@@ -107,7 +108,7 @@ export function Loading({ stage, progress, error, gone }: Props) {
       </header>
       {error ? (
         <div className="ld-error-content">
-          <span className="ld-error-mark" aria-hidden="true">· · ·</span>
+          <KanshanIcon variant="guide" size={96} className="ld-companion" />
           <h2>先在这里停靠一下。</h2>
           <p role="alert">{error}</p>
           <a href="/">返回入口</a>
@@ -116,6 +117,7 @@ export function Loading({ stage, progress, error, gone }: Props) {
         <>
           <Nursery phase={phase} />
           <div className="ld-story" key={phase}>
+            <KanshanIcon variant={phase === 2 ? 'guide' : 'analyze'} size={80} className="ld-companion" />
             <span className="ld-chapter">第 {['一', '二', '三'][phase]}幕 · {chapter.name}</span>
             <h2 aria-label={chapter.title}>{chapter.title.split('，').map((part, i) => <span className="ld-title-segment" key={part}>{part}{i === 0 ? '，' : ''}</span>)}</h2>
             <p>{chapter.note}</p>

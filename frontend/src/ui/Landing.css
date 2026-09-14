@@ -27,7 +27,26 @@
 .lp-wrap { padding-block: 130px 60px }
 @media (max-width: 900px) {
   .lp-wrap { grid-template-columns: 1fr; padding-top: 110px; padding-bottom: 60px }
-  .lp-preview { height: 42vh; order: -1 }
+  .lp-preview { height: auto; min-height: 0 }
   .lp-promises { grid-template-columns: 1fr; gap: 18px }
   .lp-guide .kanshan-icon { width: 64px; height: 64px }
+}
+
+/* 手机上先读到标题和入口，星空继续作为整页背景。 */
+@media (max-width: 600px) {
+  .lp-wrap { min-height: 100svh; padding: 96px 24px 36px; gap: 28px }
+  .lp-eyebrow { top: calc(28px + env(safe-area-inset-top)); left: 24px; font-size: 10px; letter-spacing: .12em }
+  .lp-guide { gap: 10px; margin-bottom: 28px }
+  .lp-guide .kanshan-icon { width: 52px; height: 52px }
+  .lp h1 { font-size: clamp(34px, 9.8vw, 46px); line-height: 1.18; letter-spacing: -.035em }
+  .lp-lede { margin-top: 22px; font-size: 16px; line-height: 1.9; max-width: 24em }
+  .lp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 28px }
+  .lp-actions button { min-height: 48px; padding: 12px 8px; font-size: 14px }
+  .lp-actions .primary { grid-column: 1 / -1 }
+  .lp-note { font-family: var(--f-b); font-size: 12px; line-height: 1.7; margin-top: 14px }
+  .lp-promises { margin-top: 36px; padding-top: 22px; gap: 22px }
+  .lp-promises > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px }
+  .lp-promises h3 { font-size: 13px; line-height: 1.8; margin: 0 }
+  .lp-promises p { font-size: 12px; color: var(--dim) }
+  .lp-legend { margin: 0; gap: 18px; padding-top: 20px; border-top: 1px solid var(--rule-soft) }
 }

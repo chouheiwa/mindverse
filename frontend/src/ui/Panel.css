@@ -119,5 +119,16 @@
   .pnl-mobile-location { display: grid; gap: 10px; margin: 12px 0 20px; padding-bottom: 12px; border-bottom: 1px solid var(--rule-soft) }
   .pnl-mobile-location p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--dim) }
   .pnl-mobile-location button { justify-self: start; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink); font-size: 12px }
-  .pnl.open { padding-bottom: calc(var(--bar-h) + 32px) }
+  .pnl { top: auto; left: 0; right: 0; bottom: 0; width: 100%; height: min(72dvh, 680px);
+    padding: 30px 20px calc(24px + env(safe-area-inset-bottom)); border-left: 0;
+    border-top: 1px solid var(--rule); border-radius: 18px 18px 0 0;
+    transform: translateY(100%); overscroll-behavior: contain }
+  .pnl.open { transform: none }
+  .pnl h2 { padding-right: 28px }
+  .pnl-lead { font-size: 14px }
+  .entry-row { grid-template-columns: 54px minmax(0, 1fr); gap: 6px 10px }
+  .entry-row strong { font-size: 16px; line-height: 1.65 }
+  .entry-meta, .entry-actions button, .entry-actions a { font-size: 12px }
+  .pnl-mobile-location { margin-top: 4px }
+
 }

@@ -11,11 +11,18 @@
 .galaxy-nav-list strong { font-size: 14px; font-weight: 500; margin-bottom: 3px }
 .galaxy-nav-symbol { color: var(--star); font-size: 24px }
 @media (max-width: 760px) {
-  .galaxy-nav { top: auto; left: 16px; right: 16px; bottom: 226px; width: auto; max-height: 180px; padding: 14px; border-radius: 12px }
+  .galaxy-nav { top: auto; left: 0; right: 0; bottom: var(--mobile-dock-h); width: auto;
+    max-height: 148px; padding: 14px 0 12px; border: 0; border-top: 1px solid var(--rule-soft);
+    border-radius: 0; background: rgb(8 12 25 / 96%); backdrop-filter: none }
+  .galaxy-nav-heading { padding-inline: 20px; font-size: 12px }
   .galaxy-nav > p { display: none }
-  .galaxy-nav-list { margin-top: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)) }
-  .galaxy-nav-symbol { font-size: 18px }
-  .galaxy-nav-list button { gap: 8px }
-  .galaxy-nav-list button > span:last-child { display: none }
-  .galaxy-nav-list button { min-height: 56px; padding: 8px 12px }
+  .galaxy-nav-list { display: flex; gap: 8px; margin-top: 12px; padding: 0 20px 4px;
+    overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scrollbar-width: thin }
+  .galaxy-nav-list button { flex: 0 0 72%; min-width: 0; min-height: 66px; padding: 10px 12px;
+    gap: 10px; border-radius: 5px; scroll-snap-align: center; background: #101829 }
+  .galaxy-nav-symbol { font-size: 22px }
+  .galaxy-nav-list strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px }
+}
+@media (max-width: 760px) and (max-height: 500px) {
+  .galaxy-nav { left: 50%; max-height: 132px }
 }

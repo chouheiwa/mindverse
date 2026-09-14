@@ -104,31 +104,46 @@
 .uv-entry-state > div { display: flex; gap: 12px }
 .uv-entry-state button { min-height: 44px }
 
-/* 手机：仪表带变成底部一张卡片，模式条横向可滑 —— 换承载，不换隐喻 */
+/* 手机采用两行航行栏，固定高度供星系列表和提示共用。 */
 @media (max-width: 760px) {
-  .uv-head { left: 18px; top: 18px; max-width: 76vw }
-  .uv-head h1 { font-size: 23px }
-  .uv-head > .lbl { margin-bottom: 10px }
-  .uv-location { margin-top: 12px }
-  .uv-head--focused { max-width: calc(100vw - 36px) }
-  .uv-sub { font-size: 12px }
-  .uv-scrim { width: 100vw; height: 250px }
-  .uv-skip { right: 18px; top: 18px }
-
-  .uv-bar { height: auto; border-top: 1px solid var(--rule-soft);
-    background: linear-gradient(180deg, rgba(6, 9, 20, .88) 0%, rgba(4, 6, 15, .98) 26%);
-    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px) }
+  [data-testid="universe-root"] { --mobile-dock-h: calc(126px + env(safe-area-inset-bottom)); --bar-h: var(--mobile-dock-h) }
+  .uv-head { left: 20px; top: calc(20px + env(safe-area-inset-top)); max-width: calc(100vw - 40px) }
+  .uv-head h1 { font-size: 27px; line-height: 1.25 }
+  .uv-head > .lbl { margin-bottom: 14px; font-size: 10px; letter-spacing: .12em; padding-right: 64px }
+  .uv-location { margin-top: 16px }
+  .uv-location-kind { font-size: 10px }
+  .uv-sub { font-size: 13px; line-height: 1.75; max-width: 28em; margin-top: 10px }
+  .uv-scrim { width: 100vw; height: 280px }
+  .uv-skip { right: 16px; top: calc(10px + env(safe-area-inset-top)); min-height: 44px }
+  .uv-bar { height: var(--mobile-dock-h); border-top: 1px solid var(--rule-soft); background: #080c19 }
   .uv-bar.shifted { right: 0 }
-  .uv-bar-in { position: static; height: auto; border-top: 0;
-    flex-direction: column; align-items: stretch; gap: 14px; padding: 16px 18px 20px }
-  .uv-rd, .uv-lad { flex-wrap: wrap; gap: 16px }
-  .uv-segw { justify-content: flex-start; overflow-x: auto; -webkit-overflow-scrolling: touch;
-    margin: 0 -18px; padding: 0 18px }
-  .seg { flex: none }
-  .uv-act { width: 100% }
-  .uv-hint, .uv-filtered { bottom: 232px }
-  .uv-hint--focused { left: 18px; right: 18px; width: auto; transform: none }
-  .uv-filtered { left: 18px; right: 18px }
+  .uv-bar-in { position: static; height: 100%; border: 0; display: grid;
+    grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 44px 48px;
+    align-items: center; gap: 10px 12px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)) }
+  .uv-rd { gap: clamp(9px, 3vw, 16px); min-width: 0 }
+  .uv-mt { gap: 5px }
+  .uv-mt .k { font-size: 9px; letter-spacing: .04em }
+  .uv-mt .v, .uv-mt.lead .v { font-size: 16px }
+  .uv-sep { height: 26px; margin: 0 }
+  .uv-anom { gap: 10px }
+  .uv-lad { gap: 8px; flex-wrap: nowrap; overflow: hidden }
+  .uv-lad button { min-height: 44px }
+  .uv-act { grid-column: 2; grid-row: 1; min-height: 44px; padding: 8px 10px; font-size: 11px }
+  .uv-segw { grid-column: 1 / -1; grid-row: 2; min-width: 0; display: block; overflow-x: auto;
+    margin: 0 -16px; padding: 0 16px; scrollbar-width: thin }
+  .uv-segw .seg { width: max-content; min-width: 100%; border-radius: 4px; background: transparent; backdrop-filter: none }
+  .uv-segw .sg { flex: 1; min-height: 44px; padding: 9px 13px; font-size: 12px }
+  .uv-hint { bottom: calc(var(--mobile-dock-h) + 16px); font-size: 12px }
+  .uv-hint--focused { left: 20px; right: 20px; width: auto; transform: none }
+  .uv-filtered { left: 20px; right: 20px; bottom: calc(var(--mobile-dock-h) + 62px); font-size: 11px }
+  [data-testid="universe-root"]:has(.galaxy-nav) .uv-hint { display: none }
+  [data-testid="universe-root"]:has(.galaxy-nav) .uv-filtered { bottom: calc(var(--mobile-dock-h) + 158px) }
+}
+@media (max-width: 760px) and (max-height: 500px) {
+  .uv-head { max-width: 46vw; top: 12px }
+  .uv-head .uv-sub, .uv-head > .exploration-path { display: none }
+  .uv-head h1 { font-size: 22px }
+  .uv-location { margin-top: 8px }
 }
 @media (prefers-reduced-motion: reduce) { .uv-canvas { transition: none } }
 

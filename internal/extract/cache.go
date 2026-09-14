@@ -12,6 +12,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/chouheiwa/mindverse/internal/progress"
 	"github.com/chouheiwa/mindverse/internal/zhihu"
 )
 
@@ -37,6 +38,7 @@ type cacheRecord struct {
 	Artifact    json.RawMessage `json:"artifact,omitempty"`
 }
 type CachedExtractor struct {
+	nameMu                             sync.Mutex
 	cache                              *Cache
 	owner                              string
 	state                              *cacheOwner
@@ -201,6 +203,13 @@ func (x *CachedExtractor) Extract(ctx context.Context, items []zhihu.Item) ([][]
 			missingKeys = append(missingKeys, key)
 		}
 	}
+	previews := []progress.Preview{}
+	for i, cs := range result {
+		if len(cs) > 0 && len(previews) < 3 && !IsSensitiveItem(items[i].Title, items[i].Summary) {
+			previews = append(previews, progress.Preview{Concepts: FilterConcepts(cs), Title: items[i].Title, URL: items[i].URL})
+		}
+	}
+	progress.Report(ctx, progress.Event{Phase: "cache", Total: len(missing), Cached: x.Hits, Preview: previews})
 	if len(missing) == 0 {
 		return result, nil
 	}
@@ -237,12 +246,17 @@ func (x *CachedExtractor) NameCluster(ctx context.Context, members, samples []st
 	sort.Strings(sorted)
 	raw, _ := json.Marshal(sorted)
 	key := digest(raw)
+	x.nameMu.Lock()
 	if name, ok := x.record.Names[key]; ok {
 		x.NameHits++
+		x.nameMu.Unlock()
 		return name, nil
 	}
 	x.NameMisses++
+	x.nameMu.Unlock()
 	name, err := x.base.NameCluster(ctx, members, samples)
+	x.nameMu.Lock()
+	defer x.nameMu.Unlock()
 	if err == nil && name != "" {
 		x.record.Names[key] = name
 	}

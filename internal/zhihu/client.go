@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -45,6 +46,16 @@ func NewClient(accessSecret, oauthToken string) *Client {
 }
 
 func (c *Client) do(ctx context.Context, endpoint string, q url.Values, out any) error {
+	started := time.Now()
+	status, businessCode := 0, "unknown"
+	if c.OAuthToken != "" {
+		defer func() {
+			// Never log credentials, response bodies, user IDs or arbitrary query values.
+			limit, _ := strconv.Atoi(q.Get("Limit"))
+			log.Printf("zhihu user request endpoint=%s oauth=true limit=%d http=%d code=%s elapsed_ms=%d",
+				endpoint, limit, status, businessCode, time.Since(started).Milliseconds())
+		}()
+	}
 	if c.AccessSecret == "" {
 		return fmt.Errorf("开放平台 Access Secret 未配置")
 	}
@@ -76,10 +87,17 @@ func (c *Client) do(ctx context.Context, endpoint string, q url.Values, out any)
 		return fmt.Errorf("请求 %s 失败: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return fmt.Errorf("读取 %s 响应失败: %w", endpoint, err)
+	}
+	var result struct {
+		Code *int `json:"Code"`
+	}
+	if json.Unmarshal(body, &result) == nil && result.Code != nil {
+		businessCode = strconv.Itoa(*result.Code)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("请求 %s 返回 HTTP %d", endpoint, resp.StatusCode)

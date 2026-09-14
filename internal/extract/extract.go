@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/chouheiwa/mindverse/internal/progress"
 	"github.com/chouheiwa/mindverse/internal/zhihu"
 )
 
@@ -183,6 +186,30 @@ func (e *LLMExtractor) ExtractWithVocabulary(ctx context.Context, items []zhihu.
 	}
 
 	var mu sync.Mutex
+	completed, processed, unresolved := 0, 0, 0
+	report := func(idx []int, start int, res map[int][]string, elapsed time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		completed++
+		processed += len(idx)
+		previews := []progress.Preview{}
+		for off, itemIdx := range idx {
+			cs := res[start+off]
+			if len(cs) == 0 {
+				unresolved++
+				continue
+			}
+			it := items[itemIdx]
+			if len(previews) < 3 {
+				previews = append(previews, progress.Preview{Concepts: cs, Title: it.Title, URL: it.URL})
+			}
+		}
+		serialLeft := max(0, min(seedBatches, len(jobs))-completed)
+		parallelLeft := max(0, len(jobs)-completed-serialLeft)
+		waves := float64(serialLeft) + math.Ceil(float64(parallelLeft)/float64(workers))
+		progress.Report(ctx, progress.Event{Phase: "analyze", Done: processed, Total: len(live), Failed: unresolved, Preview: previews, SampleSeconds: elapsed.Seconds(), RemainingWaves: waves})
+	}
+	progress.Report(ctx, progress.Event{Phase: "analyze", Total: len(live)})
 	vocabCount := map[string]int{}
 	for c, n := range known {
 		vocabCount[c] = n
@@ -229,11 +256,13 @@ func (e *LLMExtractor) ExtractWithVocabulary(ctx context.Context, items []zhihu.
 	seed := min(seedBatches, len(jobs))
 	for i := 0; i < seed; i++ {
 		sub := pick(items, jobs[i].idx)
+		started := time.Now()
 		res, err := e.runBatch(ctx, sub, jobs[i].start, topVocab(140))
 		if err != nil {
 			return result, fmt.Errorf("首批概念抽取失败: %w", err)
 		}
 		apply(jobs[i].idx, jobs[i].start, res)
+		report(jobs[i].idx, jobs[i].start, res, time.Since(started))
 	}
 
 	// 其余并发
@@ -247,9 +276,17 @@ func (e *LLMExtractor) ExtractWithVocabulary(ctx context.Context, items []zhihu.
 			wg.Add(1)
 			go func(j job) {
 				defer wg.Done()
-				sem <- struct{}{}
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
 				defer func() { <-sem }()
 				sub := pick(items, j.idx)
+				if ctx.Err() != nil {
+					return
+				}
+				started := time.Now()
 				res, err := e.runBatch(ctx, sub, j.start, base)
 				if err != nil {
 					errMu.Lock()
@@ -257,9 +294,11 @@ func (e *LLMExtractor) ExtractWithVocabulary(ctx context.Context, items []zhihu.
 						firstErr = err
 					}
 					errMu.Unlock()
+					report(j.idx, j.start, nil, time.Since(started))
 					return // 单批失败不拖垮整次生成，这些条目留空
 				}
 				apply(j.idx, j.start, res)
+				report(j.idx, j.start, res, time.Since(started))
 			}(j)
 		}
 		wg.Wait()
@@ -268,6 +307,10 @@ func (e *LLMExtractor) ExtractWithVocabulary(ctx context.Context, items []zhihu.
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	progress.Report(ctx, progress.Event{Phase: "normalize", Done: processed, Total: len(live), Failed: unresolved})
 	// ③ 收尾规范化：把漏网的同义变体合掉
 	if m, err := e.canonicalize(ctx, vocabCount); err == nil && len(m) > 0 {
 		for i, cs := range result {

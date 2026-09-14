@@ -128,7 +128,15 @@ export interface NormalizedLegacyUniverse extends UniverseCore<LegacyStar> {
 }
 export type Universe = NormalizedCurrentUniverse | NormalizedLegacyUniverse
 export type GenState = 'idle' | 'running' | 'done' | 'failed'
+export interface GenerationDetails {
+  phase: 'collect' | 'cache' | 'analyze' | 'normalize' | 'layout' | 'name'
+  done: number; total: number; cached: number; failed: number; collected: number
+  foldersDone: number; foldersTotal: number
+  startedAt: number; updatedAt: number; estimateLow: number; estimateHigh: number
+  preview: { concepts: string[]; title: string; url: string }[] | null
+}
 export interface Generation {
+  details?: GenerationDetails
   state: GenState; stage: string; progress: number; error?: string; universe?: Universe
   filtered: number; source: string; calls: number
 }

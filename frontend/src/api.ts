@@ -44,6 +44,7 @@ export async function pollUntilDone(
     g = await startGeneration(signal)
     if (g.error) throw new Error(g.error)
   }
+  onProgress(g)
   for (let i = 0; i < 400; i++) {
     await wait(1200)
     g = await getGeneration(signal)

@@ -44,7 +44,7 @@ export function PrivateUniverseView() {
   const labelRef = useRef<HTMLCanvasElement>(null)
   const rendererRef = useRef<MindverseRenderer | null>(null)
 
-  const [gen, setGen] = useState<Pick<Generation, 'stage' | 'progress'>>({
+  const [gen, setGen] = useState<Pick<Generation, 'stage' | 'progress' | 'details'>>({
     stage: '正在读取你的知乎足迹', progress: 6,
   })
   const [universe, setUniverse] = useState<U | null>(null)
@@ -124,7 +124,7 @@ export function PrivateUniverseView() {
     const ac = new AbortController()
     ;(async () => {
       try {
-        const g = await pollUntilDone((p) => setGen({ stage: p.stage, progress: p.progress }), ac.signal)
+        const g = await pollUntilDone((p) => setGen({ stage: p.stage, progress: p.progress, details: p.details }), ac.signal)
         setUniverse(g.universe!)
         setFiltered(g.filtered)
       } catch (e) {
@@ -608,7 +608,7 @@ export function PrivateUniverseView() {
   if (!universe || !universeIndex) {
     return (
       <>
-        <Loading stage={gen.stage} progress={gen.progress} error={error} gone={false} />
+        <Loading stage={gen.stage} progress={gen.progress} details={gen.details} error={error} gone={false} />
         {error && (
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: '22vh', textAlign: 'center', zIndex: 21 }}>
             <button onClick={() => { setError(null); setSeeding(true) }}>换成游客模式，现场挑几个方向</button>

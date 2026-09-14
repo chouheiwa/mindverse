@@ -1,0 +1,25 @@
+.gs { width: min(840px, 100%); margin-inline: auto; border-top: 1px solid var(--rule); padding-top: 16px }
+.gs p { margin: 0 }
+.gs-readout { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; line-height: 1.8 }
+.gs-count { font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums }
+.gs-timing { text-align: right; color: #cbb58e; font-variant-numeric: tabular-nums }
+.gs .gs-note, .gs-expectation { font-size: 12px; color: var(--dim) }
+.gs .gs-expectation { margin-top: 12px }
+.gs-findings { margin-top: 14px }
+.gs-caption { font-size: 12px; color: var(--ink) }
+.gs-caption span { margin-left: 12px; color: var(--dim) }
+.gs-findings ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 5px }
+.gs-findings li { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: 16px; font-size: 12px }
+.gs-concepts { color: #cbb58e; overflow-wrap: anywhere }
+.gs-findings a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); text-decoration: underline; text-underline-offset: 3px }
+.gs-findings a:hover { color: var(--ink) }
+.ld-observed { grid-template-rows: auto minmax(140px, 1fr) auto auto auto; gap: 16px }
+.ld-observed .ld-nursery { min-height: 140px; max-height: 260px; align-self: center }
+.ld-observed .ld-story .ld-companion { width: 56px; height: 56px; margin-bottom: 4px }
+.ld-observed .ld-story h2 { font-size: clamp(22px, 2.4vw, 30px) }
+@media (max-width: 600px) {
+  .gs-readout { flex-direction: column; gap: 5px }
+  .gs-timing { text-align: left }
+  .gs-findings li { grid-template-columns: 1fr; gap: 0; margin-top: 4px }
+  .ld-observed .ld-story p { display: none }
+}

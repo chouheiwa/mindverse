@@ -1,8 +1,11 @@
 import { useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { KanshanIcon } from './KanshanIcon'
 import './Loading.css'
+import type { GenerationDetails } from '../types'
+import { GenerationStatus } from './GenerationStatus'
 
 interface Props {
+  details?: GenerationDetails
   stage: string
   progress: number
   error?: string | null
@@ -95,13 +98,13 @@ function Nursery({ phase }: { phase: number }) {
   )
 }
 
-export function Loading({ stage, progress, error, gone }: Props) {
+export function Loading({ stage, progress, error, gone, details }: Props) {
   if (gone) return null
   const safeProgress = Number.isFinite(progress) ? Math.min(100, Math.max(0, progress)) : 0
   const phase = safeProgress < 30 ? 0 : safeProgress < 70 ? 1 : 2
   const chapter = chapters[phase]!
   return (
-    <section className={`ld${error ? ' ld-failed' : ''}`} aria-label="宇宙生成">
+    <section className={`ld${error ? ' ld-failed' : details ? ' ld-observed' : ''}`} aria-label="宇宙生成">
       <header className="ld-header">
         <a href="/" className="ld-brand"><span aria-hidden="true">✳</span>知见宇宙</a>
         <span className="ld-edition">{error ? '观测暂时中断' : '一份好奇心的诞生记录'}</span>
@@ -122,6 +125,7 @@ export function Loading({ stage, progress, error, gone }: Props) {
             <h2 aria-label={chapter.title}>{chapter.title.split('，').map((part, i) => <span className="ld-title-segment" key={part}>{part}{i === 0 ? '，' : ''}</span>)}</h2>
             <p>{chapter.note}</p>
           </div>
+          {details && <GenerationStatus details={details} />}
           <footer className="ld-footer">
             <ol className="ld-chapters" aria-label="生成阶段">
               {chapters.map((item, i) => (

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chouheiwa/mindverse/internal/progress"
 )
 
 // Item 是喂给语义引擎的统一语料单元。
@@ -204,6 +206,7 @@ func (p *LiveProvider) Fetch(ctx context.Context) (*Corpus, error) {
 	}
 	out.Calls++
 	out.Favlists = favlists
+	progress.Report(ctx, progress.Event{Phase: "collect", FoldersTotal: len(favlists)})
 	names := map[int64]string{}
 	for _, f := range favlists {
 		names[f.URLToken] = f.Title
@@ -217,13 +220,14 @@ func (p *LiveProvider) Fetch(ctx context.Context) (*Corpus, error) {
 		return nil, err
 	}
 
-	for _, f := range favlists {
+	for fi, f := range favlists {
 		items, err := p.Client.FavlistContents(ctx, f.URLToken, plan.FavlistPages)
 		out.Calls++
 		if err != nil && !softFail(err) {
 			return nil, err
 		}
 		merge.addCollections(items, f.Title)
+		progress.Report(ctx, progress.Event{Phase: "collect", Done: len(merge.result()), FoldersDone: fi + 1, FoldersTotal: len(favlists)})
 	}
 
 	contents, err := p.Client.Contents(ctx, TypeAll, plan.ContentPages)
@@ -232,6 +236,7 @@ func (p *LiveProvider) Fetch(ctx context.Context) (*Corpus, error) {
 		return nil, err
 	}
 	merge.addContents(contents)
+	progress.Report(ctx, progress.Event{Phase: "collect", Done: len(merge.result()), FoldersDone: len(favlists), FoldersTotal: len(favlists)})
 
 	if fs, err := p.Client.Followees(ctx, plan.FolloweePages); err == nil {
 		out.Calls++

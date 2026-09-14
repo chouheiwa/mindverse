@@ -21,6 +21,7 @@ import (
 	"github.com/chouheiwa/mindverse/internal/config"
 	"github.com/chouheiwa/mindverse/internal/engine"
 	"github.com/chouheiwa/mindverse/internal/extract"
+	"github.com/chouheiwa/mindverse/internal/progress"
 	"github.com/chouheiwa/mindverse/internal/seed"
 	"github.com/chouheiwa/mindverse/internal/share"
 	"github.com/chouheiwa/mindverse/internal/store"
@@ -47,14 +48,15 @@ const (
 )
 
 type generation struct {
-	State    genState         `json:"state"`
-	Stage    string           `json:"stage"`
-	Progress int              `json:"progress"`
-	Error    string           `json:"error,omitempty"`
-	Universe *engine.Universe `json:"universe,omitempty"`
-	Filtered int              `json:"filtered"` // 因敏感类目未参与分析的条数
-	Source   string           `json:"source"`
-	Calls    int              `json:"calls"`
+	Details  *generationDetails `json:"details,omitempty"`
+	State    genState           `json:"state"`
+	Stage    string             `json:"stage"`
+	Progress int                `json:"progress"`
+	Error    string             `json:"error,omitempty"`
+	Universe *engine.Universe   `json:"universe,omitempty"`
+	Filtered int                `json:"filtered"` // 因敏感类目未参与分析的条数
+	Source   string             `json:"source"`
+	Calls    int                `json:"calls"`
 }
 
 // session 只驻留内存。OAuth token 绝不落盘。
@@ -708,6 +710,8 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "无法安全完成登录，请重试")
 		return
 	}
+	log.Printf("zhihu oauth callback token_received=true expiry_known=%t expired=%t profile_available=%t",
+		!tok.ExpiresAt.IsZero(), tok.Expired(), profile != nil)
 	http.Redirect(w, r, "/universe.html", http.StatusFound)
 }
 
@@ -878,6 +882,44 @@ func (s *Server) generate(sess *session, prov zhihu.Provider) {
 func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ctx context.Context, cancel context.CancelFunc) {
 	defer s.releaseSession(sess)
 	defer cancel()
+	tracker := &generationTracker{}
+	ctx = progress.WithObserver(ctx, func(e progress.Event) {
+		tracker.mu.Lock()
+		defer tracker.mu.Unlock()
+		d := tracker.observe(e, time.Now())
+		updateGeneration(sess, epoch, func() {
+			sess.gen.Details = &d
+			pct := sess.gen.Progress
+			switch e.Phase {
+			case "collect":
+				sess.gen.Stage = "正在读取本次内容"
+				if e.FoldersTotal > 0 {
+					pct = 5 + 15*e.FoldersDone/e.FoldersTotal
+				}
+			case "cache":
+				sess.gen.Stage = "正在检查已有分析"
+				pct = 25
+			case "analyze":
+				sess.gen.Stage = "正在提取内容中的概念"
+				if e.Total > 0 {
+					pct = 30 + 35*e.Done/e.Total
+				}
+			case "normalize":
+				sess.gen.Stage = "正在合并同义概念"
+				pct = 67
+			case "layout":
+				sess.gen.Stage = "正在计算星图结构"
+				pct = 70
+			case "name":
+				sess.gen.Stage = "正在为星群命名"
+				if e.Total > 0 {
+					pct = 75 + 20*e.Done/e.Total
+				}
+			}
+			sess.gen.Progress = max(sess.gen.Progress, pct)
+		})
+	})
+	progress.Report(ctx, progress.Event{Phase: "collect"})
 
 	setStage := func(stage string, pct int) bool {
 		return updateGeneration(sess, epoch, func() { sess.gen.Stage, sess.gen.Progress = stage, pct })
@@ -905,11 +947,13 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 		return
 	}
 	total, _, _ := corpus.Stats()
+	progress.Report(ctx, progress.Event{Phase: "collect", Done: total})
 	if total < 30 {
 		fail(fmt.Errorf("只找到 %d 条内容，还不够生成星图。试试游客模式，现场挑几个感兴趣的问题", total))
 		return
 	}
 	filtered := extract.CountSensitiveItems(corpus.Items)
+	progress.Report(ctx, progress.Event{Phase: "cache"})
 	cached, err := s.beginAnalysis(ctx, sess, epoch, corpus.Source)
 	if err != nil {
 		fail(fmt.Errorf("读取分析缓存失败: %w", err))
@@ -970,7 +1014,8 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 	if len(public) > 0 {
 		log.Printf("带入 %d 条同题公共回答", len(public))
 	}
-	u, err := engine.Run(engine.Input{Items: corpus.Items, Concepts: concepts, PublicAnswers: public}, opt, namer)
+	progress.Report(ctx, progress.Event{Phase: "layout"})
+	u, err := engine.RunContext(ctx, engine.Input{Items: corpus.Items, Concepts: concepts, PublicAnswers: public}, opt, namer)
 	if err != nil {
 		fail(err)
 		return

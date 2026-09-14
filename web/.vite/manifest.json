@@ -1,6 +1,6 @@
 {
-  "_KanshanIcon-Dg4cjJYc.js": {
-    "file": "assets/KanshanIcon-Dg4cjJYc.js",
+  "_KanshanIcon-BC-c5cCB.js": {
+    "file": "assets/KanshanIcon-BC-c5cCB.js",
     "name": "KanshanIcon",
     "imports": [
       "_theme-Dor0K0Z_.js",
@@ -31,15 +31,15 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_babylon-DX8tJCi5.js": {
-    "file": "assets/babylon-DX8tJCi5.js",
+  "_babylon-D827f_EL.js": {
+    "file": "assets/babylon-D827f_EL.js",
     "name": "babylon",
     "imports": [
       "_theme-Dor0K0Z_.js",
       "universe.html"
     ],
     "dynamicImports": [
-      "_babylon-DX8tJCi5.js"
+      "_babylon-D827f_EL.js"
     ]
   },
   "_theme-CbzUqeID.css": {
@@ -54,13 +54,13 @@
     ]
   },
   "index.html": {
-    "file": "assets/landing-hI7Twkfk.js",
+    "file": "assets/landing-rjDIk0qL.js",
     "name": "landing",
     "src": "index.html",
     "isEntry": true,
     "imports": [
       "_theme-Dor0K0Z_.js",
-      "_KanshanIcon-Dg4cjJYc.js"
+      "_KanshanIcon-BC-c5cCB.js"
     ],
     "css": [
       "assets/landing-DzaIOpwq.css"
@@ -79,7 +79,7 @@
     "src": "src/assets/kanshan/guide.webp"
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-amHRZKfW.js",
+    "file": "assets/QuestionWorkspace-COzN-HGD.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -105,13 +105,13 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-CdXLtqqL.js",
+    "file": "assets/Universe-C1jhDmfP.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_theme-Dor0K0Z_.js",
-      "_KanshanIcon-Dg4cjJYc.js",
+      "_KanshanIcon-BC-c5cCB.js",
       "_apiCore-BzPZ3njc.js",
       "universe.html",
       "_PublicShareContent-C_zLrOhg.js"
@@ -121,11 +121,11 @@
       "virtual:mindverse-renderer"
     ],
     "css": [
-      "assets/Universe-Bf9LbKL5.css"
+      "assets/Universe-DII5ZTKW.css"
     ]
   },
   "universe.html": {
-    "file": "assets/universe-C7kQks6i.js",
+    "file": "assets/universe-CeHPRL0S.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,
@@ -138,13 +138,13 @@
     ]
   },
   "virtual:mindverse-renderer": {
-    "file": "assets/_virtual_mindverse-renderer-Bn-k_9jJ.js",
+    "file": "assets/_virtual_mindverse-renderer-CKLCoznC.js",
     "name": "_virtual_mindverse-renderer",
     "src": "virtual:mindverse-renderer",
     "isDynamicEntry": true,
     "imports": [
-      "_KanshanIcon-Dg4cjJYc.js",
-      "_babylon-DX8tJCi5.js",
+      "_KanshanIcon-BC-c5cCB.js",
+      "_babylon-D827f_EL.js",
       "src/ui/Universe.tsx"
     ]
   }

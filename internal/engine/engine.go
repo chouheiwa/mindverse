@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"sort"
@@ -39,6 +40,16 @@ const (
 )
 
 func Run(in Input, opt Options, name Namer) (*Universe, error) {
+	return run(context.Background(), in, opt, name, 1)
+}
+
+// RunContext supports cancellation and up to four concurrent naming calls.
+// The supplied Namer must be concurrency-safe.
+func RunContext(ctx context.Context, in Input, opt Options, name Namer) (*Universe, error) {
+	return run(ctx, in, opt, name, 4)
+}
+
+func run(ctx context.Context, in Input, opt Options, name Namer, workers int) (*Universe, error) {
 	opt = opt.withDefaults()
 	if name == nil {
 		name = defaultNamer
@@ -167,6 +178,23 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 	}
 	sort.Ints(gids)
 	nameOf := map[int]string{}
+	jobs := make([]namingJob, len(gids))
+	for i, g := range gids {
+		mem := append([]int(nil), clusterOf[g]...)
+		sort.Slice(mem, func(i, j int) bool { return b.degConc[mem[i]] > b.degConc[mem[j]] })
+		names := make([]string, len(mem))
+		for k, c := range mem {
+			names[k] = b.names[c]
+		}
+		jobs[i] = namingJob{members: names, samples: sampleTitles(in.Items, itemsOf[mem[0]], 3)}
+	}
+	resolvedNames, err := nameClusters(ctx, jobs, name, workers)
+	if err != nil {
+		return nil, err
+	}
+	for i, g := range gids {
+		nameOf[g] = resolvedNames[i]
+	}
 
 	// 星群色温同样走位次。先取成员位次的均值，再在星群之间重新取位次 ——
 	// 只取均值会向中间回归，十几个星群会全糊成白色。
@@ -199,7 +227,7 @@ func Run(in Input, opt Options, name Namer) (*Universe, error) {
 			center[k] = round2(center[k] / float64(len(mem)))
 		}
 		hue, sat := spectrum(clusterRank[g])
-		nm := name(names, sampleTitles(in.Items, itemsOf[mem[0]], 3))
+		nm := nameOf[g]
 		nameOf[g] = nm
 		u.Clusters = append(u.Clusters, Cluster{
 			ID: g, Name: nm, Lead: names[0], Center: center, N: total,

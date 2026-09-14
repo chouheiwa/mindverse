@@ -1,3 +1,4 @@
+import { galaxyName } from '../galaxyNavigation'
 import type { Cluster } from '../../types'
 import { starColor } from '../gl/blackbody'
 import type { StarDatum } from '../gl/starData'
@@ -87,7 +88,7 @@ export class LabelLayer {
       // 下限 0.5：远处的星群名可以淡，但不能淡到读不出来 —— 它是导航信息
       const tint = starColor(cluster.hue, cluster.sat)
       labels.push({
-        text: cluster.name,
+        text: galaxyName(cluster),
         x: projected.x,
         y: projected.y - 15,
         opacity: Math.min(1, 0.96 * (0.5 + 0.5 * depthFade * depthFade)),
@@ -95,10 +96,10 @@ export class LabelLayer {
       })
     }
 
-    for (const { star, opacity: ownerAlpha } of frame.stars) {
+    for (const { star, opacity: ownerAlpha, alwaysVisible } of frame.stars) {
       const projected = frame.projectStar(star)
       if (projected.depth <= 0 || projected.depth >= 1) continue
-      const opacity = starLabelOpacity(projected.radiusPx) * ownerAlpha
+      const opacity = (alwaysVisible ? 1 : starLabelOpacity(projected.radiusPx)) * ownerAlpha
       if (opacity <= 0) continue
       labels.push({
         text: star.s.c,

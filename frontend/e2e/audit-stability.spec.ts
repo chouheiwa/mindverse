@@ -27,7 +27,8 @@ async function openStar(page: Page) {
   await expect.poll(async () => (await snapshot(page))?.scene.firstStarX ?? null).not.toBeNull()
   const scene = (await snapshot(page))!.scene
   await canvas(page).click({ position: { x: scene.firstStarX!, y: scene.firstStarY! }, force: true })
-  await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible()
+  await page.getByRole('button', { name: /Alpha 进入恒星系/ }).click()
+  await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeVisible()
 }
 
 async function openQuestionWorkspace(page: Page, title: string) {

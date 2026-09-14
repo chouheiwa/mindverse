@@ -6,6 +6,8 @@
   gap: 20px; padding: 10px clamp(18px, 4vw, 58px); border-bottom: 1px solid var(--rule); background: rgb(5 7 17 / 99.4%);
   font-family: var(--f-m); font-size: 10px; letter-spacing: .12em; color: var(--readout, #aeb8d2) }
 .qw-head a { justify-self: end; min-height: 44px; display: inline-flex; align-items: center }
+.qw-head > .exploration-path { justify-content: center; font-family: var(--f-b) }
+.qw-back { overflow-wrap: anywhere }
 .qw-back { justify-self: start; min-width: 44px; min-height: 44px; padding: 8px 10px; border: 0; background: none; color: var(--ink); font-size: 11px }
 .qw-main { height: calc(100dvh - 68px); display: grid;
   grid-template-columns: minmax(440px, 52vw) minmax(132px, 10vw) minmax(0, 1fr);
@@ -35,9 +37,24 @@
 .qw--folded .qw-main { grid-template-columns: 1fr; background: transparent }
 .qw--folded .qw-planet-stage { grid-column: 1 }
 .qw-card { position: absolute; z-index: 3; right: clamp(18px, 3vw, 44px); top: calc(68px + clamp(16px, 3vh, 30px)); width: min(360px, calc(100vw - 36px));
-  display: grid; gap: 10px; padding: 16px 18px 14px; border: 1px solid rgb(172 190 231 / 18%); background: rgb(5 7 17 / 66%);
+  max-height: calc(100dvh - 120px); overflow-y: auto; overscroll-behavior: contain;
+  display: grid; gap: 14px; padding: 20px; border: 1px solid rgb(172 190 231 / 24%); background: rgb(5 7 17 / 94%);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px) }
 .qw-card .qw-kicker { margin: 0 }
+.qw-next-step { margin: 0; color: var(--dim); font-size: 13px; line-height: 1.8 }
+.qw-reading .qw-next-step { margin-bottom: 20px }
+.qw-read-answers { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 48px;
+  width: 100%; padding: 12px 16px; border: 1px solid #a8b9fc; border-radius: 3px;
+  background: #a8b9fc; color: #11162b; font-family: var(--f-b); font-size: 15px; font-weight: 600; text-decoration: none }
+.qw-read-answers span { font-size: 12px; font-weight: 400 }
+.qw-read-answers:hover:not(:disabled) { color: #11162b; background: #c2cdff; border-color: #c2cdff }
+.qw-surface-guide { padding-top: 14px; border-top: 1px solid var(--rule-soft); font-size: 12px; line-height: 1.8 }
+.qw-surface-guide b { font-weight: 500; color: var(--ink) }
+.qw-surface-guide p { margin: 5px 0 0; color: var(--dim) }
+.qw-world-hint { max-width: 30em; margin: 8px 0 0; padding: 8px 12px; color: var(--ink); background: rgb(5 7 17 / 82%);
+  font-family: var(--f-b); font-size: 12px; line-height: 1.7; letter-spacing: 0 }
+.qw-return-surface { min-height: 44px; margin-bottom: 16px; padding: 8px 12px; border: 1px solid var(--rule);
+  background: rgb(5 7 17 / 88%); color: var(--ink); font-size: 13px }
 .qw .qw-card h1 { margin: 0; font-family: var(--f-d); font-size: 18px; font-weight: 500; line-height: 1.45; color: var(--ink) }
 .qw-provenance-card { display: grid; gap: 6px }
 .qw-origin { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.5 }
@@ -45,12 +62,20 @@
 .qw-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; padding: 0; list-style: none }
 .qw-chips li { padding: 3px 8px; border: 1px solid rgb(172 190 231 / 22%); border-radius: 2px; color: var(--ink); font-family: var(--f-m); font-size: 10px; letter-spacing: .06em }
 .qw-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px }
+.qw-card-actions p { margin: 0; color: var(--dim); font-size: 11px; line-height: 1.7 }
 .qw-card-actions button { min-height: 40px; padding: 0 12px; border: 1px solid rgb(172 190 231 / 28%); background: rgb(5 7 17 / 55%); color: var(--ink);
   font: inherit; font-family: var(--f-m); font-size: 10px; letter-spacing: .08em }
 .qw-card-actions button[aria-pressed="true"] { border-color: rgb(222 183 103 / 55%); background: rgb(222 183 103 / 12%) }
 .qw-card-actions button:last-child { border-color: rgb(222 183 103 / 42%) }
 /* 铺开的资料从右侧滑入，资料卡顶在上面继续可用。 */
-.qw--surface:not(.qw--folded) .qw-titleblock { padding-top: clamp(92px, 16vh, 140px) }
+.qw--surface:not(.qw--folded) .qw-main { grid-template-columns: minmax(240px, 34vw) minmax(132px, 11vw) minmax(0, 1fr);
+  background: linear-gradient(90deg, transparent 0 27%, rgb(5 7 17 / 97%) 34%, rgb(5 7 17) 45%) }
+.qw--surface:not(.qw--folded) .qw-titleblock { padding-top: 24px }
+.qw--surface:not(.qw--folded) .qw-planet-controls,
+.qw--surface:not(.qw--folded) .qw-strata-disclaimer { display: none }
+.qw--surface:not(.qw--folded) .qw-location-name { font-size: 18px }
+.qw--surface:not(.qw--folded) .qw-planet-readout { right: 20px }
+.qw--surface:not(.qw--folded) h1 { font-size: clamp(24px, 2.7vw, 36px) }
 @media (prefers-reduced-motion: no-preference) {
   .qw--surface:not(.qw--folded) .qw-titleblock, .qw--surface:not(.qw--folded) .qw-rail, .qw--surface:not(.qw--folded) .qw-reading { animation: qw-dossier-in .28s var(--e-enter, ease-out) both }
 }
@@ -72,6 +97,7 @@
 .qw-planet-readout { top: clamp(24px, 4vh, 48px); display: grid; gap: 8px }
 .qw-planet-readout span { color: var(--readout, #aeb8d2); font-size: 9px }
 .qw-planet-readout b { color: var(--ink); font-size: 11px; font-weight: 400 }
+.qw-planet-readout .qw-location-name { color: var(--ink); font-family: var(--f-d); font-size: clamp(18px, 2vw, 25px); letter-spacing: .02em }
 .qw-planet-controls { right: clamp(22px, 3vw, 52px); bottom: clamp(26px, 5vh, 58px); display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--readout, #aeb8d2); font-size: 9px }
 .qw-planet-controls button { min-height: 44px; padding: 0 14px; border: 1px solid rgb(222 183 103 / 42%); background: rgb(5 7 17 / 72%); color: var(--ink); font: inherit; letter-spacing: .08em }
 .qw-strata-disclaimer { position: absolute; z-index: 2; left: clamp(22px, 3vw, 52px); right: clamp(22px, 3vw, 52px); bottom: 12px; margin: 0; color: rgb(205 222 226 / 58%); font-size: 10px; line-height: 1.45 }
@@ -113,16 +139,33 @@
 .qw :focus-visible { outline: 2px solid var(--focus, #f0c36a); outline-offset: 3px }
 @media (max-width: 760px) {
   .qw { overflow-y: auto; background: rgb(5 7 17 / 88%) }
-  .qw-head { position: sticky; top: 0; grid-template-columns: 1fr auto; padding-inline: 12px }
+  .qw-head { position: sticky; top: 0; grid-template-columns: 1fr auto; height: 96px; gap: 4px 12px; padding: 6px 12px }
   .qw-head > span { display: none }
-  .qw-main { height: auto; min-height: calc(100dvh - 68px); display: block; width: 100%; background: linear-gradient(180deg, transparent 0 36vh, rgb(5 7 17 / 97%) 52vh) }
+  .qw-head > .exploration-path { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; padding-bottom: 10px }
+  .qw-main { height: auto; min-height: calc(100dvh - 96px); display: block; width: 100%; background: linear-gradient(180deg, transparent 0 36vh, rgb(5 7 17 / 97%) 52vh) }
+  .qw-card { position: relative; top: auto; max-height: none }
+  .qw--folded .qw-main { display: flex; flex-direction: column }
+  .qw--folded .qw-card { order: -1; flex-shrink: 0 }
+  .qw--surface:not(.qw--folded) .qw-main { background: rgb(5 7 17 / 97%) }
+  .qw--surface:not(.qw--folded) .qw-planet-stage { display: none }
   .qw-planet-stage { height: 42vh; min-height: 290px; border-right: 0; border-bottom: 1px solid var(--rule) }
   .qw-reticle { width: min(68vw, 340px) }
   .qw-titleblock { width: min(100% - 28px, 680px); margin: auto; padding-block: 34px 28px }
-  .qw-rail { position: sticky; top: 68px; z-index: 1; overflow-x: auto; padding: 0; background: rgb(5 7 17 / 98%); scrollbar-width: thin }
+  .qw-rail { position: sticky; top: 96px; z-index: 1; overflow-x: auto; padding: 0; background: rgb(5 7 17 / 98%); scrollbar-width: thin }
   .qw-rail [role="tablist"] { display: flex; min-width: max-content }
   .qw-rail button { min-width: 132px; min-height: 48px; border-right: 1px solid var(--rule) }
   .qw-reading { width: min(100% - 28px, 680px); margin: auto; overflow: visible; padding: 34px 0 70px }
   .qw-personal { grid-template-columns: 1fr }
 }
 @media (prefers-reduced-motion: reduce) { .qw { animation: none; scroll-behavior: auto } }
+
+.qw-strata-entry { display: grid; grid-template-columns: 68px 1fr; align-items: start; gap: 14px; padding-top: 16px; border-top: 1px solid var(--rule-soft) }
+.qw-strata-entry b { color: var(--ink); font-size: 13px; font-weight: 500 }
+.qw-strata-entry p { color: var(--dim); font-size: 12px; line-height: 1.8; margin: 8px 0 12px }
+.qw-strata-entry button { min-height: 44px; padding: 8px 14px; color: #eed2a5; background: rgb(213 184 134 / 10%); border: 1px solid rgb(213 184 134 / 50%); font: inherit; font-size: 13px }
+.qw-strata-entry button:disabled { opacity: .5 }
+.qw-strata-cutaway { position: relative; width: 68px; height: 68px; overflow: hidden; border-radius: 50%; border: 1px solid #b7c7d6; background: #162634; display: grid; padding-top: 14px }
+.qw-strata-cutaway i { display: block; border-top: 1px solid #d5b886; background: rgb(213 184 134 / 15%) }
+.qw-strata-cutaway i:nth-child(2) { background: rgb(213 184 134 / 25%) }
+.qw-strata-cutaway i:nth-child(3) { background: rgb(213 184 134 / 40%) }
+.qw-strata-cutaway span { position: absolute; top: 10px; left: 26px; color: #f1dbb7; font-size: 22px }

@@ -6,6 +6,7 @@ import { starIdentity } from './starIdentity'
 export interface StarLabelVisibility {
   star: StarDatum
   opacity: number
+  alwaysVisible?: boolean
 }
 
 export function visibleClusterLabels(clusters: readonly Cluster[], focusCluster: number | null): Cluster[] {
@@ -57,6 +58,16 @@ export class LabelStrategyCache {
     this.focusStarIdentity = nextIdentity
     this.clusterLabels = visibleClusterLabels(this.sourceClusters, focusStar?.s.g ?? null)
     this.starLabels = visibleStarLabels(this.sourceStars, focusStar)
+    this.revision += 1
+  }
+
+  setCluster(clusterId: number): void {
+    const key = `cluster:${clusterId}`
+    if (this.focusStarIdentity === key) return
+    this.focusStarIdentity = key
+    this.clusterLabels = []
+    this.starLabels = this.sourceStars.filter((star) => star.s.g === clusterId)
+      .map((star) => ({ star, opacity: 1, alwaysVisible: true }))
     this.revision += 1
   }
 }

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>宇宙诞生 · 交互预览</title>
+  <style>
+    .preview-tools { position: fixed; z-index: 40; top: 74px; right: 24px; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; max-width: calc(100vw - 48px) }
+    .preview-tools span { font-size: 10px; color: #9aa4be; margin-right: 6px }
+    .preview-tools button { padding: 5px 9px; font-size: 10px; background: #0e1424; border: 1px solid #243048; color: #bac5da }
+    .preview-tools button[aria-pressed=true] { border-color: #c2ac87; color: #e6d0aa }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import React, { useState } from 'react'
+    import { createRoot } from 'react-dom/client'
+    import { Loading } from '../src/ui/Loading.tsx'
+    import '../src/theme.css'
+    const phases = [
+      { label: '读取', stage: '正在读取你的知乎足迹', progress: 5 },
+      { label: '理解', stage: '读到 60 条，正在理解它们讲的是什么', progress: 30 },
+      { label: '成形', stage: '正在让它们坍缩成星群', progress: 70 },
+      { label: '失败', stage: '', progress: 5, error: '暂时无法读取内容，请稍后再试。' },
+    ]
+    function Preview() {
+      const [phase, setPhase] = useState(0)
+      return React.createElement(React.Fragment, null,
+        React.createElement(Loading, { ...phases[phase], gone: false }),
+        React.createElement('nav', { className: 'preview-tools', 'aria-label': '预览阶段' },
+          React.createElement('span', null, '交互预览 · 不调用 API'),
+          ...phases.map((item, i) => React.createElement('button', {
+            key: item.label, 'aria-pressed': phase === i, onClick: () => setPhase(i),
+          }, item.label)),
+        ),
+      )
+    }
+    createRoot(document.getElementById('root')).render(React.createElement(Preview))
+  </script>
+</body>
+</html>

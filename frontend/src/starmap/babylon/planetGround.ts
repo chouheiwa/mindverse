@@ -4,19 +4,22 @@ import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh'
 import type { Scene } from '@babylonjs/core/scene'
 import type { Vec3 } from './cubeSphere'
 import type { ThermalWeights } from './planetSurface'
-import { thermalGroundAlbedo, thermalHorizonColor } from './planetSky'
+import { thermalGroundAlbedo, thermalAtmosphereColor } from './planetSky'
 import { planetGroundVertexShader } from './shaders/planetGround.vertex.fx'
 import { planetGroundFragmentShader } from './shaders/planetGround.fragment.fx'
 
 export interface PlanetGroundOptions {
   radius: number
   thermal: ThermalWeights
+  snowLine?: number
+  displacement?: number
   seed?: number
 }
 
 export const PLANET_GROUND_UNIFORMS = [
   'worldViewProjection', 'world', 'uSunDirection', 'uCameraPosition', 'uPlanetCenter',
   'uPlanetRadius', 'uBaseColor', 'uAccentColor', 'uRockColor', 'uHorizonColor', 'uSeed', 'uDetailStrength',
+  'uSnowLine', 'uDisplacement', 'uThermalIce', 'uThermalMagma',
 ] as const
 
 const clamp01 = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0
@@ -47,6 +50,8 @@ export class PlanetGround {
     this.material.backFaceCulling = true
     this.material.setFloat('uDetailStrength', 0.42)
     this.material.setFloat('uSeed', finite(options.seed ?? 0, 0) % 1000)
+    this.material.setFloat('uSnowLine', clamp01(options.snowLine ?? 1))
+    this.material.setFloat('uDisplacement', Math.max(0.0001, finite(options.displacement ?? 0.1, 0.1)))
     this.setThermal(options.thermal)
     this.setSun([0, 1, 0])
     this.setCamera([0, 0, 0], [0, 0, 0], options.radius)
@@ -69,8 +74,10 @@ export class PlanetGround {
 
   setThermal(weights: ThermalWeights): void {
     if (this.disposed) return
+    this.material.setFloat('uThermalIce', clamp01(weights.ice))
+    this.material.setFloat('uThermalMagma', clamp01(weights.magma))
     const base = thermalGroundAlbedo(weights)
-    const horizon = thermalHorizonColor(weights)
+    const horizon = thermalAtmosphereColor(weights)
     this.base = base
     this.accent = [base[0] * 1.22 + 0.06, base[1] * 1.2 + 0.05, base[2] * 1.16 + 0.04]
     this.rock = [base[0] * 0.5 + 0.02, base[1] * 0.5 + 0.02, base[2] * 0.52 + 0.03]

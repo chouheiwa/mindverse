@@ -4,7 +4,7 @@ import { Scene } from '@babylonjs/core/scene'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
-import { PlanetSky, PLANET_SKY_UNIFORMS } from './planetSky'
+import { thermalAtmosphereColor, thermalGroundAlbedo, PlanetSky, PLANET_SKY_UNIFORMS } from './planetSky'
 
 const cleanup: (() => void)[] = []
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()) })
@@ -66,7 +66,7 @@ describe('PlanetSky', () => {
     sky.setDim(Number.NaN)
     for (const [, vector] of vectorSpy.mock.calls) expect([vector.x, vector.y, vector.z].every(Number.isFinite)).toBe(true)
     for (const [, value] of floatSpy.mock.calls) expect(Number.isFinite(value)).toBe(true)
-    expect(sky.diagnostics().horizon).toEqual([0.31, 0.34, 0.40])
+    expect(sky.diagnostics().horizon).toEqual(thermalAtmosphereColor({ magma: 0, desert: 0, rock: 1, tundra: 0, ice: 0 }))
   })
 
   it('follows camera translation and radial up without inheriting rotation', () => {
@@ -161,4 +161,13 @@ describe('PlanetSky', () => {
     expect(Number.isFinite(sky.diagnostics().daylight)).toBe(true)
     expect(Number.isFinite(sky.diagnostics().sunDiscGain)).toBe(true)
   })
+})
+
+
+it('separates a warm rocky ground from the less saturated atmosphere', () => {
+  const hot = { magma: 0, desert: 1, rock: 0, tundra: 0, ice: 0 }
+  const ground = thermalGroundAlbedo(hot)
+  const air = thermalAtmosphereColor(hot)
+  expect(ground[0] - ground[2]).toBeGreaterThan(0.2)
+  expect(air[0] - air[2]).toBeLessThan((ground[0] - ground[2]) * 0.5)
 })

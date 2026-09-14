@@ -134,6 +134,7 @@ test('captures panorama, focused-star and planet-focus for whichever renderer is
   const { firstStarX, firstStarY } = overview.scene
   if (firstStarX === null || firstStarY === null) throw new Error('panorama did not project a star to click')
   await canvas(page).click({ position: { x: firstStarX, y: firstStarY }, force: true })
+  await page.getByRole('button', { name: /Alpha 进入恒星系/ }).click()
   states['focused-star'] = await captureState(page, 'focused-star')
   expect(states['focused-star'].metadata.cameraDistance)
     .toBeLessThan(states.panorama.metadata.cameraDistance)

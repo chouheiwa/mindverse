@@ -152,6 +152,12 @@ func (e *LLMExtractor) runBatch(ctx context.Context, items []zhihu.Item, offset 
 
 // Extract 执行管线 ①②③。
 func (e *LLMExtractor) Extract(ctx context.Context, items []zhihu.Item) ([][]string, error) {
+	return e.ExtractWithVocabulary(ctx, items, nil)
+}
+
+// ExtractWithVocabulary analyzes only changed items using the owner's established
+// vocabulary. Existing canonical names are frozen to avoid relabeling history.
+func (e *LLMExtractor) ExtractWithVocabulary(ctx context.Context, items []zhihu.Item, known map[string]int) ([][]string, error) {
 	batch, workers, seedBatches := e.opts()
 	result := make([][]string, len(items))
 
@@ -178,6 +184,9 @@ func (e *LLMExtractor) Extract(ctx context.Context, items []zhihu.Item) ([][]str
 
 	var mu sync.Mutex
 	vocabCount := map[string]int{}
+	for c, n := range known {
+		vocabCount[c] = n
+	}
 	apply := func(idx []int, start int, res map[int][]string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -267,7 +276,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, items []zhihu.Item) ([][]str
 			}
 			mapped := make([]string, 0, len(cs))
 			for _, c := range cs {
-				if to, ok := m[c]; ok && to != "" {
+				if to, ok := m[c]; ok && to != "" && known[c] == 0 {
 					c = to
 				}
 				mapped = append(mapped, c)

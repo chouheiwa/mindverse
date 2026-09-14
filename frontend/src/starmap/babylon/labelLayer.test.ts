@@ -61,7 +61,7 @@ describe('LabelLayer', () => {
   it('paints a cluster name that is in front of the camera', () => {
     const { layer, context } = setup()
     expect(layer.draw(input())).toBe(1)
-    expect(context.fillText).toHaveBeenCalledWith('地层测试星群', 640, expect.any(Number))
+    expect(context.fillText).toHaveBeenCalledWith('地层测试星系', 640, expect.any(Number))
   })
 
   it('paints surface labels (neighbours in the sky, signposts) with their own tone', () => {

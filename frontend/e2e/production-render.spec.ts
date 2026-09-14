@@ -151,7 +151,8 @@ async function openFirstStarPanel(page: Page) {
   if (!target || target.x === undefined || target.y === undefined) throw new Error('first star is not projectable')
   process.stdout.write(`[pick] firstStar=(${target.x},${target.y}) canvas=${bounds.width}x${bounds.height}\n`)
   await canvas.click({ position: { x: target.x, y: target.y }, force: true })
-  await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible()
+  await page.getByRole('button', { name: /Alpha 进入恒星系/ }).click()
+  await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeVisible()
   return { canvas, bounds }
 }
 

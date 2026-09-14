@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTerrainField } from './terrainField'
-import { landingSite, standAt, surfaceBasis, surfaceFrame, surfaceNearPlane, walkSurface } from './surfaceCamera'
+import { frameSurfaceLandmark, landingSite, standAt, surfaceBasis, surfaceFrame, surfaceNearPlane, walkSurface } from './surfaceCamera'
 import type { Vec3 } from './cubeSphere'
 
 const field = createTerrainField({
@@ -166,4 +166,18 @@ describe('walking a sphere means the local frame travels with you', () => {
     expect(Number.isFinite(antipode[0]) && Math.hypot(...antipode) > 0.99).toBe(true)
     expect(antipode[2]).toBeGreaterThan(0.3)
   })
+})
+
+
+it.each([-0.02, 0, 0.02])('frames a ground mark despite a high sky bearing and terrain height %s', (height) => {
+  const pose = standAt([0, 1, 0], 0.012, [0, 2, 1])
+  const mark: Vec3 = [0.052 * Math.sin(24 * Math.PI / 180), 1 + height, 0.052 * Math.cos(24 * Math.PI / 180)]
+  const framed = frameSurfaceLandmark(pose, [0, 1.012, 0], mark)
+  expect(framed.facing).toEqual(pose.facing)
+  const y = mark[1] - 1.012
+  const z = mark[2]
+  const screenY = (y * Math.cos(framed.pitch) - z * Math.sin(framed.pitch))
+    / (y * Math.sin(framed.pitch) + z * Math.cos(framed.pitch)) / Math.tan(Math.PI / 6)
+  expect(screenY).toBeGreaterThan(-0.7)
+  expect(screenY).toBeLessThan(-0.1)
 })

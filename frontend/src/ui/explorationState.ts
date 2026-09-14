@@ -23,6 +23,7 @@ export type StrataExplorationState = StrataBase & (
 )
 export type ExplorationState =
   | { kind: 'panorama' }
+  | { kind: 'cluster-focus'; clusterId: number }
   | ReturnState
   | { kind: 'probe-approach'; star: Star; probe: ArticleProbe; token: number; returnTo: ReturnState }
   | { kind: 'probe-inspection'; star: Star; probe: ArticleProbe; scanComplete: boolean; scanError: string | null; returnTo: ReturnState }
@@ -42,6 +43,7 @@ export type UniverseUiAction =
   | { type: 'render-loading' } | { type: 'render-ready' }
   | { type: 'render-failed'; message: string; recovery: RenderFallback['recovery'] }
   | { type: 'focus-star'; star: Star } | { type: 'show-panorama' }
+  | { type: 'focus-cluster'; clusterId: number }
   | { type: 'focus-planet'; star: Star; planet: PlanetDatum } | { type: 'clear-planet' }
   | { type: 'approach-probe'; star: Star; probe: ArticleProbe; token: number }
   | { type: 'probe-arrived'; probeId: string; token: number }
@@ -71,9 +73,11 @@ export function universeUiReducer(state: UniverseUiState, action: UniverseUiActi
     case 'render-ready': return state.renderPhase === 'failed' ? state : { ...state, renderPhase: 'ready' }
     case 'render-failed': return { ...state, renderPhase: 'failed', exploration: { kind: 'render-fallback', message: action.message, recovery: action.recovery } }
     case 'focus-star': return { ...state, questionEntry: null, exploration: { kind: 'star-focus', star: action.star } }
+    case 'focus-cluster': return { ...state, mode: 'all', questionEntry: null, exploration: { kind: 'cluster-focus', clusterId: action.clusterId } }
     case 'show-panorama': return { ...state, questionEntry: null, exploration: { kind: 'panorama' } }
     case 'focus-planet': return { ...state, questionEntry: null, exploration: { kind: 'planet-focus', star: action.star, planet: action.planet } }
     case 'clear-planet': {
+      if (state.exploration.kind === 'cluster-focus') return state
       const star = explorationStar(state.exploration)
       return { ...state, exploration: star ? { kind: 'star-focus', star } : { kind: 'panorama' } }
     }

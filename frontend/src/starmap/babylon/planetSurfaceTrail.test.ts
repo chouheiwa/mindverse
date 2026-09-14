@@ -79,3 +79,23 @@ it.each([0.18, 0.3, 2])('faces a visible board toward the landing at radius %s',
   const pole = scene.meshes.find((mesh) => mesh.name.endsWith(':pole'))!
   expect(pole.position.y - pole.getBoundingInfo().boundingBox.extendSize.y).toBeCloseTo(0, 9)
 })
+
+it('seats the pole and footprints on the rendered triangles after terrain LOD changes', () => {
+  const engine = new NullEngine()
+  const scene = new Scene(engine)
+  const root = new TransformNode('root', scene)
+  const layout = layoutSurfaceTrail([0, 1, 0], [1, 0, 0])
+  const trail = new PlanetSurfaceTrail(scene, root, { field, radius: 1, displacement: 0.1, layout })
+  cleanup.push(() => { trail.dispose(); scene.dispose(); engine.dispose() })
+  // A low-detail triangle lies below the continuous height field.
+  trail.conformToTerrain(direction => ({ point: direction.scale(0.96), normal: direction }))
+  const node = scene.transformNodes.find(node => node.name === 'surface-trail:signpost')!
+  expect(node.position.length()).toBeCloseTo(0.96, 8)
+  const board = scene.meshes.find(mesh => mesh.name.endsWith(':board'))!
+  expect(trail.signpost()!.length()).toBeCloseTo(0.96 + board.position.y, 8)
+  for (const step of root.getChildTransformNodes(true).filter(node => node.name.includes(':step:'))) {
+    expect(step.position.length()).toBeCloseTo(0.96, 8)
+  }
+  trail.conformToTerrain(direction => ({ point: direction.scale(1.01), normal: direction }))
+  expect(node.position.length()).toBeCloseTo(1.01, 8)
+})

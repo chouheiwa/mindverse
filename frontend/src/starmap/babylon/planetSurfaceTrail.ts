@@ -1,3 +1,7 @@
+import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture'
+import { CreatePlane } from '@babylonjs/core/Meshes/Builders/planeBuilder'
+import type { SurfaceContactSampler } from './surfaceContact'
+import { fitSignpostTitle } from './signpostText'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
@@ -14,6 +18,7 @@ export interface PlanetSurfaceTrailOptions {
   readonly field: PlanetTerrainField
   readonly radius: number
   readonly displacement: number
+  readonly label?: { readonly date: string; readonly title: string }
   readonly layout: SurfaceTrailLayout
 }
 
@@ -25,6 +30,9 @@ export class PlanetSurfaceTrail {
   private readonly nodes: TransformNode[] = []
   private readonly signpostMeshIds = new Set<number>()
   private readonly materials: StandardMaterial[] = []
+  private signpostNode: TransformNode | null = null
+  private signpostOffset = 0
+  private labelTexture: DynamicTexture | null = null
   private signpostAnchor: Vector3 | null = null
   private disposed = false
 
@@ -32,16 +40,17 @@ export class PlanetSurfaceTrail {
     const radius = Number.isFinite(options.radius) && options.radius > 0 ? options.radius : 1
     const displacement = Number.isFinite(options.displacement) ? options.displacement : 0
     const print = new StandardMaterial('surface-trail:print', scene)
-    print.diffuseColor = new Color3(0.2, 0.17, 0.14)
+    print.diffuseColor = new Color3(0.32, 0.27, 0.22)
     print.emissiveColor = new Color3(0.05, 0.04, 0.03)
-    print.alpha = 0.72
+    print.alpha = 0.32
     const post = new StandardMaterial('surface-trail:post', scene)
     post.diffuseColor = new Color3(0.78, 0.74, 0.66)
     post.emissiveColor = new Color3(0.1, 0.09, 0.08)
     const board = new StandardMaterial('surface-trail:board', scene)
-    board.diffuseColor = new Color3(0.98, 0.84, 0.46)
-    board.emissiveColor = new Color3(0.5, 0.4, 0.16)
+    board.diffuseColor = new Color3(0.46, 0.40, 0.30)
+    board.emissiveColor = new Color3(0.015, 0.014, 0.012)
     board.backFaceCulling = false
+    for (const material of [print, post, board]) material.specularColor = Color3.Black()
     this.materials.push(print, post, board)
 
     const ground = (direction: Vector3): Vector3 => {
@@ -62,7 +71,8 @@ export class PlanetSurfaceTrail {
       if (direction.lengthSquared() < 1e-12) return
       direction.normalize()
       const node = plant(`surface-trail:step:${index}`, direction)
-      const disc = CreateDisc(`${node.name}:print`, { radius: radius * 0.0016, tessellation: 10 }, scene)
+      const disc = CreateDisc(`${node.name}:print`, { radius: radius * 0.0016, tessellation: 20 }, scene)
+      disc.scaling.x = 0.48
       disc.rotation.x = Math.PI / 2
       disc.position.y = radius * 0.0002
       disc.material = print
@@ -99,7 +109,63 @@ export class PlanetSurfaceTrail {
       }
       // 标签要落在横板上，不是落在杆脚下。锚在地面时字会掉到板子下方一大截，
       // 读起来是「一块空白广告牌 + 一行无关的字」，正是这次要修的观感问题。
+      this.signpostNode = node
+      this.signpostOffset = plank.position.y
       this.signpostAnchor = node.position.add(signDirection.scale(plank.position.y))
+      if (options.label) {
+        const texture = new DynamicTexture('surface-trail:lettering', { width: 1024, height: 320 }, scene, true)
+        this.labelTexture = texture
+        const context = texture.getContext() as CanvasRenderingContext2D
+        context.fillStyle = '#e8e2ce'
+        context.fillRect(0, 0, 1024, 320)
+        context.strokeStyle = '#87836f'
+        context.lineWidth = 3
+        context.strokeRect(14, 14, 996, 292)
+        context.textAlign = 'left'
+        context.textBaseline = 'middle'
+        context.fillStyle = '#4a504c'
+        context.font = '500 30px sans-serif'
+        context.fillText(`${options.label.date}  ·  下一站`, 48, 64)
+        context.fillStyle = '#202c2b'
+        context.font = '600 52px sans-serif'
+        const lines = fitSignpostTitle(options.label.title, 846, text => context.measureText(text).width)
+        lines.forEach((line, index) => context.fillText(line, 48, 148 + index * 62))
+        context.font = '48px sans-serif'
+        context.fillText('→', 920, 168)
+        texture.update()
+        const lettering = new StandardMaterial('surface-trail:lettering-material', scene)
+        lettering.disableLighting = true
+        // Diffuse texture multiplies the constant light; an emissive texture adds to it and washes out the ink.
+        lettering.diffuseTexture = texture
+        lettering.emissiveColor = new Color3(0.95, 0.95, 0.95)
+        lettering.diffuseColor = Color3.Black()
+        lettering.specularColor = Color3.Black()
+        lettering.backFaceCulling = false
+        this.materials.push(lettering)
+        const face = CreatePlane('surface-trail:lettering-face', { width: radius * 0.0235, height: radius * 0.007 }, scene)
+        face.parent = plank
+        face.position.z = radius * 0.00051
+        // The board's +Z side faces the landing; Babylon's plane front is -Z.
+        face.rotation.y = Math.PI
+        face.material = lettering
+        face.isPickable = true
+        this.signpostMeshIds.add(face.uniqueId)
+      }
+    }
+  }
+
+  conformToTerrain(sample: SurfaceContactSampler): void {
+    if (this.disposed) return
+    for (const node of this.nodes) {
+      const direction = node.position.normalizeToNew()
+      const contact = sample(direction)
+      if (!contact) continue
+      node.position.copyFrom(contact.point)
+      if (node !== this.signpostNode) node.rotationQuaternion = quaternionFromYTo(contact.normal)
+    }
+    if (this.signpostNode) {
+      const up = this.signpostNode.position.normalizeToNew()
+      this.signpostAnchor = this.signpostNode.position.add(up.scale(this.signpostOffset))
     }
   }
 
@@ -124,6 +190,9 @@ export class PlanetSurfaceTrail {
     this.nodes.length = 0
     this.signpostMeshIds.clear()
     this.signpostAnchor = null
+    this.signpostNode = null
+    this.labelTexture?.dispose()
+    this.labelTexture = null
   }
 }
 

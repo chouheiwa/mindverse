@@ -72,12 +72,18 @@ const normalize = (v: Vec3, fallback: Vec3 = [0, 1, 0]): Vec3 => {
   return Number.isFinite(len) && len > 1e-9 ? [v[0] / len, v[1] / len, v[2] / len] : fallback
 }
 
-/** 单位向量之间的球面插值；近平行或近反向时退回线性插值再归一化。 */
+/** 单位向量之间的球面插值；反向时选择稳定的切向，避免中点跳到对面。 */
 export function slerpDirection(from: Vec3, to: Vec3, t: number): Vec3 {
   const a = normalize(from)
   const b = normalize(to, a)
   const cosine = Math.min(1, Math.max(-1, dot(a, b)))
-  if (cosine > 0.9995 || cosine < -0.9995) return normalize(lerp3(a, b, clamp01(t)), a)
+  if (cosine > 0.9995) return normalize(lerp3(a, b, clamp01(t)), a)
+  if (cosine < -0.9995) {
+    const reference: Vec3 = Math.abs(a[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]
+    const tangent = normalize(sub(b, scale(a, cosine)), normalize(sub(reference, scale(a, dot(reference, a)))))
+    const angle = Math.acos(cosine) * clamp01(t)
+    return normalize(add(scale(a, Math.cos(angle)), scale(tangent, Math.sin(angle))), a)
+  }
   const angle = Math.acos(cosine)
   const sine = Math.sin(angle)
   const k = clamp01(t)

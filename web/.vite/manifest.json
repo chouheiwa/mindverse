@@ -18,15 +18,15 @@
     "file": "assets/apiCore-BzPZ3njc.js",
     "name": "apiCore"
   },
-  "_babylon-DXL_l41o.js": {
-    "file": "assets/babylon-DXL_l41o.js",
+  "_babylon-CbumB3Hd.js": {
+    "file": "assets/babylon-CbumB3Hd.js",
     "name": "babylon",
     "imports": [
       "_theme-Dor0K0Z_.js",
       "universe.html"
     ],
     "dynamicImports": [
-      "_babylon-DXL_l41o.js"
+      "_babylon-CbumB3Hd.js"
     ]
   },
   "_theme-CbzUqeID.css": {
@@ -41,7 +41,7 @@
     ]
   },
   "index.html": {
-    "file": "assets/landing-D5ztTvG9.js",
+    "file": "assets/landing-DKrR4y3G.js",
     "name": "landing",
     "src": "index.html",
     "isEntry": true,
@@ -54,7 +54,7 @@
     ]
   },
   "src/ui/QuestionWorkspace.tsx": {
-    "file": "assets/QuestionWorkspace-CWRAvbVs.js",
+    "file": "assets/QuestionWorkspace-7eJkBivb.js",
     "name": "QuestionWorkspace",
     "src": "src/ui/QuestionWorkspace.tsx",
     "isDynamicEntry": true,
@@ -63,7 +63,7 @@
       "src/ui/Universe.tsx"
     ],
     "css": [
-      "assets/QuestionWorkspace-CUimMLB1.css"
+      "assets/QuestionWorkspace-BU9g0uzc.css"
     ]
   },
   "src/ui/SharedView.tsx": {
@@ -80,7 +80,7 @@
     ]
   },
   "src/ui/Universe.tsx": {
-    "file": "assets/Universe-BIIrd6xw.js",
+    "file": "assets/Universe-BB-2-CiH.js",
     "name": "Universe",
     "src": "src/ui/Universe.tsx",
     "isDynamicEntry": true,
@@ -96,11 +96,11 @@
       "virtual:mindverse-renderer"
     ],
     "css": [
-      "assets/Universe-D7QrHyqc.css"
+      "assets/Universe-ClkhN3Nl.css"
     ]
   },
   "universe.html": {
-    "file": "assets/universe-BQ_NN_O5.js",
+    "file": "assets/universe-BgkeC1k_.js",
     "name": "universe",
     "src": "universe.html",
     "isEntry": true,
@@ -113,13 +113,13 @@
     ]
   },
   "virtual:mindverse-renderer": {
-    "file": "assets/_virtual_mindverse-renderer-hhQ7q90H.js",
+    "file": "assets/_virtual_mindverse-renderer-CBWCE2uy.js",
     "name": "_virtual_mindverse-renderer",
     "src": "virtual:mindverse-renderer",
     "isDynamicEntry": true,
     "imports": [
       "_api-BaIuq0_N.js",
-      "_babylon-DXL_l41o.js",
+      "_babylon-CbumB3Hd.js",
       "src/ui/Universe.tsx"
     ]
   }

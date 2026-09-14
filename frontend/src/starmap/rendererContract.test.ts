@@ -156,6 +156,10 @@ describe.each([
 
 function recoveryHarness(star: StarDatum, onRenderError: (error: Error) => void): RendererHarness {
   const renderer = Object.create(BabylonRenderer.prototype) as RendererHarness
+  renderer.universe = makeUniverse([star.s])
+  renderer.stars = [star]
+  renderer.focusedClusterId = null
+  renderer.applyModeDimensions = vi.fn()
   renderer.labelStrategy = new LabelStrategyCache([], [])
   renderer.destroyed = false
   renderer.selected = null

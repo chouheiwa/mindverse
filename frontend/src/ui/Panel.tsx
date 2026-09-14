@@ -1,6 +1,8 @@
+import { galaxyName } from '../starmap/galaxyNavigation'
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { probesForStar, questionsForStar, type UniverseIndex } from '../domain/universe'
 import type { ArticleProbe, Dark, Evidence, Meta, Star, Universe } from '../types'
+import { ExplorationPath } from './ExplorationPath'
 import './Panel.css'
 
 interface Props {
@@ -15,6 +17,7 @@ interface Props {
   onInspectProbe: (star: Star, probe: ArticleProbe, trigger: HTMLButtonElement) => void
   /** 当前选中行星对应内容的链接，用来在列表里标出「就是这一条」 */
   highlight?: string
+  explorationLevel?: 'star' | 'planet'
 }
 
 const ENTRY_LIMIT = 8
@@ -211,7 +214,7 @@ function EvidenceList({ items, highlight, fresh, personal }: {
   )
 }
 
-export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQuestion, onInspectProbe, shared, highlight }: Props) {
+export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQuestion, onInspectProbe, shared, highlight, explorationLevel = 'star' }: Props) {
   const personal = universe.meta.source !== 'seed'
   const cluster = star ? universe.clusters.find((c) => c.g === star.g) : null
   const dark: Dark | undefined = star ? universe.dark.find((d) => d.c === star.c) : undefined
@@ -229,6 +232,11 @@ export function Panel({ universe, index, star, onClose, onPickConcept, onEnterQu
   return (
     <aside className="pnl open">
       <button className="pnl-close" onClick={onClose} aria-label="关闭">×</button>
+      <div className="pnl-mobile-location">
+        <ExplorationPath level={explorationLevel} />
+        <p>{star.c}恒星系 · 选择下方的问题行星，进入地表</p>
+        <button type="button" onClick={onClose}>← {cluster ? `返回${galaxyName(cluster)}` : '返回宇宙全景'}</button>
+      </div>
       <div className="stagger">
           <div>
             <h2>{star.c}</h2>

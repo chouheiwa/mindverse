@@ -95,6 +95,17 @@ describe('从宇宙俯冲进来的编排', () => {
     }
   })
 
+  it('opposite approach directions follow a continuous arc instead of snapping halfway', () => {
+    let previous = slerpDirection([1, 0, 0], [-1, 0, 0], 0)
+    for (let step = 1; step <= 100; step += 1) {
+      const next = slerpDirection([1, 0, 0], [-1, 0, 0], step / 100)
+      expect(len(next)).toBeCloseTo(1, 9)
+      expect(len([next[0] - previous[0], next[1] - previous[1], next[2] - previous[2]])).toBeLessThan(0.04)
+      previous = next
+    }
+    expect(previous[0]).toBeCloseTo(-1, 9)
+  })
+
   it('退化输入不产生 NaN', () => {
     const degenerate = surfaceEntryPose({
       from: [0, 0, 0], fromTarget: [0, 0, 0], standing: [0, 0, 0], standingTarget: [0, 0, 0],

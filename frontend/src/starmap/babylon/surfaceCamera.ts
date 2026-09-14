@@ -243,3 +243,15 @@ export function landingSite(approach: Vec3, sun: Vec3): Vec3 {
     side, Math.sin(angle),
   ))
 }
+
+
+/** 保持面向小径的方位，让第一枚地面标记落在视线下方 10°，给旗面留出空间。 */
+export function frameSurfaceLandmark(pose: SurfacePose, eye: Vec3, landmark: Vec3): SurfacePose {
+  if (![...eye, ...landmark].every(Number.isFinite)) return pose
+  const { up, facing } = orthonormalize(pose.direction, pose.facing)
+  const offset: Vec3 = [landmark[0] - eye[0], landmark[1] - eye[1], landmark[2] - eye[2]]
+  const forward = offset[0] * facing[0] + offset[1] * facing[1] + offset[2] * facing[2]
+  if (forward <= 1e-9) return pose
+  const elevation = offset[0] * up[0] + offset[1] * up[1] + offset[2] * up[2]
+  return Object.freeze({ ...pose, pitch: clampPitch(Math.atan2(elevation, forward) + Math.PI / 18) })
+}

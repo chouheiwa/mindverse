@@ -1,3 +1,4 @@
+import type { SurfaceContactSampler } from './surfaceContact'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
@@ -96,6 +97,17 @@ export class PlanetSurfaceMarks {
       }
       this.nodes.push(node)
       this.anchors.set(placement.answerId, ground)
+    }
+  }
+
+  conformToTerrain(sample: SurfaceContactSampler): void {
+    if (this.disposed) return
+    for (const node of this.nodes) {
+      const contact = sample(node.position.normalizeToNew())
+      if (!contact) continue
+      node.position.copyFrom(contact.point)
+      const answerId = node.name.slice('surface-mark:'.length)
+      this.anchors.set(answerId, contact.point.clone())
     }
   }
 

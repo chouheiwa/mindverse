@@ -1,3 +1,4 @@
+import { installPlanetRenderFixture } from './helpers/planetFixtureRoute'
 import { expect, test, type Page } from '@playwright/test'
 import { classifyWebGlBackend } from '../src/starmap/e2eDiagnostics'
 import { readFreshLuminanceProfile, readFreshPixelStats } from '../src/starmap/renderReadback'
@@ -130,7 +131,32 @@ async function openStar(page: Page) {
   void target
   const scene = (await snapshot(page))!.scene
   await canvas(page).click({ position: { x: scene.firstStarX!, y: scene.firstStarY! }, force: true })
-  await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: '星系内的恒星' })).toBeVisible()
+  await page.getByRole('button', { name: /Alpha 进入恒星系/ }).click()
+  await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeVisible()
+}
+
+for (const mobile of [false, true]) {
+  test(`galaxy-first navigation shows multiple member stars ${mobile ? 'mobile' : 'desktop'}`, async ({ page }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 })
+    await openBabylonUniverse(page, '', 'reduce', { modeLayers: true })
+    await expectReady(page)
+    const galaxies = page.getByRole('complementary', { name: '选择星系' })
+    await expect(galaxies.getByRole('button')).toHaveCount(2)
+    await galaxies.getByRole('button').first().click()
+    const members = page.getByRole('complementary', { name: '星系内的恒星' })
+    await expect(members.getByRole('button')).toHaveCount(2)
+    await expect(members.getByRole('button', { name: /Beta/ })).toBeVisible()
+    expect((await snapshot(page))!.stellar.focusedStarKey).toBeNull()
+    await page.screenshot({ path: `/tmp/mindverse-galaxy-${mobile ? 'mobile' : 'desktop'}.png` })
+    await members.getByRole('button', { name: /Alpha/ }).click()
+    await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeVisible()
+    const back = page.getByRole('button', { name: /返回.*星系/ })
+    await (mobile ? back.last() : back.first()).click()
+    await expect(members).toBeVisible()
+    await page.getByRole('button', { name: '← 返回宇宙全景', exact: true }).click()
+    await expect(galaxies).toBeVisible()
+  })
 }
 
 async function firstProjectedStar(page: Page) {
@@ -163,6 +189,8 @@ async function dispatchPointer(
 test('stellar halo hover, edge click and camera approach progressively reveal the system', async ({ page }) => {
   await openBabylonUniverse(page, '', 'no-preference')
   await expectReady(page)
+  await page.getByRole('complementary', { name: '选择星系' }).getByRole('button').first().click()
+  await page.waitForTimeout(750)
   const star = await firstProjectedStar(page)
   const haloEdge = {
     x: star.halo.x + star.halo.width - 1,
@@ -207,6 +235,71 @@ test('dragging more than six pixels rotates without selecting a star', async ({ 
 
 type HierarchyExitInput = 'blank-click' | 'outward-wheel' | 'escape'
 
+for (const width of [1280, 390]) {
+  test(`surface answer guidance works at ${width}px without searching the terrain`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await openBabylonUniverse(page)
+    await expectReady(page)
+    await openStar(page)
+    await page.locator('.pnl').getByRole('button', { name: '进入问题行星' }).first().click()
+    const readAnswers = page.getByRole('button', { name: /查看回答/ })
+    await expect(readAnswers).toBeInViewport()
+    await readAnswers.click()
+    await expect(page.getByRole('tab', { name: '全部回答' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('link', { name: /查看原回答/ }).first()).toBeVisible()
+    await expect(page.getByRole('region', { name: '问题资料卡' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /返回地表/ })).toBeInViewport()
+    await page.getByRole('button', { name: /返回地表/ }).click()
+    await expect(readAnswers).toBeFocused()
+    await expect(readAnswers).toBeInViewport()
+    await page.getByRole('button', { name: '返回问题航道' }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+  })
+}
+
+for (const level of ['universe', 'star', 'planet'] as const) {
+  test(`${level} allows a full vertical orbit across both poles`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await openBabylonUniverse(page)
+    await expectReady(page)
+    if (level !== 'universe') await openStar(page)
+    if (level === 'planet') {
+      await page.getByRole('button', { name: /固定地层问题/ }).click()
+      await expect.poll(async () => (await snapshot(page))?.lifecycle.focusState).toBe('focused')
+    }
+    let previous = (await snapshot(page))!.scene.cameraBeta!
+    let rotation = 0
+    let crossedPole = false
+    for (let drag = 0; drag < 24 && Math.abs(rotation) < 2 * Math.PI + 0.2; drag += 1) {
+      // Clear of the lane, attached card and sidebar; exercise actual pointer input.
+      await page.mouse.move(430, 680)
+      await page.mouse.down()
+      await page.mouse.move(430, 380, { steps: 4 })
+      await page.mouse.up()
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      const current = (await snapshot(page))!.scene.cameraBeta!
+      expect(Number.isFinite(current)).toBe(true)
+      rotation += Math.atan2(Math.sin(current - previous), Math.cos(current - previous))
+      crossedPole ||= current < -0.1
+      previous = current
+    }
+    expect(crossedPole).toBe(true)
+    expect(Math.abs(rotation)).toBeGreaterThan(2 * Math.PI)
+    expect((await snapshot(page))!.renderReady).toBe(true)
+    if (level === 'planet') expect((await snapshot(page))!.planet.selectedQuestionId).toBe('question:7')
+    if (level !== 'universe') {
+      await canvas(page).focus()
+      await page.keyboard.press('Escape')
+      if (level === 'planet') {
+        await expect.poll(async () => (await snapshot(page))!.planet.selectedQuestionId).toBeNull()
+        await page.keyboard.press('Escape')
+      }
+      await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBeNull()
+      expect(Number.isFinite((await snapshot(page))!.scene.cameraBeta)).toBe(true)
+    }
+  })
+}
+
 async function applyHierarchyExit(page: Page, input: HierarchyExitInput, exited: () => Promise<boolean>) {
   if (input === 'blank-click') {
     await canvas(page).click({ position: { x: 3, y: 3 }, force: true })
@@ -220,12 +313,13 @@ async function applyHierarchyExit(page: Page, input: HierarchyExitInput, exited:
 }
 
 for (const input of ['blank-click', 'outward-wheel', 'escape'] as const) {
-  test(`${input} exits planet focus to its star, then exits the star to panorama`, async ({ page }) => {
+  test(`${input} exits planet focus to its star, galaxy, then panorama`, async ({ page }) => {
     await openBabylonUniverse(page)
     await expectReady(page)
     const star = await firstProjectedStar(page)
     const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
     await canvas(page).click({ position: center, force: true })
+    await page.getByRole('button', { name: /Alpha 进入恒星系/ }).click()
     await expect.poll(async () => (await snapshot(page))!.stellar.focusedStarKey).toBe(star.starKey)
     await page.getByRole('button', { name: /固定地层问题/ }).click()
     await expect.poll(async () => (await snapshot(page))!.projectedBounds.selectedPlanet).not.toBeNull()
@@ -239,6 +333,8 @@ for (const input of ['blank-click', 'outward-wheel', 'escape'] as const) {
     const panorama = (await snapshot(page))!
     expect(panorama.projectedBounds.selectedPlanet).toBeNull()
     expect(panorama.stellar.focusedStarKey).toBeNull()
+    await expect(page.getByRole('complementary', { name: '星系内的恒星' })).toBeVisible()
+    await applyHierarchyExit(page, input, async () => page.getByRole('complementary', { name: '选择星系' }).isVisible())
   })
 }
 
@@ -265,6 +361,8 @@ for (const cancellation of ['pointercancel', 'lostpointercapture', 'second-touch
 test('Reduced Motion reaches the same stable focused state without a long flight', async ({ page }) => {
   await openBabylonUniverse(page, '', 'no-preference')
   await expectReady(page)
+  await page.getByRole('complementary', { name: '选择星系' }).getByRole('button').first().click()
+  await page.waitForTimeout(750)
   const star = await firstProjectedStar(page)
   const center = { x: star.core.x + star.core.width / 2, y: star.core.y + star.core.height / 2 }
   await canvas(page).click({ position: center, force: true })
@@ -694,6 +792,26 @@ test('the answer strata is a lit, layered world rather than a black void', async
   expect(crossings).toBeGreaterThanOrEqual(3)
 })
 
+test('strata keeps the question context and reads real crystals on desktop and mobile', async ({ page }, testInfo) => {
+  await openBabylonUniverse(page)
+  await expectReady(page)
+  await openStar(page)
+  await openQuestionWorkspace(page, '固定地层问题')
+  await enterStrata(page, '回溯地层')
+  await expect(page.getByRole('heading', { name: '固定地层问题', exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: /星球剖面/ })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('strata-desktop.png') })
+  await page.getByRole('button', { name: /定位晶体并阅读/ }).first().click()
+  await expect(page.getByRole('button', { name: '关闭答案证据板' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭答案证据板' }).click()
+  await expect(page.getByRole('button', { name: /定位晶体并阅读/ }).first()).toBeEnabled()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: testInfo.outputPath('strata-mobile.png') })
+  await expect(page.getByRole('button', { name: '↓ 下潜' })).toBeVisible()
+  await page.getByRole('button', { name: '返回行星表面' }).click()
+  await expect(page.getByRole('button', { name: '打开答案地层' })).toBeVisible()
+})
+
 test('cluster structure rings leave the frame as the camera zooms in from panorama', async ({ page }) => {
   // 基础语料只有一颗坐在质心上的星，半径 0 画不出环 —— 必须用 500 星的密集语料。
   await openBabylonUniverse(page, '', 'reduce', { denseStars: true })
@@ -784,7 +902,7 @@ test('at planet focus a drag walks you around the planet, and the planet turns o
   expect(after.cameraBeta!).toBeLessThan(Math.PI - 0.07)
 })
 
-test('entering a question planet is a descent you can watch, not a freeze then a cut', async ({ page }) => {
+test('entering a question planet is a descent you can watch, not a freeze then a cut', async ({ page }, testInfo) => {
   // 实测（Metal 真机，rAF 采样 472 帧）：修复前进入那一帧 2086.5ms，其余 <= 14.2ms —— 同一帧
   // 建了 303 个地形块。墙钟在卡顿期间照走，卡完之后 8 次渲染就把 1100ms 的俯冲放完。
   // 用户看到的是「卡一下，然后直接切过去」。这条门禁钉住两件事：单帧不再一次建一大批块，
@@ -795,6 +913,7 @@ test('entering a question planet is a descent you can watch, not a freeze then a
   await page.getByRole('button', { name: /固定地层问题/ }).click()
   await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
 
+  let capturedStage = 0
   let builtPeak = 0
   const descents: number[] = []
   let started = false
@@ -804,9 +923,13 @@ test('entering a question planet is a descent you can watch, not a freeze then a
     builtPeak = Math.max(builtPeak, stage.builtThisUpdate)
     if (stage.descentStarted) started = true
     if (stage.phase === 'descending') descents.push(stage.descent)
+    if (process.env.MINDVERSE_CAPTURE_DESCENT && stage.descent > [0.2, 0.5, 0.8][capturedStage]!) {
+      await page.screenshot({ path: testInfo.outputPath(`descent-${capturedStage++}.png`) })
+    }
     return stage.phase
   }, { timeout: 60_000, intervals: [40] }).toBe('walking')
 
+  if (process.env.MINDVERSE_CAPTURE_DESCENT) await page.screenshot({ path: testInfo.outputPath('landed.png') })
   const distinct = [...new Set(descents)]
   process.stdout.write(`[descent] builtPeak ${builtPeak} distinct ${distinct.length} samples ${descents.length}\n`)
   expect(started).toBe(true)
@@ -819,6 +942,48 @@ test('entering a question planet is a descent you can watch, not a freeze then a
     expect(descents[index]!).toBeGreaterThanOrEqual(descents[index - 1]!)
   }
 })
+
+for (const reducedMotion of ['reduce', 'no-preference'] as const) {
+  test(`returning from a planet surface restores orbit framing on repeated visits (${reducedMotion})`, async ({ page }, testInfo) => {
+    await openBabylonUniverse(page, '', reducedMotion)
+    await expectReady(page)
+    await openStar(page)
+    await expect.poll(async () => (await snapshot(page))!.stellar.visibleQuestionPlanets).toBeGreaterThan(0)
+    const orbitPlanetCount = (await snapshot(page))!.stellar.visibleQuestionPlanets
+
+    for (let visit = 0; visit < 2; visit += 1) {
+      await openQuestionWorkspace(page, '固定地层问题')
+      await backToWorkspace(page, '固定地层问题')
+      await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase).toBe('walking')
+      const landed = (await snapshot(page))!
+      await page.getByRole('button', { name: '返回问题航道' }).click()
+      await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase).toBe('idle')
+      await expect.poll(async () => {
+        const bounds = (await snapshot(page))?.projectedBounds.selectedPlanet
+        return Boolean(bounds && bounds.width > 0 && bounds.height > 0
+          && bounds.x >= 0 && bounds.y >= 0
+          && bounds.x + bounds.width <= 1280 && bounds.y + bounds.height <= 720)
+      }).toBe(true)
+      const restoredFrame = (await snapshot(page))!.resources.actualRenderCount
+      if (typeof restoredFrame !== 'number') throw new Error('Missing render count diagnostics')
+      await expect.poll(async () => (await snapshot(page))!.resources.actualRenderCount).toBeGreaterThan(restoredFrame + 5)
+      const returned = (await snapshot(page))!
+      expect(returned.stellar.visibleQuestionPlanets).toBe(orbitPlanetCount)
+      expect(returned.scene.cameraUp).toEqual([0, 1, 0])
+      expect(returned.scene.cameraDistance).toBeGreaterThan(landed.resources.surfaceStage!.groundRadius * 2)
+      expect(returned.scene.cameraBeta!).toBeGreaterThan(0.07)
+      expect(returned.scene.cameraBeta!).toBeLessThan(Math.PI - 0.07)
+      const planet = returned.projectedBounds.selectedPlanet!
+      expect(planet).toBeTruthy()
+      expect(planet.x).toBeGreaterThan(0)
+      expect(planet.x).toBeLessThan(1280)
+      expect(planet.y).toBeGreaterThan(0)
+      expect(planet.y + planet.height).toBeLessThanOrEqual(720)
+      expect(planet.x + planet.width).toBeLessThanOrEqual(1280)
+      await page.screenshot({ path: testInfo.outputPath(`orbit-return-${visit}.png`) })
+    }
+  })
+}
 
 test('the planet stage has no universe left in it', async ({ page }) => {
   // 地表材质是自定义着色器：编译失败时 Babylon 只在控制台报错，画面静默全黑。
@@ -885,14 +1050,21 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '当前表层问题' })).toBeVisible()
   await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase, { timeout: 30_000 }).toBe('walking')
   await expect.poll(async () => (await snapshot(page))?.planet.selectedQuestionId).toBe('question:8')
-  // 回到原来那颗，后面的断言接着用它。落地朝向它，但投影要等到落地后的第一帧。
+  // 落地先看地面标记；邻星较高时用 E 抬头，再点击返回。
   let back: { x: number; y: number } | null = null
-  await expect.poll(async () => {
+  const findReturnBeacon = async () => {
     const list = (await snapshot(page))?.projectedBounds.surfaceBeacons ?? []
-    process.stdout.write(`[surface] beacons@8 ${JSON.stringify(list)}\n`)
-    back = list.find(({ label }) => label === '固定地层问题') ?? null
+    back = list.find(({ label, x, y }) => label === '固定地层问题' && x > 80 && x < 1200 && y > 80 && y < 640) ?? null
     return back !== null
-  }, { timeout: 10_000, intervals: [200] }).toBe(true)
+  }
+  if (!await findReturnBeacon()) {
+    await page.keyboard.down('e')
+    try {
+      await expect.poll(findReturnBeacon, { timeout: 5_000, intervals: [20] }).toBe(true)
+    } finally {
+      await page.keyboard.up('e')
+    }
+  }
   await page.mouse.click(back!.x, back!.y)
   await expect(page.getByRole('heading', { name: '固定地层问题' })).toBeVisible()
   await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.phase, { timeout: 30_000 }).toBe('walking')
@@ -931,6 +1103,19 @@ test('the planet stage has no universe left in it', async ({ page }) => {
   // 行星仍然选中（行星聚焦阶段背景增益按设计仍是 0），但行星本身必须重新画出来。
   await expect.poll(async () => (await snapshot(page))?.stellar.visibleQuestionPlanets ?? 0).toBeGreaterThan(0)
   await expect.poll(async () => (await snapshot(page))?.resources.surfaceStage?.chunkCount).toBe(0)
+  // The returned planet must be visible in the viewport, not merely enabled in the scene.
+  await expect.poll(async () => {
+    const state = await snapshot(page)
+    const bounds = state?.projectedBounds.selectedPlanet
+    if (!bounds) return false
+    const viewport = page.viewportSize()!
+    return bounds.width > 0 && bounds.height > 0
+      && bounds.x >= 0 && bounds.y >= 0
+      && bounds.x + bounds.width <= viewport.width
+      && bounds.y + bounds.height <= viewport.height
+  }, { timeout: 10_000 }).toBe(true)
+
+
 })
 
 
@@ -1026,4 +1211,98 @@ test('a near miss on a question planet selects it instead of ejecting you to the
   const after = (await snapshot(page))!
   expect(after.stellar.focusedStarKey).not.toBeNull()
   expect(after.planet.selectedQuestionId).toBe('question:7')
+})
+
+
+test('an ice planet keeps a cold snow surface after landing', async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on('console', message => {
+    if (message.type() === 'error' && /compiling effect|compile effect/i.test(message.text())) errors.push(message.text())
+  })
+  await installPlanetRenderFixture(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/universe.html?e2eQuality=low')
+  await expectReady(page)
+  await openStar(page)
+  await page.getByRole('button', { name: /Ice Gate Planet/ }).click()
+  await page.screenshot({ path: testInfo.outputPath('ice-orbit.png') })
+  await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
+  await expect.poll(async () => {
+    const stage = (await snapshot(page))?.resources.surfaceStage
+    return stage?.phase === 'walking' && stage.worldReady
+  }, { timeout: 30_000 }).toBe(true)
+  // Look down at the snow so a blue sky alone cannot satisfy the colour check.
+  await canvas(page).hover({ position: { x: 600, y: 250 }, force: true })
+  await page.mouse.down()
+  await page.mouse.move(600, 620, { steps: 16 })
+  await page.mouse.up()
+  await page.screenshot({ path: testInfo.outputPath('ice-landed.png') })
+  const tones = await canvas(page).evaluate((node: HTMLCanvasElement) => new Promise<{ warm: number; cold: number }>(resolve => {
+    requestAnimationFrame(() => {
+      const gl = node.getContext('webgl2') ?? node.getContext('webgl')
+      if (!gl) throw new Error('missing WebGL context')
+      const pixels = new Uint8Array(node.width * node.height * 4)
+      gl.finish()
+      gl.readPixels(0, 0, node.width, node.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+      let warm = 0
+      let cold = 0
+      // Bottom third is ground; canvas readback starts at the bottom left.
+      for (let i = 0; i < pixels.length / 3; i += 4) {
+        const r = pixels[i]!, g = pixels[i + 1]!, b = pixels[i + 2]!
+        if (r > 50 && r > b * 1.25 && g > b * 1.1) warm += 1
+        if (b > 60 && b >= r && g >= r * 0.9) cold += 1
+      }
+      resolve({ warm, cold })
+    })
+  }))
+  expect(tones.cold).toBeGreaterThan(1000)
+  expect(tones.cold).toBeGreaterThan(tones.warm * 4)
+  expect(errors).toEqual([])
+})
+
+
+test('surface sign keeps a long destination on its board and remains clickable', async ({ page }, testInfo) => {
+  const fixture = await installStrataFixture(page)
+  const title = '程序员通过自身努力实现自由职业的可能性到底有多大？需要怎样的准备和实践？'
+  const next = fixture.generation.universe?.questions?.find(question => question.id === 'question:8')
+  if (!next) throw new Error('missing next station fixture')
+  next.title = title
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/universe.html?e2eQuality=low')
+  await expectReady(page)
+  await openStar(page)
+  await page.getByRole('button', { name: /固定地层问题/ }).click()
+  await page.getByLabel('问题行星入口', { exact: true }).getByRole('button', { name: '进入问题行星' }).click()
+  await expect.poll(async () => {
+    const stage = (await snapshot(page))?.resources.surfaceStage
+    return stage?.phase === 'walking' && stage.worldReady
+  }, { timeout: 30_000 }).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('surface-sign-long-title.png') })
+  const sign = (await snapshot(page))!.projectedBounds.surfaceSignpost
+  expect(sign).not.toBeNull()
+  const ink = await canvas(page).evaluate((node: HTMLCanvasElement, center) => new Promise<{ dark: number; light: number; total: number }>(resolve => {
+    requestAnimationFrame(() => {
+      const gl = node.getContext('webgl2') ?? node.getContext('webgl')
+      if (!gl) throw new Error('missing WebGL context')
+      const rect = node.getBoundingClientRect()
+      const sx = node.width / rect.width, sy = node.height / rect.height
+      const width = Math.round(210 * sx), height = Math.round(54 * sy)
+      const pixels = new Uint8Array(width * height * 4)
+      gl.finish()
+      gl.readPixels(Math.round((center!.x - 105) * sx), Math.round(node.height - (center!.y + 27) * sy),
+        width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+      let dark = 0, light = 0
+      for (let i = 0; i < pixels.length; i += 4) {
+        const value = (pixels[i]! + pixels[i + 1]! + pixels[i + 2]!) / 3
+        if (value < 100) dark += 1
+        if (value > 140) light += 1
+      }
+      resolve({ dark, light, total: width * height })
+    })
+  }), sign)
+  expect(ink.dark).toBeGreaterThan(30)
+  expect(ink.dark).toBeLessThan(ink.total * 0.35)
+  expect(ink.light).toBeGreaterThan(ink.total * 0.4)
+  await page.mouse.click(sign!.x, sign!.y)
+  await expect(page.getByRole('heading', { name: title, exact: true }).first()).toBeVisible()
 })

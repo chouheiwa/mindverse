@@ -1,3 +1,5 @@
+import { describePlanetAppearance } from './planetAppearance'
+import { rotateTerrainField } from './rotatedTerrain'
 import { Engine } from '@babylonjs/core/Engines/engine.js'
 import '@babylonjs/core/Culling/ray.js'
 import { Scene } from '@babylonjs/core/scene.js'
@@ -37,7 +39,7 @@ import {
   advanceDescent, descentEase, descentProgress, IDLE_DESCENT_CLOCK, type DescentClock,
 } from './surfaceDescent'
 import { layoutSurfaceTrail } from './surfaceTrail'
-import { surfaceEntryNearPlane, surfaceEntryPose, surfaceEntryPresentation } from './surfaceEntry'
+import { slerpDirection, surfaceEntryNearPlane, surfaceEntryPose, surfaceEntryPresentation } from './surfaceEntry'
 import { formatTraceMonth } from '../../domain/questionProvenance'
 import type { SurfaceLabel } from './labelLayer'
 import { layoutSurfaceMarks, surfaceMarksFor } from './surfaceMarks'
@@ -47,11 +49,12 @@ import {
   advanceSurfaceStage, IDLE_SURFACE_STAGE, surfaceCameraOwned, surfaceSkyVisible, surfaceWalkEnabled,
   surfaceWorldVisible, type SurfaceStageState,
 } from './surfaceStage'
-import { landingSite, standAt, surfaceFrame, surfaceNearPlane, walkSurface, type SurfacePose } from './surfaceCamera'
+import { frameSurfaceLandmark, landingSite, standAt, surfaceFrame, surfaceNearPlane, walkSurface, type SurfacePose } from './surfaceCamera'
 import { clusterRingOpacity } from '../clusterRingVisibility'
 import { forcedE2EQuality, installE2EDiagnostics, recordE2EFrame, removeE2EDiagnostics, type RenderSnapshot, type StellarDiagnosticsSnapshot } from '../e2eDiagnostics'
 import { starData, starWorldPosition, type StarDatum } from '../gl/starData'
 import { starIdentity } from '../starIdentity'
+import { galaxyFrame, pickGalaxy } from '../galaxyNavigation'
 import { renderDim, resolveInteractiveStar, starInteractionEligible } from '../starVisibility'
 import { NON_FOCUSED_OPACITY } from '../focusEmphasis'
 import { orbitPeriodFor, orbitPlane, systemOrbit } from '../orbitGeometry'
@@ -268,11 +271,9 @@ const UNIVERSE_LOWER_RADIUS_LIMIT = 1.2
 /** 旗与石堆的屏幕空间命中半径与上抬量（像素）。 */
 /** 有小径时标记扇面整体让开的角度，避免第一面旗插在路牌上又被画面边缘切掉。 */
 const MARK_FAN_OFFSET_WITH_TRAIL = Math.PI * 24 / 180
-const SURFACE_MARK_PICK_RADIUS_PX = 22
+const SURFACE_MARK_PICK_RADIUS_PX = 32
 const SURFACE_MARK_PICK_LIFT_PX = 8
 const SURFACE_BEACON_PICK_RADIUS_PX = 26
-/** 绕行星转动时俯仰离极点留的余量，避免上向量翻面。 */
-const PLANET_ORBIT_BETA_MARGIN = 0.08
 
 export class BabylonRenderer implements MindverseRenderer {
   private readonly runtime: BabylonRuntime
@@ -320,6 +321,9 @@ export class BabylonRenderer implements MindverseRenderer {
   private selected: PlanetDatum | null = null
   private selectedVisual: PlanetVisualRecord | null = null
   private focusedStar: StarDatum | null = null
+  private focusedClusterId: number | null = null
+  private clusterRadius = 30
+  private clusterFlight: { from: Vector3; to: Vector3; fromRadius: number; toRadius: number; startedAt: number } | null = null
   private mode: Mode = 'all'
   private wormIdx = 0
   private readonly interactionByDatum = new Map<StarDatum, boolean>()
@@ -384,7 +388,10 @@ export class BabylonRenderer implements MindverseRenderer {
   private surfaceDisplacement = 0
   private surfaceField: import('./terrainField').PlanetTerrainField | null = null
   /** 俯冲的起点机位与起飞时刻。落地后不再使用。 */
-  private surfaceDescent: Readonly<{ from: Vector3; fromTarget: Vector3 }> | null = null
+  private surfaceReturnPose: Readonly<{
+    alpha: number; beta: number; radius: number; target: Vector3; centre: Vector3
+  }> | null = null
+  private surfaceDescent: Readonly<{ from: Vector3; fromTarget: Vector3; fromUp: Vector3 }> | null = null
   /** 俯冲时钟：等地表建够才起步，按帧推进。 */
   private descentClock: DescentClock = IDLE_DESCENT_CLOCK
   /** 上一帧的真实间隔，俯冲按它推进（墙钟会把卡顿算进动画）。 */
@@ -482,6 +489,10 @@ export class BabylonRenderer implements MindverseRenderer {
       const opening = arcRotateFromYawPitch(THREE_PANORAMA_YAW, THREE_PANORAMA_PITCH)
       const camera = new ArcRotateCamera('mindverse-camera', opening.alpha, opening.beta, 30, Vector3.Zero(), scene)
       this.camera = camera
+      // 太空没有固定的上下边界：允许越过两极，交由 ArcRotateCamera 连续处理上向量。
+      camera.lowerBetaLimit = null
+      camera.upperBetaLimit = null
+      camera.allowUpsideDown = true
       camera.fov = THREE_VERTICAL_FOV
       camera.minZ = UNIVERSE_CAMERA_MIN_Z
       camera.lowerRadiusLimit = UNIVERSE_LOWER_RADIUS_LIMIT
@@ -510,10 +521,9 @@ export class BabylonRenderer implements MindverseRenderer {
         orbit: (yawDelta, pitchDelta) => {
           this.diagnosticOrbitCalls += 1
           if (!Number.isFinite(yawDelta) || !Number.isFinite(pitchDelta)) return
-          camera.alpha += yawDelta
-          // 夹住俯仰：贴到极点时 ArcRotateCamera 的上向量会翻面，画面猛地一跳。
-          camera.beta = Math.min(Math.PI - PLANET_ORBIT_BETA_MARGIN,
-            Math.max(PLANET_ORBIT_BETA_MARGIN, camera.beta + pitchDelta))
+          // 与原生指针控制一致：越过极点后，水平拖动仍沿屏幕方向响应。
+          camera.alpha += Math.sin(camera.beta) < 0 ? -yawDelta : yawDelta
+          camera.beta += pitchDelta
         },
         stopInertia: () => {
           camera.inertialAlphaOffset = 0
@@ -714,6 +724,7 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.mode === mode && this.wormIdx === wormIdx) return
     this.mode = mode
     this.wormIdx = wormIdx
+    if (mode !== 'all' && this.focusedClusterId != null) this.resetView()
     this.applyModeDimensions()
     if (this.focusedStar && !this.isInteractive(this.focusedStar)) this.resetView()
     if (this.hoverKey && !this.isKeyInteractive(this.hoverKey)) this.clearPointerFeedback()
@@ -724,10 +735,47 @@ export class BabylonRenderer implements MindverseRenderer {
     if (this.destroyed || !this.universeVisible || this.strataTransition.phase !== null) return null
     const star = resolveInteractiveStar(this.stars, starKey, this.mode, this.universe, this.wormIdx)
     if (!star) return null
+    this.clusterFlight = null
+    if (this.universe.clusters.some((cluster) => cluster.g === star.s.g)) this.focusedClusterId = star.s.g
     if (this.focusedStar === star && !this.selected) return star.s
     if (!this.applyStarFocus(star)) return null
     this.callbacks.onPick?.(star.s)
     return star.s
+  }
+
+  focusCluster(clusterId: number): boolean {
+    if (this.destroyed || !this.universeVisible || this.strataTransition.phase !== null) return false
+    const cluster = this.universe.clusters.find((item) => item.g === clusterId)
+    if (!cluster) return false
+    const rect = this.canvas.getBoundingClientRect()
+    const frame = galaxyFrame(cluster, this.stars.map(({ s }) => s), this.camera.fov,
+      Math.max(300, rect.width - (rect.width > 760 ? 400 : 0)) / Math.max(1, rect.height))
+    if (!frame.members.length) return false
+    const from = this.camera.target.clone()
+    const fromRadius = this.camera.radius
+    this.cancelFlight('reset')
+    this.clearPlanet()
+    this.focusedStar = null
+    this.focusedClusterId = clusterId
+    this.clusterRadius = frame.radius
+    this.releaseMaterializedPlanets()
+    this.starLayer.setFocus(null, null)
+    this.applyLayerFocus(null)
+    this.rings?.setFocus(clusterId)
+    this.labelStrategy.setCluster(clusterId)
+    this.applyModeDimensions()
+    const to = Vector3.FromArray(frame.center)
+    if (this.reducedMotion) {
+      this.camera.setTarget(to, false, false, true)
+      this.camera.radius = frame.radius
+    } else {
+      this.camera.setTarget(from, false, false, true)
+      this.camera.radius = fromRadius
+      this.clusterFlight = { from, to, fromRadius, toRadius: frame.radius, startedAt: performance.now() }
+    }
+    this.syncOrbitPresentation()
+    this.callbacks.onPickCluster?.(clusterId)
+    return true
   }
 
   resetView(): void {
@@ -735,12 +783,15 @@ export class BabylonRenderer implements MindverseRenderer {
     this.cancelFlight('reset')
     this.clearPlanet()
     this.focusedStar = null
+    this.focusedClusterId = null
     this.releaseMaterializedPlanets()
     this.starLayer.setFocus(null, null)
     this.applyLayerFocus(null)
     this.camera.setTarget(this.overviewTarget)
     this.camera.radius = this.overviewRadius
+    this.applyModeDimensions()
     this.syncOrbitPresentation()
+    this.callbacks.onPickCluster?.(null)
   }
 
   clearPlanet(): void {
@@ -1455,7 +1506,7 @@ export class BabylonRenderer implements MindverseRenderer {
       // 地表世界在场时，选中的那颗行星在轨道视角里的 shader 球要藏起来：它和地形是
       // 同一颗星球，重叠会打架。
       visual.visual.setVisible(planet.visible
-        && !(surfaceWorldVisible(this.surfaceStage) && visual === this.selectedVisual))
+        && !(surfaceWorldVisible(this.surfaceStage) && this.surfaceWorld?.hasVisibleTerrain() && visual === this.selectedVisual))
       for (const mesh of visual.visual.meshes) mesh.isPickable = planet.pickable && !mesh.name.includes(':atmosphere')
     }
   }
@@ -1704,6 +1755,7 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private updatePlanetPosition(visual: PlanetVisualRecord, elapsedMs: number): void {
+    if (visual === this.selectedVisual && surfaceWorldVisible(this.surfaceStage)) return
     const datum = visual.datum
     // 恒星位置永远用活时钟（它还在绕星群中心走、上下浮动，镜头跟着它）；公转按节奏：
     // 全景全速、恒星系慢速、选中行星时停住。换节奏以当前时刻为锚点，行星不会瞬移。
@@ -1849,9 +1901,10 @@ export class BabylonRenderer implements MindverseRenderer {
   enterPlanetSurface(questionId: string, options: PlanetSurfaceEntry = {}): boolean {
     if (this.destroyed || !this.selectedVisual) return false
     if (this.selectedVisual.datum.question.id !== questionId) return false
-    const { field, displacement } = createPlanetTerrainSource(
+    const { field: localField, displacement } = createPlanetTerrainSource(
       this.selectedVisual.descriptor, this.quality,
     )
+    const field = rotateTerrainField(localField, this.selectedVisual.visual.activeMesh.rotationQuaternion ?? Quaternion.Identity())
     const centre = this.selectedVisual.visual.activeMesh.position
     const camera = this.camera.globalPosition
     const away = new Vector3(camera.x - centre.x, camera.y - centre.y, camera.z - centre.z)
@@ -1879,6 +1932,8 @@ export class BabylonRenderer implements MindverseRenderer {
       radius: this.surfaceRadius,
       thermal: this.selectedVisual.descriptor.thermal,
       seed: this.selectedVisual.descriptor.seed,
+      snowLine: describePlanetAppearance(this.selectedVisual.descriptor).snowLine,
+      displacement,
     })
     this.surfaceWorld = new PlanetSurfaceWorld(this.scene, root, {
       material: this.surfaceGround.material,
@@ -1946,6 +2001,7 @@ export class BabylonRenderer implements MindverseRenderer {
       nextBearing = [target.x - centre.x, target.y - centre.y, target.z - centre.z]
       this.surfaceTrail = new PlanetSurfaceTrail(this.scene, furniture, {
         field, radius: this.surfaceRadius, displacement, layout: layoutSurfaceTrail(landing, nextBearing),
+        label: { date: formatTraceMonth(next.at), title: next.title },
       })
       this.surfaceSignpost = {
         questionId: next.questionId, starId: next.starId,
@@ -1968,15 +2024,29 @@ export class BabylonRenderer implements MindverseRenderer {
         this.surfaceTrail ? MARK_FAN_OFFSET_WITH_TRAIL : 0,
       ),
     })
+    const firstMarkId = this.surfaceMarks.answerIds()[0]
+    const firstMark = firstMarkId ? this.surfaceMarks.anchorOf(firstMarkId) : null
+    if (firstMark) {
+      const eye = surfaceFrame(this.surfacePose, field, this.surfaceRadius, displacement).position
+      this.surfacePose = frameSurfaceLandmark(this.surfacePose, eye, [firstMark.x, firstMark.y, firstMark.z])
+    }
     this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
       kind: 'enter', questionId, landing,
     })
     // 俯冲的起点就是此刻的机位 —— 从你飞过来的地方一路落下去，不做瞬移。
     // 时钟归零：它要等地表建够才起步，并且按帧推进而不是墙钟。
+    // 独立保存轨道机位：俯冲起点会在落地时清掉，不能用它承担返航状态。
+    if (!this.surfaceReturnPose) {
+      this.surfaceReturnPose = {
+        alpha: this.camera.alpha, beta: this.camera.beta, radius: this.camera.radius,
+        target: this.camera.target.clone(), centre: centre.clone(),
+      }
+    }
     this.descentClock = IDLE_DESCENT_CLOCK
     this.surfaceDescent = Object.freeze({
       from: this.camera.globalPosition.clone(),
       fromTarget: this.camera.target.clone(),
+      fromUp: this.camera.upVector.clone(),
     })
     // 着色器提前编译：否则它会和第一批地块挤在同一帧。best-effort，失败只是回到原样。
     void this.surfaceGround?.warm()
@@ -1987,9 +2057,29 @@ export class BabylonRenderer implements MindverseRenderer {
   /** 离开地表回到轨道。俯冲途中也必须能退，否则会卡在半空。 */
   exitPlanetSurface(): void {
     if (this.surfaceStage.phase === 'idle') return
+    const orbit = this.surfaceReturnPose
+    this.surfaceReturnPose = null
+    this.surfaceDescent = null
+    this.descentClock = IDLE_DESCENT_CLOCK
     this.surfaceStage = advanceSurfaceStage(this.surfaceStage, { kind: 'exit' })
     this.disposeSurfaceWorld()
     this.applySurfaceVisibility()
+    // 地表隐藏过轨道球；退出时同步恢复，不能只恢复相机。
+    this.syncOrbitPresentation()
+    if (orbit) {
+      // 先恢复世界 up，再恢复球坐标；地表法线下的 alpha/beta 不能沿用到轨道。
+      const centre = this.selectedVisual?.visual.activeMesh.position ?? orbit.centre
+      this.camera.setTarget(orbit.target.add(centre.subtract(orbit.centre)))
+      this.camera.alpha = orbit.alpha
+      this.camera.beta = orbit.beta
+      this.camera.radius = orbit.radius
+      this.camera.inertialAlphaOffset = 0
+      this.camera.inertialBetaOffset = 0
+      this.camera.inertialRadiusOffset = 0
+      this.camera.inertialPanningX = 0
+      this.camera.inertialPanningY = 0
+      this.camera.getViewMatrix(true)
+    }
   }
 
   /** 行走输入。只有站稳之后才接受 —— 俯冲途中或下潜中走会同时跑两套相机。 */
@@ -2004,7 +2094,7 @@ export class BabylonRenderer implements MindverseRenderer {
   /**
    * 点到落点旁的旗或石堆：返回那条回答的 id。没点中返回 null。
    *
-   * 屏幕空间邻近拾取，不逐像素打网格：旗杆只有几像素宽，逐像素就又是「点击区域太小」。
+   * 先拾取可见的旗面/石块，再用落点邻近区域兜底，兼顾明显目标与细旗杆。
    */
   pickPlanetSurface(clientX: number, clientY: number): SurfacePick | null {
     if (this.destroyed || !surfaceCameraOwned(this.surfaceStage)) return null
@@ -2012,6 +2102,16 @@ export class BabylonRenderer implements MindverseRenderer {
     const x = clientX - rect.left
     const y = clientY - rect.top
     this.diagnosticSurfacePickCalls += 1
+    const marks = this.surfaceMarks
+    if (marks) {
+      const hit = this.scene.pick(
+        x * this.engine.getRenderWidth() / Math.max(1, rect.width),
+        y * this.engine.getRenderHeight() / Math.max(1, rect.height),
+        (mesh) => mesh.isEnabled() && mesh.isVisible && marks.answerIdOf(mesh.uniqueId) !== null,
+      )?.pickedMesh
+      const answerId = hit ? marks.answerIdOf(hit.uniqueId) : null
+      if (answerId) return { kind: 'mark', answerId }
+    }
     let winner: SurfacePick | null = null
     let best = SURFACE_MARK_PICK_RADIUS_PX * SURFACE_MARK_PICK_RADIUS_PX
     for (const mark of this.surfaceMarkProjections()) {
@@ -2076,16 +2176,17 @@ export class BabylonRenderer implements MindverseRenderer {
     return projected.z > 0 && projected.z < 1 ? { x: projected.x, y: projected.y, text: signpost.text } : null
   }
 
-  /** 地表阶段画的字：天上的邻居、地上的路牌。 */
+  /** 地表阶段画的字：天上的邻居、地上的路牌，以及可点开的回答标记。 */
   private surfaceLabels(): readonly SurfaceLabel[] {
     // 落地之前不画：俯冲途中它们会糊在行星正面。
     if (this.surfaceStage.phase !== 'walking') return []
     const labels: SurfaceLabel[] = this.surfaceBeaconProjections().map((beacon) => ({
       text: beacon.label, x: beacon.x, y: beacon.y - 14, tone: beacon.kind === 'wormhole' ? 'wormhole' : 'sibling',
     }))
-    const signpost = this.surfaceSignpostProjection()
-    // 锚点已经是横板中心，字就写在板上；再往上抬会把字顶出板外，重新变成悬空的一行。
-    if (signpost) labels.push({ text: signpost.text, x: signpost.x, y: signpost.y, tone: 'signpost' })
+    for (const mark of this.surfaceMarkProjections().slice(0, 3)) {
+      labels.push({ text: '查看回答', x: mark.x, y: mark.y - SURFACE_MARK_PICK_LIFT_PX, tone: 'signpost' })
+    }
+    // 路牌文字由 3D 牌面材质绘制，不能再叠固定字号的屏幕标签。
     return labels
   }
 
@@ -2250,8 +2351,19 @@ export class BabylonRenderer implements MindverseRenderer {
     // 那正是一次性 303 块的来源。高处只选到粗块，随着下降逐级补细。
     const cameraAltitude = Vector3.Distance(this.camera.globalPosition, root.position)
       / Math.max(1e-6, this.surfaceRadius)
-    const lodRadius = Math.max(standingRadius / Math.max(1e-6, this.surfaceRadius), cameraAltitude)
-    this.surfaceWorld?.update(pose.direction, lodRadius)
+    const lodRadius = this.reducedMotion
+      ? standingRadius / Math.max(1e-6, this.surfaceRadius)
+      : Math.max(standingRadius / Math.max(1e-6, this.surfaceRadius), cameraAltitude)
+    const radial = this.camera.globalPosition.subtract(root.position).normalize()
+    const hadTerrain = this.surfaceWorld?.hasVisibleTerrain()
+    this.surfaceWorld?.update(this.reducedMotion ? pose.direction : [radial.x, radial.y, radial.z], lodRadius)
+    if (hadTerrain !== this.surfaceWorld?.hasVisibleTerrain()) this.syncOrbitPresentation()
+    const terrain = this.surfaceWorld?.diagnostics()
+    if (terrain?.ready && (terrain.builtThisUpdate > 0 || terrain.disposedThisUpdate > 0)) {
+      const contact = (direction: Vector3) => this.surfaceWorld?.contactAt(direction) ?? null
+      this.surfaceTrail?.conformToTerrain(contact)
+      this.surfaceMarks?.conformToTerrain(contact)
+    }
     const landed = new Vector3(
       root.position.x + frame.position[0],
       root.position.y + frame.position[1],
@@ -2277,7 +2389,8 @@ export class BabylonRenderer implements MindverseRenderer {
         totalMs: SURFACE_DESCENT_MS,
         reducedMotion: this.reducedMotion,
       })
-      const progress = descentProgress(this.descentClock, SURFACE_DESCENT_MS, this.reducedMotion)
+      const progress = this.descentClock.started
+        ? descentProgress(this.descentClock, SURFACE_DESCENT_MS, this.reducedMotion) : 0
       // 航线：高空绕到落点正上方，再沿半径落下去。直线插值会从行星内部穿过去。
       const pose = surfaceEntryPose({
         from: [descent.from.x, descent.from.y, descent.from.z],
@@ -2287,16 +2400,19 @@ export class BabylonRenderer implements MindverseRenderer {
         centre: [root.position.x, root.position.y, root.position.z],
         progress: descentEase(progress),
       })
-      this.camera.setPosition(new Vector3(pose.position[0], pose.position[1], pose.position[2]))
-      this.camera.setTarget(new Vector3(pose.target[0], pose.target[1], pose.target[2]))
+      const up = slerpDirection(
+        [descent.fromUp.x, descent.fromUp.y, descent.fromUp.z], frame.up, descentEase(progress),
+      )
+      this.camera.upVector = Vector3.FromArray(up)
+      this.camera.setTarget(Vector3.FromArray(pose.target))
+      this.camera.setPosition(Vector3.FromArray(pose.position))
       // upVector 必须整体赋值：ArcRotateCamera 的 setter 会重建 _upToYMatrix 缓存，
       // 原地 .set() 绕过 setter，缓存保持 undefined，真引擎上抛
       // "Cannot read properties of undefined (reading 'm')" 并整页掉进文本降级。
-      this.camera.upVector = new Vector3(frame.up[0], frame.up[1], frame.up[2])
       this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
         kind: 'descend', token: this.surfaceStage.token, progress,
       })
-      if (progress >= 1) {
+      if (progress >= 1 && worldReady) {
         this.surfaceStage = advanceSurfaceStage(this.surfaceStage, {
           kind: 'landed', token: this.surfaceStage.token,
         })
@@ -2652,6 +2768,8 @@ export class BabylonRenderer implements MindverseRenderer {
       this.clearPlanet()
       this.materializeStarSystem(star)
       this.focusedStar = star
+      this.focusedClusterId = this.universe.clusters.some((group) => group.g === star.s.g) ? star.s.g : null
+      this.applyModeDimensions()
       const starKey = starIdentity(star.s)
       const target = this.currentStarPosition(star)
       this.starLayer.setFocus(starKey, star)
@@ -2720,7 +2838,8 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private applyModeDimensions(): void {
-    const dimensions = this.stars.map(({ s }) => renderDim(s, this.mode, this.universe, this.wormIdx))
+    const dimensions = this.stars.map(({ s }) => renderDim(s, this.mode, this.universe, this.wormIdx)
+      * (this.focusedClusterId != null && s.g !== this.focusedClusterId ? 0.12 : 1))
     this.interactionByDatum.clear()
     for (const datum of this.stars) {
       this.interactionByDatum.set(datum, starInteractionEligible(datum.s, this.mode, this.universe, this.wormIdx))
@@ -2733,6 +2852,7 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private isInteractive(star: StarDatum): boolean {
     return this.interactionByDatum.get(star) === true
+      && (this.focusedClusterId == null || star.s.g === this.focusedClusterId)
   }
 
   private isKeyInteractive(starKey: string): boolean {
@@ -2748,6 +2868,7 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private cancelFlight(reason: Parameters<CameraFlightController['cancel']>[0]): void {
+    this.clusterFlight = null
     this.diagnosticApproachProgressOverride = null
     this.cameraFlightController.cancel(reason)
     this.activeFlight = null
@@ -2758,6 +2879,14 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private updateCameraFlight(): void {
+    if (this.clusterFlight) {
+      const flight = this.clusterFlight
+      const t = this.reducedMotion ? 1 : Math.min(1, Math.max(0, (performance.now() - flight.startedAt) / 650))
+      const eased = t * t * (3 - 2 * t)
+      this.camera.setTarget(Vector3.Lerp(flight.from, flight.to, eased), false, false, true)
+      this.camera.radius = flight.fromRadius + (flight.toRadius - flight.fromRadius) * eased
+      if (t === 1) this.clusterFlight = null
+    }
     const active = this.activeFlight
     if (!active) return
     const override = this.diagnosticApproachProgressOverride
@@ -3071,7 +3200,7 @@ export class BabylonRenderer implements MindverseRenderer {
       this.exitHierarchy()
       return
     }
-    const threshold = wheelExitThreshold(this.framingPhase(), {
+    const threshold = !this.focusedStar && this.focusedClusterId != null ? this.clusterRadius * 1.2 : wheelExitThreshold(this.framingPhase(), {
       sceneRadius: this.sceneRadius,
       systemDistance: this.focusedStar ? this.systemFramingRadius(this.focusedStar) : undefined,
     })
@@ -3098,6 +3227,20 @@ export class BabylonRenderer implements MindverseRenderer {
 
   private pointerTarget(clientX: number, clientY: number, inputKind: PointerInputKind): string | null {
     if (!this.universeVisible) return this.sceneTarget(clientX, clientY)
+    if (this.focusedClusterId == null && !this.focusedStar && this.mode === 'all') {
+      const rect = this.canvas.getBoundingClientRect()
+      const galaxies = this.universe.clusters.filter((cluster) => this.stars.some(({ s }) => s.g === cluster.g))
+        .map((cluster) => {
+          const projected = this.projectToCss(Vector3.FromArray(cluster.c))
+          const members = this.stars.filter(({ s }) => s.g === cluster.g).map((star) => this.projectToCss(this.currentStarPosition(star)))
+          const radius = Math.max(40, ...members.filter((point) => point.z > 0 && point.z < 1)
+            .map((point) => Math.hypot(point.x - projected.x, point.y - projected.y) + 24))
+          return { id: cluster.g, x: projected.x, y: projected.y, depth: projected.z, radius }
+        })
+      const picked = pickGalaxy(clientX - rect.left, clientY - rect.top, galaxies)
+      if (picked !== null) return `cluster:${picked}`
+      return null
+    }
     const higher = this.sceneTarget(clientX, clientY)
     if (higher) return higher
     const rect = this.canvas.getBoundingClientRect()
@@ -3179,6 +3322,10 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private activatePointerTarget(target: string): void {
+    if (target.startsWith('cluster:')) {
+      this.focusCluster(Number(target.slice(8)))
+      return
+    }
     if (target.startsWith('star:')) {
       this.focusStar(target.slice(5))
       return
@@ -3201,12 +3348,21 @@ export class BabylonRenderer implements MindverseRenderer {
   }
 
   private exitHierarchy(): void {
+    if (!this.focusedStar && this.focusedClusterId != null) {
+      this.resetView()
+      this.callbacks.onPick?.(null)
+      return
+    }
     const target = exitTarget(!this.universeVisible ? 'strata'
       : this.selected ? 'planet-focus'
         : this.activeFlight ? 'star-focus'
           : this.focusedStar ? 'star-focus' : 'panorama')
     if (target === 'star-focus') this.clearPlanet()
     else if (target === 'panorama') {
+      if (this.focusedStar && this.focusedClusterId != null) {
+        this.focusCluster(this.focusedClusterId)
+        return
+      }
       this.resetView()
       this.callbacks.onPick?.(null)
     }

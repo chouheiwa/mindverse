@@ -3,9 +3,10 @@ import type { UniverseIndex } from '../domain/universe'
 import { formatTraceMonth, type QuestionProvenance } from '../domain/questionProvenance'
 import { buildQuestionWorkspaceModel, type PersonalWorkspaceAnswer, type WorkspaceAnswer } from './questionWorkspaceModel'
 import { useModalDialogLifecycle } from './modalDialogLifecycle'
+import { ExplorationPath } from './ExplorationPath'
 import './QuestionWorkspace.css'
 
-type Mode = 'personal' | 'retrospective' | 'prism'
+type Mode = 'personal' | 'retrospective' | 'timeline' | 'prism'
 const PAGE_SIZE = 50
 const MOBILE_QUERY = '(max-width: 760px)'
 const PUBLIC_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
@@ -134,11 +135,30 @@ function RetrospectivePanel({ chronicle }: {
     <div className="qw-retrospective">
       <section aria-labelledby="qw-chronicle-title">
         <p className="qw-kicker">RETROSPECTIVE · CURRENT SAMPLE</p>
-        <h2 id="qw-chronicle-title">答案纪年 · 当前样本回溯</h2>
+        <h2 id="qw-chronicle-title">回答时间线</h2>
+        <p className="qw-next-step">按回答的首发时间排列，沿时间线阅读这个问题下不同时期的回答。展示的是目前可访问的版本，不代表当时的全部观点。</p>
         <PaginatedOriginals answers={chronicle.flatItems} className="qw-timeline" />
       </section>
     </div>
   )
+}
+
+function AnswerTimeline({ answers }: { answers: readonly WorkspaceAnswer[] }) {
+  const dated = answers.filter((answer) => formatDate(answer.publishedAt))
+    .sort((left, right) => left.publishedAt! - right.publishedAt!)
+  const undated = answers.filter((answer) => !formatDate(answer.publishedAt))
+  return <section className="qw-retrospective" aria-labelledby="qw-timeline-title">
+    <h2 id="qw-timeline-title">回答时间线</h2>
+    <p className="qw-next-step">同一颗问题星球上的回答，按首发时间从早到晚排列。先读回答，再比较不同时期的说法。</p>
+    <p className="qw-provenance">这里展示目前可访问的回答版本，不代表当年的全部观点，也不能据此判断你的立场变化。</p>
+    {dated.length > 0 ? <PaginatedOriginals answers={dated} className="qw-timeline" />
+      : <p className="qw-empty">已收录的回答还没有可用的首发时间，暂时无法按时间排列。</p>}
+    {undated.length > 0 && <section aria-labelledby="qw-undated-title">
+      <h3 id="qw-undated-title">首发时间未知 · {undated.length} 条</h3>
+      <p className="qw-next-step">这些回答仍可阅读，暂不放入时间线。</p>
+      <PaginatedOriginals answers={undated} />
+    </section>}
+  </section>
 }
 
 function PrismPanel() {
@@ -182,7 +202,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   const folded = onSurface && !dossierOpen
   const walkKeysRef = useRef(new Set<string>())
   useEffect(() => {
-    if (!onSurface || !onWalk) return
+    if (!onSurface || dossierOpen || !onWalk) return
     const keys = walkKeysRef.current
     const interval = window.setInterval(() => {
       const forward = walkAxis(keys, ['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown'])
@@ -194,20 +214,29 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
       }
     }, WALK_TICK_MS)
     return () => { window.clearInterval(interval); keys.clear() }
-  }, [onSurface, onWalk])
+  }, [onSurface, dossierOpen, onWalk])
   const isPublic = shared || readOnly
   const mobileTabs = useMobileTabs()
-  const tabs: readonly Mode[] = isPublic ? ['retrospective', 'prism'] : ['personal', 'retrospective', 'prism']
-  const [mode, setMode] = useState<Mode>(isPublic ? 'retrospective' : 'personal')
+  const tabs: readonly Mode[] = [...(isPublic ? [] : ['personal' as const]), 'retrospective', ...(onSurface ? ['timeline' as const] : []), 'prism']
+  const [mode, setMode] = useState<Mode>(isPublic || onSurface ? 'retrospective' : 'personal')
   const activeMode: Mode = isPublic && mode === 'personal' ? 'retrospective' : mode
   const model = useMemo(() => buildQuestionWorkspaceModel(index, questionId, { shared, readOnly }), [index, questionId, shared, readOnly])
   const dialogRef = useRef<HTMLDialogElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const readAnswersRef = useRef<HTMLButtonElement>(null)
+  const previousDossierOpenRef = useRef(dossierOpen)
   const tabRefs = useRef(new Map<Mode, HTMLButtonElement>())
   const previousPublicRef = useRef(isPublic)
   const closedRef = useRef(false)
   const dragRef = useRef<{ pointerId: number; x: number; y: number; moved: number } | null>(null)
   const modal = useModalDialogLifecycle(dialogRef, { getReturnFocus, initialFocusRef: headingRef })
+
+  useLayoutEffect(() => {
+    if (previousDossierOpenRef.current === dossierOpen) return
+    previousDossierOpenRef.current = dossierOpen
+    ;(dossierOpen ? headingRef.current : readAnswersRef.current ?? headingRef.current)?.focus({ preventScroll: true })
+    if (onSurface) dialogRef.current?.scrollTo?.({ top: 0 })
+  }, [dossierOpen, onSurface])
 
   useLayoutEffect(() => {
     if (previousPublicRef.current === isPublic) return
@@ -240,13 +269,14 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
   }
 
   const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDialogElement>) => {
-    if (onSurface && isWalkKey(event.code) && !isTextEntryTarget(event.target)) {
+    if (onSurface && !dossierOpen && !event.defaultPrevented && isWalkKey(event.code) && !isTextEntryTarget(event.target)) {
       event.preventDefault()
       walkKeysRef.current.add(event.code)
       return
     }
     if (onSurface && event.code === 'KeyI' && !isTextEntryTarget(event.target)) {
       event.preventDefault()
+      if (event.repeat) return
       setDossierOpen((open) => !open)
       return
     }
@@ -264,7 +294,7 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
     }
   }
 
-  const labels: Record<Mode, string> = { personal: '我的证据轨迹', retrospective: '回溯', prism: '棱镜' }
+  const labels: Record<Mode, string> = { personal: '我的证据轨迹', retrospective: onSurface ? '全部回答' : '回溯', timeline: '回答时间线', prism: '棱镜' }
   return (
     <dialog ref={dialogRef} className={onSurface ? (folded ? 'qw qw--surface qw--folded' : 'qw qw--surface') : 'qw'} aria-modal="true" aria-labelledby="qw-title"
       onKeyDown={onDialogKeyDown}
@@ -277,8 +307,8 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
         else close()
       }}>
       <header className="qw-head">
-        <button type="button" className="qw-back" onClick={close} aria-label="返回问题航道">← 返回问题航道</button>
-        <span>{onSurface ? 'PLANET SURFACE' : 'QUESTION OBSERVATORY'}{orbitIndex ? ` · ORBIT ${String(orbitIndex).padStart(2, '0')}` : ''}</span>
+        <button type="button" className="qw-back" onClick={close} aria-label="返回问题航道">← {provenance?.starName ? `返回${provenance.starName}恒星系` : '返回问题航道'}</button>
+        <ExplorationPath level="planet" />
         {model.status === 'ready' && <a href={model.question.url} target="_blank" rel="noopener noreferrer">知乎原问题</a>}
       </header>
       {model.status === 'error' ? (
@@ -314,11 +344,15 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
             onPointerCancel={() => { dragRef.current = null }}>
             {!onSurface && <div className="qw-reticle" aria-hidden="true"><i /><i /><i /></div>}
             <div className="qw-planet-readout">
-              <span>{onSurface ? 'PLANET SURFACE · QUESTION' : 'LIVE OBJECT · QUESTION'}</span>
+              <span className="qw-location-name">{onSurface ? '问题行星 · 地表探索' : '问题行星 · 近景观测'}</span>
+              <span>{provenance?.starName ? `${provenance.starName}恒星系 · ` : ''}{orbitIndex ? `第 ${orbitIndex} 轨道` : '真实知乎问题'}</span>
               <b>{model.answerCount} 条可核验回答</b>
+              {onSurface && <p className="qw-world-hint">{provenance && provenance.rank.count > 1
+                ? '拖动环视 · 点击天空中的问题或路牌，前往另一颗行星'
+                : '拖动环视 · 想换个问题，可从左上角返回恒星系'}</p>}
             </div>
             <div className="qw-planet-controls">
-              <span>{onSurface ? 'W/S 前进后退 · A/D 平移 · 拖动环视 · Q/E 俯仰 · I 资料' : '拖动旋转 · 观察表面'}</span>
+              <span>{onSurface ? 'W/S 前进后退 · A/D 平移 · 拖动环视 · I 查看回答' : '拖动旋转 · 观察表面'}</span>
               {!onSurface && <button type="button" disabled={strataActive || !onEnterStrata}
                 onClick={() => onEnterStrata?.(questionId)}>
                 {strataActive ? '正在进入答案地层' : '打开答案地层'}
@@ -328,10 +362,32 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
               当前仍可访问的答案按首发时间排列，不代表当年观点或社区份额；列表存在幸存者偏差与版本偏差。
             </p>
           </section>
-          {onSurface && (
+          {folded && (
             <section className="qw-card" aria-label="问题资料卡">
-              <p className="qw-kicker">QUESTION · {model.answerCount} 条可核验回答</p>
+              <p className="qw-kicker">从这里开始 · 这颗行星对应一个知乎问题</p>
               {folded && <h1 id="qw-title" ref={headingRef} tabIndex={-1}>{model.question.title}</h1>}
+              {model.answerCount > 0 && <section className="qw-strata-entry" aria-label="探索星球内部">
+                <div className="qw-strata-cutaway" aria-hidden="true"><i /><i /><i /><span>↓</span></div>
+                <div>
+                  <b>这颗星球，也有时间的深度</b>
+                  <p>进入内部，沿岩层寻找不同时期的回答。越深，首发时间越早；发光的晶体可以点开阅读。</p>
+                  <button type="button" disabled={strataActive || !onEnterStrata}
+                    onClick={() => onEnterStrata?.(questionId)}>
+                    {strataActive ? '正在进入答案地层' : '打开答案地层'}
+                  </button>
+                </div>
+              </section>}
+              <p className="qw-next-step">{model.answerCount
+                ? `也可直接阅读这个问题下的 ${model.answerCount} 条已收录回答。`
+                : '这里还没有收录回答，可以先到知乎查看原问题。'}</p>
+              {model.answerCount ? <button ref={readAnswersRef} type="button" className="qw-read-answers"
+                onClick={() => { setMode('retrospective'); setDossierOpen(true) }}>
+                查看回答 <span>{model.answerCount} 条 →</span>
+              </button> : <a className="qw-read-answers" href={model.question.url} target="_blank" rel="noopener noreferrer">查看知乎原问题 ↗</a>}
+              {Boolean(model.personal?.items.length) && <div className="qw-surface-guide">
+                <b>地面上的标记也能点开</b>
+                <p>旗帜代表你创作的回答，石堆代表你收藏的回答。点标记可查看对应内容。</p>
+              </div>}
               {provenance && (
                 <section className="qw-provenance-card" aria-label="你与这颗星球的关系">
                   {provenance.origin && <p className="qw-origin">{provenance.origin}</p>}
@@ -348,19 +404,17 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
                   </ul>
                 </section>
               )}
-              <div className="qw-card-actions">
-                <button type="button" aria-pressed={dossierOpen} onClick={() => setDossierOpen((open) => !open)}>
-                  {dossierOpen ? '收起资料 · Esc' : '资料 · I'}
+              {model.answerCount > 0 && <div className="qw-card-actions">
+                <button type="button" onClick={() => { setMode('timeline'); setDossierOpen(true) }}>
+                  浏览回答时间线
                 </button>
-                <button type="button" disabled={strataActive || !onEnterStrata}
-                  onClick={() => onEnterStrata?.(questionId)}>
-                  {strataActive ? '正在进入答案地层' : '打开答案地层'}
-                </button>
-              </div>
+                <p>也可以展开时间线，直接阅读回答。</p>
+              </div>}
             </section>
           )}
           {!folded && <>
           <div className="qw-titleblock">
+            {onSurface && <button type="button" className="qw-return-surface" onClick={() => setDossierOpen(false)}>← 返回地表 · Esc</button>}
             <p>当前样本 · <span>{model.answerCount} 个当前可访问回答</span></p>
             <h1 id="qw-title" ref={headingRef} tabIndex={-1}>{model.question.title}</h1>
             <p className="qw-provenance">仅呈现此问题在本次规范化索引中仍可访问的回答；不声称覆盖知乎全部历史内容。</p>
@@ -380,7 +434,13 @@ export function QuestionWorkspace({ index, questionId, shared = false, readOnly 
           </nav>
           <div className="qw-reading" role="tabpanel" id={`qw-panel-${activeMode}`} aria-labelledby={`qw-tab-${activeMode}`}>
             {activeMode === 'personal' && model.personal && <PersonalPanel answers={model.personal.items} />}
-            {activeMode === 'retrospective' && <RetrospectivePanel chronicle={model.chronicle} />}
+            {activeMode === 'retrospective' && (onSurface ? <section aria-labelledby="qw-answers-title">
+              <h2 id="qw-answers-title">已收录的回答</h2>
+              <p className="qw-next-step">先读摘要，感兴趣时点击「查看原回答」前往知乎核验全文。</p>
+              {model.answers.length ? <PaginatedOriginals answers={model.answers} />
+                : <p>还没有收录回答，可通过右上角「知乎原问题」继续查看。</p>}
+            </section> : <RetrospectivePanel chronicle={model.chronicle} />)}
+            {activeMode === 'timeline' && <AnswerTimeline answers={model.answers} />}
             {activeMode === 'prism' && <PrismPanel />}
           </div>
           </>}

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,7 @@ type session struct {
 	active         int // guarded by Server.mu; active leases are never evictable
 	revocationOnly bool
 	confirmPrimary bool
+	analysisOwner  string // server-derived cache owner; never supplied by the browser
 }
 
 type shareStore interface {
@@ -100,6 +102,7 @@ type Server struct {
 	store    shareStore
 	registry *sessionRegistry
 	ext      extract.Extractor
+	analysis *extract.Cache
 	seed     *seed.Builder
 	quota    *zhihu.QuotaGate
 	db       *store.DB
@@ -115,6 +118,10 @@ type Server struct {
 
 // New 构造服务。
 func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
+	analysis, err := extract.NewCache(filepath.Join(cfg.SnapshotDir, ".analysis"))
+	if err != nil {
+		return nil, err
+	}
 	store, err := share.NewStore(cfg.SnapshotDir)
 	if err != nil {
 		return nil, err
@@ -142,7 +149,7 @@ func New(cfg *config.Config, ext extract.Extractor) (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		cfg: cfg, store: store, ext: ext, db: db,
+		cfg: cfg, store: store, ext: ext, db: db, analysis: analysis,
 		registry:    registry,
 		seed:        seed.NewBuilder(zhihu.NewClient(cfg.AccessSecret, "")),
 		quota:       zhihu.NewQuotaGate(zhihu.NewClient(cfg.AccessSecret, ""), quotaCacheTTL),
@@ -489,6 +496,13 @@ func (s *Server) installAuthenticatedSession(w http.ResponseWriter, old *session
 		return registryErr
 	}
 	preservedGen, preservedSeed := old.gen, old.seedCorpus
+	preservedAnalysisOwner := old.analysisOwner
+	if strings.HasPrefix(preservedAnalysisOwner, "zhihu:") && preservedAnalysisOwner != analysisOwner(&session{token: tok, profile: profile}) {
+		preservedAnalysisOwner = ""
+		if preservedGen.Source == "live" {
+			preservedGen = generation{}
+		}
+	}
 	if old.genCancel != nil {
 		old.genCancel()
 		preservedGen = generation{}
@@ -511,7 +525,8 @@ func (s *Server) installAuthenticatedSession(w http.ResponseWriter, old *session
 		id: newID, ownerID: owner, epoch: nextEpoch,
 		token: tok, profile: profile, stateChecked: true,
 		gen: preservedGen, seedCorpus: preservedSeed,
-		genToday: old.genToday, genDay: old.genDay, lastSeen: now,
+		analysisOwner: preservedAnalysisOwner,
+		genToday:      old.genToday, genDay: old.genDay, lastSeen: now,
 		confirmPrimary: promoted,
 	}
 	scrubOld()
@@ -895,13 +910,40 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 		return
 	}
 	filtered := extract.CountSensitiveItems(corpus.Items)
+	cached, err := s.beginAnalysis(ctx, sess, epoch, corpus.Source)
+	if err != nil {
+		fail(fmt.Errorf("读取分析缓存失败: %w", err))
+		return
+	}
+	defer cached.Close()
+	public := s.publicAnswersFor(corpus.Items)
+	artifactKey := ""
+	if corpus.Source == "mock" {
+		artifactKey = mockArtifactKey(corpus.Items, public)
+		if raw := cached.Artifact(artifactKey); len(raw) > 0 {
+			var u engine.Universe
+			if json.Unmarshal(raw, &u) == nil && u.ValidateCurrent() == nil {
+				log.Printf("生成复用：mock 固定宇宙，模型调用 0")
+				updateGeneration(sess, epoch, func() {
+					sess.gen = generation{State: genDone, Stage: "完成", Progress: 100, Universe: &u, Filtered: filtered, Source: corpus.Source}
+					sess.genCancel = nil
+				})
+				return
+			}
+		}
+	}
 
 	if !setStage(fmt.Sprintf("读到 %d 条，正在理解它们讲的是什么", total), 30) {
 		return
 	}
-	concepts, err := s.ext.Extract(ctx, corpus.Items)
+	concepts, err := cached.Extract(ctx, corpus.Items)
 	if err != nil {
 		fail(fmt.Errorf("概念抽取失败: %w", err))
+		return
+	}
+	// Preserve successful batches even if a later graph/naming step fails.
+	if err := cached.Commit(); err != nil {
+		fail(fmt.Errorf("保存概念缓存失败: %w", err))
 		return
 	}
 
@@ -909,7 +951,7 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 		return
 	}
 	namer := func(members, samples []string) string {
-		n, err := s.ext.NameCluster(ctx, members, samples)
+		n, err := cached.NameCluster(ctx, members, samples)
 		if err != nil || n == "" {
 			if len(members) > 0 {
 				return members[0]
@@ -925,7 +967,6 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 		opt.MinCluster = 2
 	}
 	// 别人的回答挂到我已经留下痕迹的那些行星上；它们不进概念抽取，恒星仍然只是我的。
-	public := s.publicAnswersFor(corpus.Items)
 	if len(public) > 0 {
 		log.Printf("带入 %d 条同题公共回答", len(public))
 	}
@@ -935,6 +976,19 @@ func (s *Server) generateAt(sess *session, prov zhihu.Provider, epoch uint64, ct
 		return
 	}
 	u.Meta.Source = corpus.Source
+	if artifactKey != "" {
+		raw, err := json.Marshal(u)
+		if err != nil {
+			fail(err)
+			return
+		}
+		cached.SetArtifact(artifactKey, raw)
+	}
+	if err := cached.Commit(); err != nil {
+		fail(fmt.Errorf("保存分析缓存失败: %w", err))
+		return
+	}
+	log.Printf("生成增量：source=%s 复用条目=%d 新分析条目=%d 复用星群名=%d 新命名星群=%d", corpus.Source, cached.Hits, cached.Misses, cached.NameHits, cached.NameMisses)
 
 	updateGeneration(sess, epoch, func() {
 		sess.gen = generation{
@@ -1179,6 +1233,18 @@ func (s *Server) wipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.mu.Lock()
+	owners := []string{analysisOwner(sess), "session:" + sessionOwner(sess), sess.analysisOwner}
+	for _, owner := range owners {
+		if owner == "" || strings.HasPrefix(owner, "public:") {
+			continue
+		}
+		if err := s.analysis.Delete(owner); err != nil {
+			sess.mu.Unlock()
+			writeErr(w, http.StatusInternalServerError, "删除分析缓存失败")
+			return
+		}
+	}
+	sess.analysisOwner = ""
 	sess.epoch++
 	if sess.genCancel != nil {
 		sess.genCancel()

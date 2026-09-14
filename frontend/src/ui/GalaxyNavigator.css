@@ -1,0 +1,21 @@
+.galaxy-nav { position: fixed; z-index: 5; top: 40px; right: 36px; bottom: auto; width: 300px; max-height: min(540px, calc(100dvh - 180px)); display: flex; flex-direction: column; padding: 22px; color: var(--ink); background: rgba(10,16,29,.88); border: 1px solid rgba(173,194,229,.2); border-radius: 16px; backdrop-filter: blur(18px) }
+.galaxy-nav-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px }
+.galaxy-nav small { color: #a9b8d1; font-size: 11px }
+.galaxy-nav > p { font-size: 12px; line-height: 1.7; color: #a9b8d1; margin: 10px 0 16px }
+.galaxy-nav-list { overflow-y: auto; min-height: 0; display: grid; align-content: start; gap: 8px; padding: 3px }
+.galaxy-nav-list button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 68px; padding: 12px; border-radius: 9px; border: 1px solid rgba(173,194,229,.16); background: rgba(110,145,200,.06); color: inherit; text-align: left; cursor: pointer }
+.galaxy-nav-list button:hover { background: rgba(110,145,200,.17); border-color: #a9b8d1 }
+.galaxy-nav-list button:focus-visible { outline: 2px solid var(--star); outline-offset: 1px }
+.galaxy-nav-list button > span:nth-child(2) { flex: 1; min-width: 0 }
+.galaxy-nav-list strong, .galaxy-nav-list small { display: block; line-height: 1.5; overflow-wrap: anywhere }
+.galaxy-nav-list strong { font-size: 14px; font-weight: 500; margin-bottom: 3px }
+.galaxy-nav-symbol { color: var(--star); font-size: 24px }
+@media (max-width: 760px) {
+  .galaxy-nav { top: auto; left: 16px; right: 16px; bottom: 226px; width: auto; max-height: 180px; padding: 14px; border-radius: 12px }
+  .galaxy-nav > p { display: none }
+  .galaxy-nav-list { margin-top: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)) }
+  .galaxy-nav-symbol { font-size: 18px }
+  .galaxy-nav-list button { gap: 8px }
+  .galaxy-nav-list button > span:last-child { display: none }
+  .galaxy-nav-list button { min-height: 56px; padding: 8px 12px }
+}

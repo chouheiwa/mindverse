@@ -121,6 +121,15 @@ describe('PlanetGround', () => {
     expect(source).toContain('uHorizonColor * vec3(1.08, 1.0, 0.92)')
   })
 
+  it('passes ice and snow-line data to the ground instead of only a yellow thermal palette', () => {
+    const { ground } = setup()
+    const spy = vi.spyOn(ground.material, 'setFloat')
+    ground.setThermal({ magma: 0, desert: 0, rock: 0, tundra: 0, ice: 1 })
+    expect(spy).toHaveBeenCalledWith('uThermalIce', 1)
+    expect(PLANET_GROUND_UNIFORMS).toContain('uSnowLine')
+    expect(planetGroundFragmentShader).toContain('planetSnowCoverage(')
+  })
+
   it('initializes the added detail uniform internally', () => {
     const floatSpy = vi.spyOn(ShaderMaterial.prototype, 'setFloat')
     try {

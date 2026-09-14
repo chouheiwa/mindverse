@@ -1,3 +1,4 @@
+import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
@@ -27,7 +28,7 @@ function setup(buildBudgetPerUpdate = 100_000) {
     maxDepth: 5, detailAngle: 0.35, budget: 400,
     buildBudgetPerUpdate,
   })
-  return { scene, parent, world }
+  return { scene, parent, world, field }
 }
 
 const up: Vec3 = [0, 1, 0]
@@ -103,6 +104,23 @@ describe('PlanetSurfaceWorld', () => {
     expect(scene.meshes).toEqual([other])
   })
 
+  it('samples visible triangles for ground contact, including a translated planet', () => {
+    const { world, parent, field } = setup()
+    parent.position.set(10, 20, 30)
+    world.update(up, 6)
+    const point = world.contactAt(new Vector3(0.13, 1, 0.07).normalize())
+    expect(point).not.toBeNull()
+    const direction = new Vector3(0.13, 1, 0.07).normalize()
+    const analyticRadius = 10 * (1 + field.height([direction.x, direction.y, direction.z]) * 0.1)
+    expect(Math.abs(point!.point.length() - analyticRadius)).toBeGreaterThan(0.00001)
+    expect(point!.point.length()).toBeGreaterThan(8)
+    expect(point!.point.length()).toBeLessThan(12)
+    expect(point!.normal.length()).toBeCloseTo(1, 6)
+    expect(Vector3.Dot(point!.normal, point!.point)).toBeGreaterThan(0)
+    world.dispose()
+    expect(world.contactAt(Vector3.Up())).toBeNull()
+  })
+
   it('can be disposed before its first update', () => {
     const { scene, world } = setup()
     world.dispose()
@@ -150,6 +168,22 @@ describe('PlanetSurfaceWorld', () => {
     const reference = setup(100000)
     reference.world.update(up, 1.02)
     expect(world.diagnostics().chunkCount).toBe(reference.world.diagnostics().chunkCount)
+  })
+
+  it('keeps a complete visible frontier while replacements are built across frames', () => {
+    const { scene, parent, world } = setup(6)
+    for (let frame = 0; frame < 200; frame += 1) {
+      world.update(up, 6)
+      if (world.diagnostics().ready) break
+    }
+    const previous = ownedMeshes(scene, parent).filter(mesh => mesh.isVisible)
+    world.update(up, 1.02)
+    expect(world.diagnostics().ready).toBe(false)
+    expect(previous.every(mesh => !mesh.isDisposed() && mesh.isVisible)).toBe(true)
+    expect(ownedMeshes(scene, parent).filter(mesh => mesh.isVisible)).toEqual(previous)
+    for (let frame = 0; frame < 200 && !world.diagnostics().ready; frame += 1) world.update(up, 1.02)
+    expect(world.diagnostics().ready).toBe(true)
+    expect(ownedMeshes(scene, parent).every(mesh => mesh.isVisible)).toBe(true)
   })
 
   it('builds what you are looking at first', () => {

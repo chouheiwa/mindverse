@@ -42,11 +42,16 @@ func LLMFromEnv() (*LLM, error) {
 }
 
 type chatReq struct {
-	Model       string    `json:"model"`
-	Messages    []message `json:"messages"`
-	Temperature float64   `json:"temperature"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Stream      bool      `json:"stream"`
+	Model       string          `json:"model"`
+	Messages    []message       `json:"messages"`
+	Temperature float64         `json:"temperature"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Stream      bool            `json:"stream"`
+	Thinking    *thinkingConfig `json:"thinking,omitempty"`
+}
+
+type thinkingConfig struct {
+	Type string `json:"type"`
 }
 
 type message struct {
@@ -66,10 +71,16 @@ type chatResp struct {
 // Complete 发一次对话补全。temperature 固定为 0，保证同一输入尽量稳定 ——
 // 星图必须可复现，分享快照才能重建。
 func (l *LLM) Complete(ctx context.Context, system, user string, maxTokens int) (string, error) {
-	body, err := json.Marshal(chatReq{
+	payload := chatReq{
 		Model: l.Model, Temperature: 0, MaxTokens: maxTokens,
 		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: user}},
-	})
+	}
+	// M3 defaults to thinking in the content field, consuming the small JSON
+	// output budget before answering. Extraction and naming need only the answer.
+	if strings.EqualFold(l.Model, "MiniMax-M3") {
+		payload.Thinking = &thinkingConfig{Type: "disabled"}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}

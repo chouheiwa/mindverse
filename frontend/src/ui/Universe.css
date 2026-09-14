@@ -19,6 +19,19 @@
 .uv-sub { font-size: 13px; font-weight: 300; line-height: 1.85; color: var(--dim);
   margin: 11px 0 0; max-width: 31em }
 .uv-sub b { color: var(--ink); font-weight: 400 }
+.uv-head > .lbl { margin-bottom: 16px }
+.uv-location { margin-top: 18px }
+.uv-location-kind { margin: 0; font-size: 11px; color: var(--dim); letter-spacing: .1em }
+.uv-head--focused h1 { font-size: clamp(23px, 2.8vw, 36px); line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere }
+.uv-location-back { pointer-events: auto; min-height: 44px; margin-top: 10px; padding: 6px 0;
+  border: 0; background: none; color: var(--ink); font-size: 12px; text-align: left }
+.uv-location-back:hover { color: var(--star) }
+.uv-location-back:focus-visible { outline: 2px solid var(--star); outline-offset: 4px }
+@media (prefers-reduced-motion: no-preference) {
+  .uv-location, .uv-hint > span { animation: uv-location-in .38s cubic-bezier(.16, 1, .3, 1) both }
+}
+@keyframes uv-location-in { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
 
 /* —— 底部仪表带 ——
    之前四个角各自为政：标题左上、读数左下、模式栏右下、面板右侧，互不相识。
@@ -47,7 +60,9 @@
 
 /* 层级面包屑：滚轮逐级返回原本在界面上没有任何对应物，用户不知道自己在第几层 */
 .uv-lad { display: flex; align-items: center; gap: 10px;
-  font-family: var(--f-m); font-size: 12px; color: var(--mute) }
+  min-width: 0; flex: 1; font-family: var(--f-m); font-size: 12px; color: var(--mute) }
+.uv-lad > * { flex-shrink: 0 }
+.uv-lad > .now { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .uv-lad button { font-family: var(--f-m); font-size: 12px; font-weight: 400;
   padding: 0; border: 0; border-radius: 0; background: none; color: var(--dim) }
 .uv-lad button:hover:not(:disabled) { color: var(--ink) }
@@ -64,9 +79,16 @@
 .uv-act:hover:not(:disabled) { border-color: var(--amber); color: #FFE7BE }
 
 .uv-hint { position: fixed; left: 50%; transform: translateX(-50%); bottom: 96px; z-index: 5;
-  font-family: var(--f-m); font-size: 11px; color: #98A2C0; letter-spacing: .08em;
+  width: max-content; max-width: calc(100vw - 40px); text-align: center;
+  font-family: var(--f-b); font-size: 13px; color: #d1d9ea; letter-spacing: .04em;
   pointer-events: none; transition: opacity var(--t-story) var(--e-move);
   text-shadow: 0 1px 10px rgba(3, 5, 12, .98) }
+.uv-hint > span { display: block; padding: 10px 15px; background: rgb(4 6 15 / 88%); border: 1px solid var(--rule-soft) }
+.uv-hint--focused { left: 410px; right: calc(var(--pnl-w) + 24px); bottom: calc(var(--bar-h) + 24px);
+  width: auto; max-width: none; transform: none }
+@media (min-width: 761px) and (max-width: 1200px) {
+  .uv-hint--focused { left: 30px; right: auto; top: 320px; bottom: auto; width: min(350px, calc(100vw - 60px)) }
+}
 .uv-filtered { position: fixed; left: 30px; bottom: 96px; z-index: 5; font-family: var(--f-m);
   font-size: 11px; color: #8B95B4; pointer-events: none; text-shadow: 0 1px 8px rgba(3, 5, 12, .95) }
 .uv-skip { position: fixed; right: 30px; top: 28px; z-index: 9; font-family: var(--f-m); font-size: 11px;
@@ -86,6 +108,9 @@
 @media (max-width: 760px) {
   .uv-head { left: 18px; top: 18px; max-width: 76vw }
   .uv-head h1 { font-size: 23px }
+  .uv-head > .lbl { margin-bottom: 10px }
+  .uv-location { margin-top: 12px }
+  .uv-head--focused { max-width: calc(100vw - 36px) }
   .uv-sub { font-size: 12px }
   .uv-scrim { width: 100vw; height: 250px }
   .uv-skip { right: 18px; top: 18px }
@@ -102,6 +127,7 @@
   .seg { flex: none }
   .uv-act { width: 100% }
   .uv-hint, .uv-filtered { bottom: 232px }
+  .uv-hint--focused { left: 18px; right: 18px; width: auto; transform: none }
   .uv-filtered { left: 18px; right: 18px }
 }
 @media (prefers-reduced-motion: reduce) { .uv-canvas { transition: none } }

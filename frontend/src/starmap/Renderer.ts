@@ -1,3 +1,4 @@
+import { galaxyFrame, pickGalaxy } from './galaxyNavigation'
 import * as THREE from 'three'
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing'
 import type { Mode, Star, Universe } from '../types'
@@ -170,6 +171,8 @@ export class Renderer implements MindverseRenderer {
    * 行星和轨道依次浮现，不需要另开一个「恒星系模式」。
    */
   private focus = new THREE.Vector3()
+  private focusedClusterId: number | null = null
+  private clusterRadius = 30
   private focusedStar: StarDatum | null = null
   private wantFocus = new THREE.Vector3()
   /**
@@ -438,6 +441,23 @@ export class Renderer implements MindverseRenderer {
     this.applyMode()
   }
 
+  focusCluster(clusterId: number): boolean {
+    const cluster = this.u.clusters.find((group) => group.g === clusterId)
+    if (this.destroyed || this.unsupportedStrataRequest || !cluster) return false
+    const rect = this.canvas.getBoundingClientRect()
+    const frame = galaxyFrame(cluster, this.u.stars, FOV * Math.PI / 180, Math.max(300, rect.width - (rect.width > 760 ? 400 : 0)) / Math.max(1, rect.height))
+    if (!frame.members.length) return false
+    this.clearPlanet()
+    this.focusedStar = null
+    this.focusedClusterId = clusterId
+    this.clusterRadius = frame.radius
+    this.applyFocus()
+    this.targetDist = frame.radius
+    this.retarget = true
+    this.cb.onPickCluster?.(clusterId)
+    return true
+  }
+
   focusStar(starKey: string): Star | null {
     if (this.destroyed || this.unsupportedStrataRequest) return null
     const datum = resolveInteractiveStar(this.allStarData, starKey, this.mode, this.u, this.wormIdx)
@@ -445,6 +465,7 @@ export class Renderer implements MindverseRenderer {
     if (this.focusedStar === datum && !this.selected) return datum.s
     this.clearPlanet()
     this.focusedStar = datum
+    this.focusedClusterId = this.u.clusters.some((group) => group.g === datum.s.g) ? datum.s.g : null
     this.applyFocus()
     this.targetDist = SYSTEM_DIST
     this.retarget = true
@@ -454,6 +475,8 @@ export class Renderer implements MindverseRenderer {
 
   /** 退回星系全景。面板关闭、切模式时调用。 */
   resetView() {
+    this.focusedClusterId = null
+    this.cb.onPickCluster?.(null)
     this.focusedStar = null
     this.applyFocus()
     this.targetDist = this.R * 1.62
@@ -718,6 +741,9 @@ export class Renderer implements MindverseRenderer {
       this.planetWorld(this.selected, A, this.wantFocus)
     } else if (this.focusedStar) {
       this.starWorld(this.focusedStar, A, this.wantFocus)
+    } else if (this.focusedClusterId != null) {
+      const cluster = this.u.clusters.find((group) => group.g === this.focusedClusterId)!
+      this.wantFocus.fromArray(cluster.c)
     } else {
       this.wantFocus.set(0, 0, 0)
     }
@@ -868,9 +894,10 @@ export class Renderer implements MindverseRenderer {
 
   private applyFocus() {
     const star = this.focusedStar?.s ?? null
-    this.labelStrategy.setFocus(this.focusedStar)
+    if (!this.focusedStar && this.focusedClusterId != null) this.labelStrategy.setCluster(this.focusedClusterId)
+    else this.labelStrategy.setFocus(this.focusedStar)
     this.bodies.setFocus(star === null ? null : 'id' in star && typeof star.id === 'string' ? star.id : star.c)
-    this.rings?.setFocus(star?.g ?? null)
+    this.rings?.setFocus(star?.g ?? this.focusedClusterId)
     this.overlay.setFocus(star)
   }
 
@@ -964,11 +991,13 @@ export class Renderer implements MindverseRenderer {
     this.lastTouch = performance.now()
     const next = this.targetDist * (1 + Math.sign(e.deltaY) * 0.12)
     // 三层下限：跟着行星 / 待在恒星系里 / 全景
-    const lo = this.selected ? PLANET_NEAR : this.focusedStar ? SYSTEM_NEAR : this.R * 0.62
+    const lo = this.selected ? PLANET_NEAR : this.focusedStar ? SYSTEM_NEAR : this.focusedClusterId != null ? this.clusterRadius * 0.35 : this.R * 0.62
     this.targetDist = clamp(next, lo, this.R * 4.6)
     // 一路拉远就逐级脱离，不用专门去点「返回」：行星 → 恒星系 → 全景
     if (this.selected && this.targetDist > SYSTEM_DIST * 0.85) this.clearPlanet()
-    else if (this.focusedStar && this.targetDist > this.R * 0.9) this.resetView()
+    else if (this.focusedStar && this.targetDist > this.R * 0.9) {
+      if (this.focusedClusterId == null || !this.focusCluster(this.focusedClusterId)) this.resetView()
+    } else if (!this.focusedStar && this.focusedClusterId != null && this.targetDist > this.clusterRadius * 1.2) this.resetView()
   }
 
   private onDoubleClickBound = (event: MouseEvent) => this.onDoubleClick(event)
@@ -1106,6 +1135,23 @@ export class Renderer implements MindverseRenderer {
     const x = cx - rect.left
     const y = cy - rect.top
 
+    if (this.focusedClusterId == null && !this.focusedStar && this.mode === 'all') {
+      const galaxies = this.u.clusters.filter((group) => this.u.stars.some((star) => star.g === group.g)).map((group) => {
+        const center = new THREE.Vector3(...group.c).project(this.camera)
+        const sx = (center.x * 0.5 + 0.5) * this.w
+        const sy = (-center.y * 0.5 + 0.5) * this.h
+        const radii = this.u.stars.filter((star) => star.g === group.g).map((star) => {
+          const point = new THREE.Vector3(...star.p).project(this.camera)
+          return point.z > -1 && point.z < 1
+            ? Math.hypot((point.x * 0.5 + 0.5) * this.w - sx, (-point.y * 0.5 + 0.5) * this.h - sy) + 24 : 0
+        })
+        return { id: group.g, x: sx, y: sy, depth: (center.z + 1) / 2, radius: Math.max(40, ...radii) }
+      })
+      const group = pickGalaxy(x, y, galaxies)
+      if (group !== null) this.focusCluster(group)
+      return
+    }
+
     // 行星优先：它们只在贴近时才可见，且总是压在恒星前面。
     // 恒星还在点精灵阶段时行星根本没画出来，这里也就不会误中。
     const planet = this.hitPlanet(x, y)
@@ -1115,12 +1161,20 @@ export class Renderer implements MindverseRenderer {
     }
     this.clearPlanet()
 
-    const star = this.hitStar(x, y)
+    const hit = this.hitStar(x, y)
+    if (this.focusedClusterId == null && !this.focusedStar && this.mode === 'all' && hit) {
+      this.focusCluster(hit.s.g)
+      return
+    }
+    const star = hit && (this.focusedClusterId == null || hit.s.g === this.focusedClusterId) ? hit : null
     if (star) {
       // 飞过去。LOD 挂在屏幕尺寸上，所以「靠近」这个动作本身
       // 就会把球体、行星、轨道依次带出来
       this.focusStar(starIdentity(star.s))
-    } else if (this.focusedStar) {
+    } else if (this.focusedStar && this.focusedClusterId != null) {
+      this.focusCluster(this.focusedClusterId)
+      return
+    } else {
       this.resetView()
     }
     if (!star) this.cb.onPick?.(null)
@@ -1184,7 +1238,7 @@ export class Renderer implements MindverseRenderer {
     let bestD = Infinity
 
     for (const d of this.bodies.data) {
-      if (modeDim(d.s, this.mode, this.u, this.wormIdx) < 0.4) continue
+      if (modeDim(d.s, this.mode, this.u, this.wormIdx) < 0.4 || (this.focusedClusterId != null && d.s.g !== this.focusedClusterId)) continue
       this.starWorld(d, A, this.tmp)
       const viewZ = Math.max(1, this.tmp.distanceTo(this.camera.position))
       this.tmp.project(this.camera)

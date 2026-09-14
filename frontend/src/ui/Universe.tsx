@@ -1,3 +1,4 @@
+import { galaxyName } from '../starmap/galaxyNavigation'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { ArticleProbe, Generation, Mode, Star, Universe as U } from '../types'
 import { pollUntilDone } from '../api'
@@ -24,6 +25,8 @@ import { StrataHud } from './StrataHud'
 import { AnswerEvidencePanel } from './AnswerEvidencePanel'
 import { describeQuestionProvenance } from '../domain/questionProvenance'
 import { nextStationAfter } from '../domain/nextStation'
+import { GalaxyNavigator } from './GalaxyNavigator'
+import { ExplorationPath } from './ExplorationPath'
 import './Universe.css'
 
 const reduceMotion = () =>
@@ -163,6 +166,10 @@ export function PrivateUniverseView() {
       rendererModuleLoaded = true
       if (disposed) return
       const r = createRenderer(canvas, labels, universeIndex, reduceMotion(), {
+      onPickCluster: (clusterId) => {
+        cancelActiveProbe()
+        dispatchUi(clusterId === null ? { type: 'show-panorama' } : { type: 'focus-cluster', clusterId })
+      },
       onPick: (s) => {
         cancelActiveProbe()
         if (s) {
@@ -338,7 +345,7 @@ export function PrivateUniverseView() {
   }, [questionWorkspaceVisible])
 
   const pickConcept = useCallback((c: string) => {
-    const candidate = universe?.stars.find((x) => x.c === c)
+    const candidate = universe?.stars.find((x) => x.c === c || starIdentity(x) === c)
     if (!candidate) return
     const panelReturnTarget = panelFocusReturnRef.current
     const focused = rendererRef.current?.focusStar(starIdentity(candidate))
@@ -361,7 +368,7 @@ export function PrivateUniverseView() {
     })
   }, [])
 
-  const closeStarPanel = useCallback(() => {
+  const showUniverse = useCallback(() => {
     cancelActiveProbe()
     setStar(null)
     setPlanet(null)
@@ -371,6 +378,14 @@ export function PrivateUniverseView() {
     rendererRef.current?.resetView()
     restorePanelFocus()
   }, [cancelActiveProbe, restorePanelFocus, setPlanet, setQuestionEntry, setStar])
+
+  const closeStarPanel = useCallback(() => {
+    if (star && rendererRef.current?.focusCluster(star.g)) {
+      restorePanelFocus()
+      return
+    }
+    showUniverse()
+  }, [star, restorePanelFocus, showUniverse])
 
   const onMode = useCallback((m: Mode, trigger: HTMLButtonElement) => {
     cancelActiveProbe()
@@ -626,6 +641,14 @@ export function PrivateUniverseView() {
   const hasSpan = m.span[0] > 0 && m.span[1] > 0
   const y0 = hasSpan ? new Date(m.span[0] * 1000).getFullYear() : null
   const y1 = hasSpan ? new Date(m.span[1] * 1000).getFullYear() : null
+  const cluster = universe.clusters.find((group) => group.g === (star?.g ?? (exploration.kind === 'cluster-focus' ? exploration.clusterId : null)))
+  const locationKey = planet ? `planet:${planet.question.id}` : star ? `star:${starIdentity(star)}` : cluster ? `cluster:${cluster.g}` : 'universe'
+  const locationLevel = planet ? 'planet' : star ? 'star' : cluster ? 'cluster' : 'universe'
+  const locationHint = planet
+    ? '已选中问题行星 · 点击「进入问题行星」前往地表'
+    : star
+      ? questionPlanets.length ? '选择轨道上的行星，或从问题航道选择一个真实问题' : '这颗恒星暂无问题行星 · 返回宇宙，探索另一颗恒星'
+      : cluster ? '选择一颗概念恒星，查看围绕它运行的问题行星' : '选择一个星系，进入后探索其中的恒星与问题行星'
 
   return (
     <div className={[questionWorkspaceVisible ? 'uv-workspace-open' : '', surfaceLanded ? 'uv-surface-open' : '', strataState ? 'uv-strata-open' : ''].filter(Boolean).join(' ') || undefined}
@@ -637,21 +660,31 @@ export function PrivateUniverseView() {
 
       <div className="uv-scrim" />
 
-      <header className="uv-head">
+      <header className={`uv-head${star ? ' uv-head--focused' : ''}`}>
         <div className="lbl">
           知乎精神宇宙
           {m.source === 'seed' && ' · 游客模式'}
           {m.source === 'mock' && ' · 示例数据'}
         </div>
-        <h1>好奇心星图</h1>
-        <p className="uv-sub">
+        <ExplorationPath level={locationLevel} />
+        <div key={locationKey} className="uv-location" role="status" aria-live="polite" aria-atomic="true">
+        <p className="uv-location-kind">{planet ? '问题行星 · 轨道预览' : star ? '概念恒星 · 系内探索' : cluster ? '星系 · 选择概念恒星' : '宇宙全景 · 从好奇心出发'}</p>
+        <h1>{planet ? planet.question.title : star ? `${star.c}恒星系` : cluster ? galaxyName(cluster) : '好奇心星图'}</h1>
+        {star ? <p className="uv-sub">{planet
+          ? <>围绕「{star.c}」恒星运行 · 收录 <b>{planet.answerCount}</b> 个回答。进入地表，查看问题与回答。</>
+          : <>这里的恒星代表「{star.c}」这一概念，周围的 <b>{questionPlanets.length}</b> 颗行星各代表一个真实问题。</>}
+        </p> : cluster ? <p className="uv-sub">这里包含 <b>{universe.stars.filter((item) => item.g === cluster.g).length}</b> 颗概念恒星。选择画面中的恒星，或从列表进入它的恒星系。</p> : <p className="uv-sub">
           {m.source === 'seed' ? <>
-            {hasSpan && <>{y0}–{y1}，</>}<b>{m.items}</b> 条公开样本内容，坍缩成 <b>{m.clusters}</b> 个方向星群。
+            {hasSpan && <>{y0}–{y1}，</>}<b>{m.items}</b> 条公开样本内容，坍缩成 <b>{m.clusters}</b> 个星系。
           </> : <>
-            {hasSpan && <>{y0}–{y1}，</>}<b>{m.items}</b> 条{m.source === 'mock' ? '示例收藏与创作' : '真实的知乎收藏与创作'}，坍缩成 <b>{m.clusters}</b> 个星群。
+            {hasSpan && <>{y0}–{y1}，</>}<b>{m.items}</b> 条{m.source === 'mock' ? '示例收藏与创作' : '真实的知乎收藏与创作'}，坍缩成 <b>{m.clusters}</b> 个星系。
           </>}
-          每一颗星都能点开，看到它由哪几条内容构成。
-        </p>
+          先进入星系，再选择概念恒星和问题行星。
+        </p>}
+        </div>
+        {(star || cluster) && <button className="uv-location-back" onClick={planet ? closePlanet : star ? closeStarPanel : showUniverse}>
+          ← {planet ? `返回${star?.c}恒星系` : star && cluster ? `返回${galaxyName(cluster)}` : '返回宇宙全景'}
+        </button>}
       </header>
 
       {m.source === 'seed' && (
@@ -668,9 +701,9 @@ export function PrivateUniverseView() {
           跳过 →
         </button>
       )}
-      <div className="uv-hint" style={{ opacity: hint ? 1 : 0 }}>
-        点恒星飞进它的星系 · 点行星查看真实问题 · 滚轮拉远逐级返回
-      </div>
+      {!strataState && <div className={`uv-hint${star ? ' uv-hint--focused' : ''}`} style={{ opacity: hint || genesisDone ? 1 : 0 }}>
+        <span key={locationKey}>{locationHint}</span>
+      </div>}
 
       {/* 仪表带：左边是「我在看什么」，中间是视图，右边是唯一的动作。
           面板打开时整条让位，不会被压在下面。 */}
@@ -678,20 +711,21 @@ export function PrivateUniverseView() {
         <div className="uv-bar-in">
           {star ? (
             <nav className="uv-lad" aria-label="所在层级">
-              <button onClick={closeStarPanel}>
+              <button onClick={showUniverse}>
                 全景
               </button>
               <span aria-hidden="true">›</span>
-              <b>{universe.clusters.find((c) => c.g === star.g)?.name}</b>
-              <span aria-hidden="true">›</span>
-              <b className="now">{star.c}</b>
-              <span className="up">滚轮拉远逐级返回</span>
+              {planet ? <>
+                <button onClick={closePlanet}>{star.c}恒星</button>
+                <span aria-hidden="true">›</span>
+                <b className="now" aria-current="location" title={planet.question.title}>问题行星</b>
+              </> : <b className="now" aria-current="location">{star.c}恒星</b>}
             </nav>
           ) : (
             <div className="uv-rd">
               <div className="uv-mt lead"><span className="k">条目</span><span className="v">{m.items}</span></div>
               <div className="uv-mt"><span className="k">恒星</span><span className="v">{m.concepts}</span></div>
-              <div className="uv-mt"><span className="k">星群</span><span className="v">{m.clusters}</span></div>
+              <div className="uv-mt"><span className="k">星系</span><span className="v">{m.clusters}</span></div>
               <div className="uv-sep" />
               {/* 琥珀只在这一格出现 */}
               <div className="uv-anom">
@@ -720,7 +754,11 @@ export function PrivateUniverseView() {
           onEnterStrata={enterStrata} strataActive={exploration.kind === 'surface-approach'}
           getReturnFocus={getQuestionReturnFocus} />
       )}
+      {!star && !strataState && mode === 'all' && <GalaxyNavigator universe={universe} cluster={cluster}
+        onCluster={(id) => { rendererRef.current?.focusCluster(id) }}
+        onStar={pickConcept} />}
       {!strataState && <Panel universe={universe} index={universeIndex} star={star} shared={false}
+        explorationLevel={planet ? 'planet' : 'star'}
         onClose={closeStarPanel}
         highlight={undefined}
         onEnterQuestion={enterQuestionFromPanel}
@@ -741,6 +779,9 @@ export function PrivateUniverseView() {
         onClose={() => { setQuestionEntry(null); setPlanet(null); setMode('all'); restorePanelFocus() }} />}
       {strataState && strataScene && strataState.kind !== 'surface-approach' && <StrataHud
         scene={strataScene} pose={strataPose} phase={strataState.kind}
+        questionTitle={universeIndex.questionsById.get(strataScene.questionId)?.title ?? '问题行星'}
+        answers={universeIndex.answersById}
+        onReadAnswer={(answerId) => rendererRef.current?.focusAnswerSpecimen(answerId)}
         focusProxyRef={strataFocusProxyRef} onMove={moveStrata}
         onPick={(clientX, clientY) => rendererRef.current?.pickStrataAt(clientX, clientY)} onExit={exitStrata} />}
       {surfaceLanded && surfaceEvidenceAnswerId && universeIndex.answersById.get(surfaceEvidenceAnswerId) && <AnswerEvidencePanel

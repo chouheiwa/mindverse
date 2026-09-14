@@ -1,3 +1,4 @@
+import { galaxyName } from '../galaxyNavigation'
 import * as THREE from 'three'
 import type { Cluster } from '../../types'
 import { starColor } from './blackbody'
@@ -104,7 +105,7 @@ export class Labels {
       const df = 0.5 + 0.5 * t * t
       const ly = y - 15
 
-      const wdt = ctx.measureText(c.name).width
+      const wdt = ctx.measureText(galaxyName(c)).width
       const box: [number, number, number, number] = [x - wdt / 2 - 7, ly - 14, x + wdt / 2 + 7, ly + 6]
       if (boxes.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) continue
       boxes.push(box)
@@ -117,17 +118,17 @@ export class Labels {
 
       ctx.lineWidth = 3.5
       ctx.strokeStyle = `rgba(3,5,12,${(a * 0.92).toFixed(3)})`
-      ctx.strokeText(c.name, x, ly)
+      ctx.strokeText(galaxyName(c), x, ly)
       ctx.fillStyle = `rgba(${Math.min(255, r)},${Math.min(255, g)},${Math.min(255, b)},${a.toFixed(3)})`
-      ctx.fillText(c.name, x, ly)
+      ctx.fillText(galaxyName(c), x, ly)
     }
 
     const projectionScale = (this.h * 0.5) / Math.tan((camera.fov * Math.PI) / 360)
-    for (const { star, opacity: ownerAlpha } of stars) {
+    for (const { star, opacity: ownerAlpha, alwaysVisible } of stars) {
       starWorldPosition(star, elapsedMs, bobAmplitude, this.v)
       this.v2.copy(this.v).applyMatrix4(camera.matrixWorldInverse)
       const viewZ = Math.max(1, -this.v2.z)
-      const opacity = starLabelOpacity(star.bodyR * projectionScale / viewZ) * ownerAlpha * la
+      const opacity = (alwaysVisible ? 1 : starLabelOpacity(star.bodyR * projectionScale / viewZ)) * ownerAlpha * la
       if (opacity <= 0) continue
       this.v.project(camera)
       if (this.v.z <= -1 || this.v.z >= 1) continue

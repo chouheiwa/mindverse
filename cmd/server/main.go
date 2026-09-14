@@ -27,7 +27,7 @@ func main() {
 	var ext extract.Extractor
 	if llm, err := extract.LLMFromEnv(); err == nil {
 		ext = extract.NewLLMExtractor(llm)
-		log.Printf("概念抽取：大模型（%s）", llm.Model)
+		log.Printf("真实/游客概念抽取：大模型（%s）；mock 使用离线标注与固定宇宙缓存", llm.Model)
 	} else {
 		ext = &extract.FileExtractor{Path: cfg.ConceptsPath}
 		log.Printf("概念抽取：离线标注 %s（%v）", cfg.ConceptsPath, err)

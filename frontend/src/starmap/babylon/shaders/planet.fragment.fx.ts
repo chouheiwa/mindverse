@@ -1,3 +1,5 @@
+import { planetSnowShader } from './planetSnow'
+
 export const planetFragmentShader = /* glsl */ `
 precision highp float;
 
@@ -114,6 +116,7 @@ float cloudField(vec3 direction, float phase) {
   return smoothstep(threshold, threshold + 0.20, base);
 }
 
+${planetSnowShader}
 void main(void) {
   vec3 magma = vec3(0.78, 0.075, 0.012);
   vec3 desert = vec3(0.76, 0.42, 0.10);
@@ -173,6 +176,8 @@ void main(void) {
   baseColor = mix(baseColor, vec3(0.10, 0.26, 0.42),
     clamp(uIceFracture, 0.0, 1.0) * iceFractures * 0.62);
   baseColor = mix(baseColor, vec3(0.66, 0.84, 1.0), uThermalIce * (1.0 - iceFractures) * fineMaterial * 0.14);
+  float snow = planetSnowCoverage(latitude, vHeight, uSnowLine, uThermalIce, uThermal.x);
+  baseColor = mix(baseColor, planetSnowAlbedo(snow), snow);
   float roughness = clamp(uThermal.x * 0.58 + uThermal.y * 0.88 + uThermal.z * 0.82
     + uThermal.w * 0.74 + uThermalIce * 0.32 - vRidgeMask * 0.07, 0.24, 0.94);
 
@@ -231,12 +236,12 @@ void main(void) {
   float cloudPhase = uTime * 0.00004 * uCloudSpeed;
   float cloud = cloudField(materialDirection, cloudPhase);
   float cloudShadow = cloudField(materialDirection + lightDirection * 0.045, cloudPhase);
-  vec3 litSurface = surfaceColor * (1.0 - cloudShadow * 0.34 * NoL);
+  vec3 litSurface = surfaceColor * (1.0 - cloudShadow * uCloudCoverage * 0.34 * NoL);
   // 云顶更亮、更白，并且在晨昏线上带一层暖边（前向散射）。
   float forward = pow(max(dot(viewDirection, -lightDirection), 0.0), 3.0);
   vec3 cloudColor = mix(vec3(0.88, 0.90, 0.94), vec3(1.0, 0.84, 0.66), forward * 0.55);
   vec3 cloudLit = cloudColor * (NoL * 0.92 + 0.05) * irradiance;
-  vec3 composed = mix(litSurface, cloudLit, clamp(cloud * 0.86, 0.0, 0.9));
+  vec3 composed = mix(litSurface, cloudLit, clamp(cloud * uCloudCoverage * 0.65, 0.0, 0.65));
   gl_FragColor = vec4(composed + emissive + marker + selectionFeedback, uReveal);
 }
 `

@@ -154,7 +154,18 @@ export class StrataTransitionController {
     if (!active) return
     this.port.setUniverseVisible(false)
     active.phase = 'strata-free'
-    active.pose = copyPose({ depth: Math.min(1.2, active.layout.bounds.maxDepth), yaw: 0, pitch: -0.18, snapId: null })
+    const depth = Math.min(1.2, active.layout.bounds.maxDepth)
+    // Let the first view explain what can be explored: face a nearby answer crystal.
+    // A fixed yaw can point at an empty wall even when answers are present.
+    const firstAnswer = active.layout.specimens.filter(({ room }) => room !== 'undated')
+      .reduce<(typeof active.layout.specimens)[number] | null>((nearest, item) =>
+        !nearest || Math.abs(item.depth - depth) < Math.abs(nearest.depth - depth) ? item : nearest, null)
+    active.pose = copyPose({
+      depth,
+      yaw: firstAnswer ? Math.atan2(firstAnswer.x, firstAnswer.z) : 0,
+      pitch: firstAnswer ? Math.atan2(depth - firstAnswer.depth, Math.hypot(firstAnswer.x, firstAnswer.z)) : -0.18,
+      snapId: null,
+    })
     this.port.applyPose(active.pose)
     const event = { token: active.request.token, questionId: active.request.questionId }
     this.callbacks.onStrataEntered?.(event)

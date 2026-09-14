@@ -114,6 +114,10 @@
   color: var(--dim); cursor: pointer; transition: color var(--t-instant) var(--e-enter) }
 .chips button:hover { color: var(--ink) }
 
+.pnl-mobile-location { display: none }
 @media (max-width: 760px) {
+  .pnl-mobile-location { display: grid; gap: 10px; margin: 12px 0 20px; padding-bottom: 12px; border-bottom: 1px solid var(--rule-soft) }
+  .pnl-mobile-location p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--dim) }
+  .pnl-mobile-location button { justify-self: start; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink); font-size: 12px }
   .pnl.open { padding-bottom: calc(var(--bar-h) + 32px) }
 }

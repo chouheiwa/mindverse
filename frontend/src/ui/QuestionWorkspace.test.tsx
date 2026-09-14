@@ -25,24 +25,75 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('QuestionWorkspace', () => {
-  test('enters the real strata scene once and keeps the evidence disclaimer visible', async () => {
+  test('the landing action opens collected answers directly and returns focus to the surface action', async () => {
+    const user = userEvent.setup()
+    render(<QuestionWorkspace index={index([answer('answer:1', { authorName: '张三', summary: '一条可以直接阅读的回答摘要' })])}
+      questionId={question.id} stage="surface" onBack={() => {}} onRestoreCamera={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /查看回答/ }))
+    expect(screen.getByRole('tab', { name: '全部回答' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('一条可以直接阅读的回答摘要')).toBeVisible()
+    expect(screen.getByRole('link', { name: '查看原回答 · 张三' })).toHaveAttribute('href', 'https://www.zhihu.com/question/7/answer/1')
+    expect(screen.queryByRole('region', { name: '问题资料卡' })).not.toBeInTheDocument()
+    expect(screen.queryByText('尚不足以建立跨年回溯')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /返回地表/ }))
+    expect(screen.getByRole('button', { name: /查看回答/ })).toHaveFocus()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+  })
+
+  test('an empty planet offers the original question as its next step', () => {
+    render(<QuestionWorkspace index={index([])} questionId={question.id} stage="surface"
+      onBack={() => {}} onRestoreCamera={() => {}} />)
+    const card = screen.getByRole('region', { name: '问题资料卡' })
+    expect(within(card).getByText(/还没有收录回答/)).toBeVisible()
+    expect(within(card).getByRole('link', { name: /查看知乎原问题/ })).toHaveAttribute('href', question.url)
+    expect(within(card).queryByRole('button', { name: /查看回答/ })).not.toBeInTheDocument()
+  })
+
+  test('reading answers does not move the surface camera when navigating tabs', () => {
+    vi.useFakeTimers()
+    try {
+      const onWalk = vi.fn()
+      render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
+        onBack={() => {}} onRestoreCamera={() => {}} onWalk={onWalk} />)
+      fireEvent.click(screen.getByRole('button', { name: /查看回答/ }))
+      fireEvent.keyDown(screen.getByRole('tab', { name: '全部回答' }), { key: 'ArrowRight', code: 'ArrowRight' })
+      act(() => { vi.advanceTimersByTime(150) })
+      expect(onWalk).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+
+  test('opens the answer timeline inside the planet and returns to its surface', async () => {
     const user = userEvent.setup()
     const onEnterStrata = vi.fn()
-    const source = index([answer('answer:1')])
-    const view = render(<QuestionWorkspace index={source} questionId={question.id}
-      onBack={() => {}} onRestoreCamera={() => {}} onEnterStrata={onEnterStrata} />)
+    const onBack = vi.fn()
+    render(<QuestionWorkspace index={index([answer('answer:1')])} questionId={question.id} stage="surface"
+      onBack={onBack} onRestoreCamera={() => {}} onEnterStrata={onEnterStrata} />)
+    await user.click(screen.getByRole('button', { name: '浏览回答时间线' }))
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(question.title)
+    expect(screen.getByRole('tab', { name: '回答时间线' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: '回答时间线' })).toBeVisible()
+    expect(onEnterStrata).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: /返回地表/ }))
+    expect(screen.getByRole('region', { name: '问题资料卡' })).toBeVisible()
+    expect(onBack).not.toHaveBeenCalled()
+  })
 
-    const enter = screen.getByRole('button', { name: '打开答案地层' })
-    await user.click(enter)
-    expect(onEnterStrata).toHaveBeenCalledOnce()
-    expect(onEnterStrata).toHaveBeenCalledWith(question.id)
-    expect(screen.getByRole('tab', { name: '我的证据轨迹' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByText(/当前仍可访问的答案按首发时间排列/)).toBeVisible()
-    expect(screen.getByText(/幸存者偏差与版本偏差/)).toBeVisible()
-
-    view.rerender(<QuestionWorkspace index={source} questionId={question.id}
-      onBack={() => {}} onRestoreCamera={() => {}} onEnterStrata={onEnterStrata} strataActive />)
-    expect(screen.getByRole('button', { name: '正在进入答案地层' })).toBeDisabled()
+  test('orders dated answers even in a small sample and separates unknown dates', async () => {
+    const user = userEvent.setup()
+    render(<QuestionWorkspace index={index([
+      answer('answer:2', { publishedAt: 1700000000 }),
+      answer('answer:3'),
+      answer('answer:1', { publishedAt: 1600000000 }),
+    ])} questionId={question.id} stage="surface" onBack={() => {}} onRestoreCamera={() => {}} />)
+    await user.click(screen.getByRole('button', { name: '浏览回答时间线' }))
+    const panel = screen.getByRole('tabpanel')
+    const links = within(panel).getAllByRole('link')
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      'https://www.zhihu.com/question/7/answer/1',
+      'https://www.zhihu.com/question/7/answer/2',
+      'https://www.zhihu.com/question/7/answer/3',
+    ])
+    expect(within(panel).getByRole('heading', { name: '首发时间未知 · 1 条' })).toBeVisible()
   })
 
   test('keeps a real planet observation stage and forwards deliberate drag rotation', () => {
@@ -94,7 +145,7 @@ describe('QuestionWorkspace', () => {
   })
 
   test('on the surface the dossier starts folded into a card; I unfolds it, Escape folds it back', async () => {
-    // 地表是主画面。资料默认折成右上角一张小卡（标题、回答数、「资料」「打开答案地层」），
+    // 地表是主画面。资料默认折成右上角一张小卡（标题、回答数、「资料」「浏览回答时间线」），
     // 铺开的阅读面板只在你要看的时候出现；再按 Esc 才是离开行星。
     const user = userEvent.setup()
     const onBack = vi.fn()
@@ -104,11 +155,11 @@ describe('QuestionWorkspace', () => {
     const card = screen.getByRole('region', { name: '问题资料卡' })
     expect(within(card).getByRole('heading', { level: 1 })).toHaveTextContent(question.title)
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: '打开答案地层' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: '浏览回答时间线' })).toHaveLength(1)
 
-    await user.click(within(card).getByRole('button', { name: /资料/ }))
+    await user.click(within(card).getByRole('button', { name: /查看回答/ }))
     expect(screen.getByRole('tablist')).toBeVisible()
-    expect(screen.getByRole('tab', { name: '我的证据轨迹' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '全部回答' })).toHaveAttribute('aria-selected', 'true')
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(onBack).not.toHaveBeenCalled()
@@ -318,7 +369,7 @@ describe('QuestionWorkspace', () => {
       publishedAt: start + i * (3 * 365 * day / 11),
     }))
     render(<QuestionWorkspace shared index={index(answers)} questionId={question.id} onBack={() => {}} onRestoreCamera={() => {}} />)
-    expect(screen.getByRole('heading', { name: '答案纪年 · 当前样本回溯' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '回答时间线' })).toBeVisible()
     expect(screen.getByText(/当前仍可访问的答案按首发时间排列，不代表当年观点或社区份额/)).toBeVisible()
     expect(screen.getByText(/幸存者偏差/)).toBeVisible()
     expect(screen.getByText(/版本偏差/)).toBeVisible()

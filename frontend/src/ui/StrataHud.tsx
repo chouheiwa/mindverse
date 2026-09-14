@@ -1,10 +1,14 @@
-import { useEffect, useRef, type RefObject } from 'react'
+import { useEffect, useId, useRef, type RefObject } from 'react'
 import type { StrataSceneModel } from '../domain/strata'
 import type { StrataMoveIntent, StrataPose } from '../starmap/rendererContract'
+import type { AnswerSatellite } from '../types'
 import './StrataHud.css'
 
 export interface StrataHudProps {
   scene: StrataSceneModel
+  questionTitle?: string
+  answers?: ReadonlyMap<string, AnswerSatellite>
+  onReadAnswer?: (answerId: string) => void
   pose: StrataPose | null
   phase: 'surface-crossing' | 'strata-free' | 'strata-snapped' | 'answer-specimen-focus' | 'strata-exiting'
   focusProxyRef?: RefObject<HTMLButtonElement | null>
@@ -15,10 +19,15 @@ export interface StrataHudProps {
 
 const EMPTY_INTENT: StrataMoveIntent = { forward: 0, yaw: 0, pitch: 0 }
 
-export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onPick, onExit }: StrataHudProps) {
+export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onPick, onExit, questionTitle, answers, onReadAnswer }: StrataHudProps) {
   const keysRef = useRef(new Set<string>())
   const touchRef = useRef<{ pointerId: number; x: number; y: number; moved: number } | null>(null)
-  const activeLayer = pose?.snapId ? scene.strata.find(({ id }) => id === pose.snapId) : null
+  const clipId = useId()
+  const activeLayer = scene.strata.find(({ id, centerDepth, thickness }) =>
+    id === pose?.snapId || (pose && pose.depth >= centerDepth - thickness / 2 && pose.depth <= centerDepth + thickness / 2))
+  const visibleSpecimens = activeLayer?.specimens ?? scene.surfaceSpecimens
+  const progress = depthProgress(scene, pose)
+  const layerIndex = activeLayer ? scene.strata.indexOf(activeLayer) + 1 : 0
   const interactionDisabled = phase === 'surface-crossing' || phase === 'strata-exiting' || phase === 'answer-specimen-focus'
 
   useEffect(() => {
@@ -83,24 +92,66 @@ export function StrataHud({ scene, pose, phase, focusProxyRef, onMove, onPick, o
       onPointerCancel={() => { touchRef.current = null }}>
       <div className="strata-touch-pad" aria-hidden="true" />
       <header>
-        <div><span>ANSWER STRATA</span><b>{phaseLabel(phase)}</b></div>
-        <button type="button" onClick={onExit} disabled={phase === 'surface-crossing' || phase === 'strata-exiting'}>
+        <div><span>问题行星 / 内部探索</span><h1>{questionTitle ?? '这颗问题行星'}</h1><b>{phaseLabel(phase)}</b></div>
+        <button ref={focusProxyRef} type="button" onClick={onExit} disabled={phase === 'surface-crossing' || phase === 'strata-exiting'}>
           {phase === 'strata-exiting' ? '正在返回地表' : '返回行星表面'}
         </button>
       </header>
-      <div className="strata-depth">
-        <span>DEPTH</span>
-        <strong>{pose ? pose.depth.toFixed(1) : '—'}<small> m</small></strong>
-        <i style={{ '--strata-progress': `${depthProgress(scene, pose)}%` } as React.CSSProperties} />
-      </div>
-      <div className="strata-status" role="status">
-        <b>{scene.evidenceLevel === 'retrospective' ? '回溯地层' : '当前可观测表层'}</b>
-        <span>{activeLayer ? layerLabel(activeLayer.startPublishedAt, activeLayer.endPublishedAt)
-          : scene.evidenceLevel === 'surface-only' ? '深层已阻断 · 不生成年代含义' : '自由下潜 · 接近层心自动吸附'}</span>
-      </div>
-      <p className="strata-instructions">W/S 或滚轮下潜 · A/D 转向 · Q/E 俯仰 · 触控拖动观察</p>
+      <aside className="strata-depth" aria-label="星球内部位置" onWheel={(event) => event.stopPropagation()}>
+        <span>你在这颗星球内部</span>
+        <svg viewBox="0 0 160 160" role="img" aria-label={`星球剖面，${activeLayer ? `第 ${layerIndex} 层` : '浅层'}`}>
+          <defs><clipPath id={clipId}><circle cx="80" cy="80" r="66" /></clipPath></defs>
+          <circle className="strata-globe-rim" cx="80" cy="80" r="72" />
+          <g clipPath={`url(#${clipId})`}>
+            <circle className="strata-globe" cx="80" cy="80" r="66" />
+            {scene.strata.map((layer) => {
+              const y = 14 + (layer.centerDepth - layer.thickness / 2) / scene.bounds.bottom * 132
+              const height = layer.thickness / scene.bounds.bottom * 132
+              return <rect key={layer.id} x="14" y={y} width="132" height={height}
+                className={layer.id === activeLayer?.id ? 'strata-slice is-current' : 'strata-slice'} />
+            })}
+            <path className="strata-descent-line" d="M80 14V146" />
+            <circle className="strata-you" cx="80" cy={14 + progress * 1.32} r="5" />
+          </g>
+        </svg>
+        <b>{scene.evidenceLevel === 'retrospective' ? '浅层较新 · 深层较早' : '当前只有浅层回答'}</b>
+        <ol className="strata-layer-key">
+          {scene.strata.map((layer) => <li key={layer.id} aria-current={layer.id === activeLayer?.id ? 'step' : undefined}>
+            <span>{layerLabel(layer.startPublishedAt, layer.endPublishedAt)}</span><small>{layer.specimens.length} 条</small>
+          </li>)}
+        </ol>
+        <div className="strata-travel" aria-label="下潜控制">
+          <button type="button" disabled={interactionDisabled}
+            onPointerDown={() => keysRef.current.add('KeyW')} onPointerUp={() => keysRef.current.delete('KeyW')}
+            onPointerLeave={() => keysRef.current.delete('KeyW')} onPointerCancel={() => keysRef.current.delete('KeyW')}
+            onClick={() => onMove({ ...EMPTY_INTENT, forward: -1 })}>↑ 上浮</button>
+          <button type="button" disabled={interactionDisabled}
+            onPointerDown={() => keysRef.current.add('KeyS')} onPointerUp={() => keysRef.current.delete('KeyS')}
+            onPointerLeave={() => keysRef.current.delete('KeyS')} onPointerCancel={() => keysRef.current.delete('KeyS')}
+            onClick={() => onMove({ ...EMPTY_INTENT, forward: 1 })}>↓ 下潜</button>
+        </div>
+      </aside>
+      <aside className="strata-status" aria-label="当前岩层的回答" onWheel={(event) => event.stopPropagation()}>
+        <div role="status">
+          <span>{scene.evidenceLevel === 'retrospective' ? `回溯地层 · 第 ${layerIndex || 1} / ${scene.strata.length} 层` : '当前可观测表层'}</span>
+          <h2>{activeLayer ? layerLabel(activeLayer.startPublishedAt, activeLayer.endPublishedAt) : '从这里开始读回答'}</h2>
+          <p>{scene.evidenceLevel === 'retrospective'
+            ? '每层收录同一时期首发的回答。点击洞壁上的发光晶体，看看当时写下了什么。'
+            : '回答数量或时间信息暂不足以划分年代。这里仍可探索和阅读已收录的回答。'}</p>
+        </div>
+        {visibleSpecimens.slice(0, 2).map(({ answerId }) => {
+          const answer = answers?.get(answerId)
+          return answer && onReadAnswer ? <button type="button" className="strata-answer-preview" key={answerId}
+            disabled={interactionDisabled} onClick={() => onReadAnswer(answerId)}>
+            <span>{answer.authorName || '作者未标注'}</span>
+            <b>{answer.summary || answer.title}</b>
+            <small>定位晶体并阅读 ↗</small>
+          </button> : null
+        })}
+        {scene.undated.length > 0 && <p className="strata-undated">侧洞另有 {scene.undated.length} 条首发时间未知的回答。</p>}
+      </aside>
+      <p className="strata-instructions">滚轮 / S 下潜 · W 上浮 · 拖动环视 · 点击发光晶体读回答</p>
       <p className="strata-disclaimer">{scene.disclaimer}</p>
-      <button ref={focusProxyRef} type="button" className="strata-focus-proxy">答案标本交互焦点</button>
     </section>
   )
 }
@@ -121,12 +172,14 @@ function depthProgress(scene: StrataSceneModel, pose: StrataPose | null): number
 
 function phaseLabel(phase: StrataHudProps['phase']): string {
   if (phase === 'surface-crossing') return '正在穿越地表'
-  if (phase === 'strata-snapped') return '地层吸附'
-  if (phase === 'answer-specimen-focus') return '答案标本聚焦'
+  if (phase === 'strata-snapped') return '已抵达这一时期的岩层'
+  if (phase === 'answer-specimen-focus') return '正在阅读晶体中的回答'
   if (phase === 'strata-exiting') return '正在上浮'
-  return '洞窟自由探索'
+  return '沿岩层探索这个问题的回答'
 }
 
 function layerLabel(start: number, end: number): string {
-  return `${new Date(start * 1000).getUTCFullYear()}–${new Date(end * 1000).getUTCFullYear()} · 当前可访问版本`
+  const first = new Date(start * 1000).getUTCFullYear()
+  const last = new Date(end * 1000).getUTCFullYear()
+  return first === last ? `${first} 年` : `${first}–${last} 年`
 }

@@ -1,3 +1,5 @@
+import { planetSnowShader } from './planetSnow'
+
 export const planetGroundFragmentShader = /* glsl */ `
 precision highp float;
 uniform vec3 uSunDirection;
@@ -10,6 +12,10 @@ uniform vec3 uRockColor;
 uniform vec3 uHorizonColor;
 uniform float uSeed;
 uniform float uDetailStrength;
+uniform float uSnowLine;
+uniform float uDisplacement;
+uniform float uThermalIce;
+uniform float uThermalMagma;
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 
@@ -50,6 +56,7 @@ float fbm(vec3 p) {
   }
   return total;
 }
+${planetSnowShader}
 void main(void) {
   vec3 local = vWorldPosition - uPlanetCenter;
   vec3 up = safeDirection(local);
@@ -76,6 +83,9 @@ void main(void) {
   float rocky = smoothstep(0.05, 0.28, slope + (grain - 0.5) * 0.18);
   vec3 albedo = mix(uBaseColor, uAccentColor, smoothstep(0.35, 0.72, patches + (grain - 0.5) * 0.4));
   albedo = mix(albedo, uRockColor, rocky);
+  float terrainHeight = (length(local) / radius - 1.0) / max(uDisplacement, 0.0001);
+  float snow = planetSnowCoverage(abs(up.y), terrainHeight, uSnowLine, uThermalIce, uThermalMagma);
+  albedo = mix(albedo, planetSnowAlbedo(snow), snow * (1.0 - rocky * 0.3));
   albedo *= detailModulation;
   // 拉开坡面朝向的明暗，同时保留天光，避免背光面失去岩理。
   float daylight = clamp(dot(surfaceNormal, sun), 0.0, 1.0);
@@ -94,7 +104,8 @@ void main(void) {
   float haze = 1.0 - exp(-relativeDistance * mix(1.0, 2.8, horizonView) / max(0.55, 0.0001));
   vec3 hazeColor = uHorizonColor * vec3(1.08, 1.0, 0.92)
     * (0.55 + 0.45 * clamp(dot(up, sun), 0.0, 1.0));
-  vec3 color = mix(lit, hazeColor, clamp(haze * mix(0.6, 0.85, horizonView), 0.0, 1.0));
+  float atmosphere = 1.0 - smoothstep(1.25, 2.6, length(uCameraPosition - uPlanetCenter) / radius);
+  vec3 color = mix(lit, hazeColor, clamp(atmosphere * haze * mix(0.6, 0.85, horizonView), 0.0, 1.0));
   gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 `

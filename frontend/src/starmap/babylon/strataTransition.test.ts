@@ -54,6 +54,19 @@ describe('strata transition token protocol', () => {
     expect(events).toEqual(['surface-approach', 'surface-crossing', 'entered', 'strata-free', 'pose'])
   })
 
+  test('the entry view faces an actual nearby answer instead of an empty wall', () => {
+    const { controller, pending } = harness()
+    controller.enter(request(1))
+    pending[0].complete()
+    pending[1].complete()
+    const pose = controller.pose!
+    const nearby = controller.layout!.specimens.filter(({ room }) => room !== 'undated')
+      .sort((a, b) => Math.abs(a.depth - pose.depth) - Math.abs(b.depth - pose.depth))[0]
+    expect(pose.yaw).toBeCloseTo(Math.atan2(nearby.x, nearby.z))
+    expect(pose.pitch).toBeCloseTo(Math.atan2(pose.depth - nearby.depth, Math.hypot(nearby.x, nearby.z)))
+    expect(controller.phase).toBe('strata-free')
+  })
+
   test('is idempotent for the same token and cancels/suppresses late callbacks for a new token', () => {
     const { controller, pending, events, port } = harness()
     controller.enter(request(1))

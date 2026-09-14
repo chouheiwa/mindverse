@@ -1,3 +1,6 @@
+import { Ray } from '@babylonjs/core/Culling/ray'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import type { SurfaceContact } from './surfaceContact'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import type { Material } from '@babylonjs/core/Materials/material.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
@@ -95,7 +98,7 @@ export class PlanetSurfaceWorld {
     const desired = selectTerrainChunks({ ...this.options, cameraDirection, cameraRadius })
     const keys = new Set(desired.map(chunkKey))
     for (const [key, entry] of this.chunks) {
-      if (keys.has(key)) continue
+      if (keys.has(key) || entry.mesh.isVisible) continue
       this.release(entry)
       this.chunks.delete(key)
       this.disposedThisUpdate += 1
@@ -118,12 +121,55 @@ export class PlanetSurfaceWorld {
       geometry.setVerticesData('normal', data.normals, false, 3)
       geometry.setIndices(data.indices)
       const mesh = new Mesh(key, this.scene)
+      mesh.isVisible = false
       mesh.parent = this.parent
       mesh.material = this.material
       geometry.applyToMesh(mesh)
       this.chunks.set(key, { mesh, geometry, vertexCount: data.positions.length / 3 })
       this.builtThisUpdate += 1
     }
+    // 同一帧提交完整的新叶子集合；准备期间继续画旧集合，既不漏底也不重叠闪烁。
+    if (this.pendingCount === 0) {
+      for (const [key, entry] of this.chunks) {
+        if (keys.has(key)) entry.mesh.isVisible = true
+        else {
+          this.release(entry)
+          this.chunks.delete(key)
+          this.disposedThisUpdate += 1
+        }
+      }
+    }
+  }
+
+  /** Sample the drawn triangles, not the continuous field above/below them. */
+  contactAt(direction: Vector3): SurfaceContact | null {
+    if (this.disposed || direction.lengthSquared() < 1e-12) return null
+    const radial = direction.normalizeToNew()
+    const world = this.parent.computeWorldMatrix(true)
+    const inverse = world.clone().invert()
+    const reach = this.options.radius * 3
+    const origin = Vector3.TransformCoordinates(radial.scale(reach), world)
+    const inward = Vector3.TransformNormal(radial.negate(), world).normalize()
+    const ray = new Ray(origin, inward, reach * 2)
+    let contact: SurfaceContact | null = null
+    let nearest = Infinity
+    for (const { mesh } of this.chunks.values()) {
+      if (!mesh.isVisible) continue
+      mesh.computeWorldMatrix(true)
+      const hit = ray.intersectsMesh(mesh, false)
+      if (!hit.hit || !hit.pickedPoint || hit.distance >= nearest) continue
+      const point = Vector3.TransformCoordinates(hit.pickedPoint, inverse)
+      const normal = Vector3.TransformNormal(hit.getNormal(true, false) ?? radial, inverse).normalize()
+      if (Vector3.Dot(normal, radial) < 0) normal.negateInPlace()
+      nearest = hit.distance
+      contact = { point, normal }
+    }
+    return contact
+  }
+
+  hasVisibleTerrain(): boolean {
+    for (const entry of this.chunks.values()) if (entry.mesh.isVisible) return true
+    return false
   }
 
   diagnostics(): PlanetSurfaceWorldDiagnostics {

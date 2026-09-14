@@ -56,6 +56,12 @@ export function thermalHorizonColor(weights: ThermalWeights): Vec3 {
   return color
 }
 
+/** Air scatters light; it should not reuse the saturated pigment of the ground. */
+export function thermalAtmosphereColor(weights: ThermalWeights): Vec3 {
+  const tint = thermalHorizonColor(weights)
+  return [tint[0] * 0.35 + 0.52 * 0.65, tint[1] * 0.35 + 0.59 * 0.65, tint[2] * 0.35 + 0.67 * 0.65]
+}
+
 /** 地表基色：与天空同族色相，压暗一档，太阳直射时不至于一片白。 */
 export function thermalGroundAlbedo(weights: ThermalWeights): Vec3 {
   const horizon = thermalHorizonColor(weights)
@@ -158,14 +164,7 @@ export class PlanetSky {
 
   setThermal(weights: ThermalWeights): void {
     if (this.disposed) return
-    const keys = Object.keys(PALETTE) as (keyof ThermalWeights)[]
-    const safe = keys.map(key => clamp01(weights[key]))
-    const total = safe.reduce((sum, value) => sum + value, 0)
-    this.horizon = Vector3.Zero()
-    keys.forEach((key, i) => {
-      const weight = total > 1e-8 ? safe[i]! / Math.max(total, 1e-8) : Number(key === 'rock')
-      this.horizon.addInPlace(Vector3.FromArray(PALETTE[key]).scale(weight))
-    })
+    this.horizon = Vector3.FromArray(thermalAtmosphereColor(weights))
     // 天顶要读得出是白天：之前 ×(0.12,0.18,0.3) 让岩石行星的天顶亮度只有 0.05，
     // 站在地表上抬头一片黑。仍比地平线暗（空气厚度的读法不变），但是明显的蓝天。
     this.zenith = this.horizon.multiply(new Vector3(0.5, 0.62, 0.86))

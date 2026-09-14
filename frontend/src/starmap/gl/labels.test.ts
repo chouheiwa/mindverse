@@ -60,7 +60,7 @@ test('draw uses animated star coordinates and exact owner alpha through a to b t
   expect(b.a.fill).toBe('rgba(240,244,255,0.120)')
   expect(b.b.fill).toBe('rgba(240,244,255,1.000)')
   const panorama = drawFor(null)
-  expect(Object.keys(panorama)).toEqual(['cluster'])
+  expect(Object.keys(panorama)).toEqual(['cluster星系'])
 
   // Put the star inside the 18→42px transition and prove alpha uses its animated viewZ,
   // not the layout's static z coordinate.

@@ -65,6 +65,20 @@ describe('probe exploration state', () => {
   })
 })
 
+describe('galaxy navigation', () => {
+  test('enters a galaxy before its stars and returns without losing the selected galaxy', () => {
+    const galaxy = universeUiReducer(initialUniverseUiState, { type: 'focus-cluster', clusterId: 7 })
+    expect(galaxy.exploration).toEqual({ kind: 'cluster-focus', clusterId: 7 })
+    expect(universeUiReducer(galaxy, { type: 'clear-planet' }).exploration).toEqual(galaxy.exploration)
+    const focused = universeUiReducer(galaxy, { type: 'focus-star', star })
+    expect(focused.exploration).toEqual({ kind: 'star-focus', star })
+    const returned = universeUiReducer(focused, { type: 'focus-cluster', clusterId: 7 })
+    expect(returned.exploration).toEqual(galaxy.exploration)
+    expect(returned.questionEntry).toBeNull()
+    expect(universeUiReducer(returned, { type: 'show-panorama' }).exploration.kind).toBe('panorama')
+  })
+})
+
 describe('strata exploration state', () => {
   const focusedPlanet = () => universeUiReducer(initialUniverseUiState, { type: 'focus-planet', star, planet })
 

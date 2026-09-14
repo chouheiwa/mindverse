@@ -65,6 +65,7 @@ export type ProbePart =
   | 'etching'
 
 export interface RendererCallbacks {
+  readonly onPickCluster?: (clusterId: number | null) => void
   readonly onPick?: (star: Star | null) => void
   readonly onPickPlanet?: (planet: PlanetDatum | null) => void
   readonly onAnchor?: (x: number, y: number, visible: boolean) => void
@@ -115,6 +116,7 @@ export interface MindverseRenderer {
   destroy(): void
   setMode(mode: Mode, wormIdx?: number): void
   focusStar(starKey: string): Star | null
+  focusCluster(clusterId: number): boolean
   resetView(): void
   clearPlanet(): void
   selectQuestionPlanet(starId: string, questionId: string): PlanetDatum | null

@@ -6,6 +6,7 @@ dist/
 .e2e-web/
 data/snapshots/*.json
 data/snapshots/.sessions
+data/snapshots/.analysis/
 data/snapshots/.sessions.registry-invalid*
 data/snapshots/*.owner-proof-missing*
 .env
